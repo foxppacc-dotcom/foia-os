@@ -1,0 +1,173 @@
+@import "tailwindcss";
+
+/* ============================================================
+   FOIA OS Design System
+   Brand: Dark Navy + Gold (refined, premium enterprise)
+   ============================================================ */
+
+@theme {
+  /* Type scale — replaces ad-hoc !important overrides so Tailwind's
+     own text-* utilities generate consistent, premium sizing everywhere. */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif;
+
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.45;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.5;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.6;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.5;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.4;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 1.3;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 1.25;
+
+  --color-bg-primary:     #0A0A0F;
+  --color-bg-secondary:   #12121B;
+  --color-bg-tertiary:    #1A1A24;
+  --color-bg-elevated:    #20202C;
+  --color-border-default: #22222E;
+  --color-accent:         #D4A843;
+  --color-accent-hover:   #E4B84A;
+  --color-success:        #10B981;
+  --color-warning:        #F59E0B;
+  --color-error:          #EF4444;
+}
+
+:root {
+  /* ---- Light theme ---- */
+  --bg-primary:      #F7F7F9;
+  --bg-secondary:    #FFFFFF;
+  --bg-tertiary:     #F1F1F5;
+  --bg-elevated:     #EAEAF0;
+  --bg-overlay:      rgba(20, 20, 28, 0.45);
+
+  --border:          #E4E4EA;
+  --border-default:  #E4E4EA;
+  --border-strong:   #D2D2DC;
+
+  --text-primary:    #14141C;
+  --text-secondary:  #55566B;
+  --text-muted:      #8B8D9F;
+  --text-inverse:    #14141C;
+
+  --accent:          #D4A843;
+  --accent-hover:    #E4B84A;
+  --accent-active:   #C79A38;
+  --accent-subtle:   rgba(212, 168, 67, 0.12);
+
+  --success:         #10B981;
+  --success-subtle:  rgba(16, 185, 129, 0.12);
+  --warning:         #F59E0B;
+  --warning-subtle:  rgba(245, 158, 11, 0.12);
+  --danger:          #EF4444;
+  --danger-subtle:   rgba(239, 68, 68, 0.12);
+  --info:            #3B82F6;
+  --info-subtle:     rgba(59, 130, 246, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(20, 20, 28, 0.06);
+  --shadow-md: 0 4px 16px rgba(20, 20, 28, 0.08);
+  --shadow-lg: 0 16px 40px rgba(20, 20, 28, 0.12);
+  --focus-ring: 0 0 0 3px rgba(212, 168, 67, 0.35);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+}
+
+.dark {
+  /* ---- Dark theme (default brand identity) ---- */
+  --bg-primary:      #0A0A0F;
+  --bg-secondary:    #12121B;
+  --bg-tertiary:     #1A1A24;
+  --bg-elevated:     #20202C;
+  --bg-overlay:      rgba(6, 6, 10, 0.72);
+
+  --border:          #22222E;
+  --border-default:  #22222E;
+  --border-strong:   #2E2E3D;
+
+  --text-primary:    #F5F5F7;
+  --text-secondary:  #A6A8B8;
+  --text-muted:      #6E7185;
+  --text-inverse:    #14141C;
+
+  --accent:          #D4A843;
+  --accent-hover:    #E4B84A;
+  --accent-active:   #C79A38;
+  --accent-subtle:   rgba(212, 168, 67, 0.14);
+
+  --success:         #10B981;
+  --success-subtle:  rgba(16, 185, 129, 0.14);
+  --warning:         #F59E0B;
+  --warning-subtle:  rgba(245, 158, 11, 0.14);
+  --danger:          #EF4444;
+  --danger-subtle:   rgba(239, 68, 68, 0.14);
+  --info:            #3B82F6;
+  --info-subtle:     rgba(59, 130, 246, 0.14);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.44);
+  --focus-ring: 0 0 0 3px rgba(212, 168, 67, 0.35);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 { letter-spacing: -0.01em; }
+
+* { box-sizing: border-box; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Focus visibility — consistent ring across all interactive elements */
+button:focus-visible, a:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.animate-fadeIn  { animation: fadeIn 0.25s ease-out; }
+.animate-slideUp { animation: slideUp 0.3s ease-out; }
+.animate-scaleIn { animation: scaleIn 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-tertiary) 25%, var(--bg-elevated) 50%, var(--bg-tertiary) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}

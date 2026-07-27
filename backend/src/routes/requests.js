@@ -1,0 +1,224 @@
+const express = require('express');
+const router = express.Router();
+const { requireAuth } = require("../middleware/auth");
+router.use(requireAuth);
+const { getSupabase } = require('../supabase');
+
+// GET /api/cases/:caseId/requests
+router.get('/cases/:caseId/requests', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const caseId = parseInt(req.params.caseId);
+
+    const { data: requests } = await sup
+      .from('requests')
+      .select(`*, pipeline_lists!left(name_ar, name_en, color), agencies!left(name_en)`)
+      .eq('case_id', caseId)
+      .order('created_at', { ascending: false });
+
+    const mapped = (requests || []).map(r => ({
+      ...r,
+      classification_name_ar: r.pipeline_lists?.name_ar || null,
+      classification_name_en: r.pipeline_lists?.name_en || null,
+      classification_color: r.pipeline_lists?.color || null,
+      agency_name: r.agencies?.name_en || null,
+      pipeline_lists: undefined,
+      agencies: undefined
+    }));
+
+    res.json(mapped);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/cases/:caseId/requests
+router.post('/cases/:caseId/requests', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const caseId = parseInt(req.params.caseId);
+    const { agency_id, status, classification_id, sent_date, response_date, notes } = req.body;
+
+    // Verify case exists
+    const { data: caseRow } = await sup.from('cases').select('id').eq('id', caseId).single();
+    if (!caseRow) {
+      return res.status(404).json({ error: 'Case not found' });
+    }
+
+    const { data: newRequest, error } = await sup
+      .from('requests')
+      .insert({
+        case_id: caseId,
+        agency_id: agency_id || null,
+        status: status || 'pending',
+        classification_id: classification_id || null,
+        sent_date: sent_date || null,
+        response_date: response_date || null,
+        notes: notes || null
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json(newRequest);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/requests/:id
+router.put('/requests/:id', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const requestId = parseInt(req.params.id);
+
+    const { data: existing } = await sup.from('requests').select('*').eq('id', requestId).single();
+    if (!existing) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+
+    const { agency_id, status, classification_id, sent_date, response_date, notes } = req.body;
+
+    const updates = {};
+    if (agency_id !== undefined) updates.agency_id = agency_id;
+    if (status !== undefined) updates.status = status;
+    if (classification_id !== undefined) updates.classification_id = classification_id;
+    if (sent_date !== undefined) updates.sent_date = sent_date;
+    if (response_date !== undefined) updates.response_date = response_date;
+    if (notes !== undefined) updates.notes = notes;
+
+    await sup.from('requests').update(updates).eq('id', requestId);
+
+    const { data: updated } = await sup
+      .from('requests')
+      .select(`*, pipeline_lists!left(name_ar, name_en, color), agencies!left(name_en)`)
+      .eq('id', requestId)
+      .single();
+
+    if (updated) {
+      updated.classification_name_ar = updated.pipeline_lists?.name_ar || null;
+      updated.classification_name_en = updated.pipeline_lists?.name_en || null;
+      updated.classification_color = updated.pipeline_lists?.color || null;
+      updated.agency_name = updated.agencies?.name_en || null;
+      delete updated.pipeline_lists;
+      delete updated.agencies;
+    }
+
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/requests/:id/classification — move to different pipeline list
+router.put('/requests/:id/classification', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const requestId = parseInt(req.params.id);
+    const { classification_id } = req.body;
+
+    if (!classification_id) {
+      return res.status(400).json({ error: 'classification_id is required' });
+    }
+
+    const { data: existing } = await sup.from('requests').select('*').eq('id', requestId).single();
+    if (!existing) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+
+    // Verify classification exists
+    const { data: list } = await sup.from('pipeline_lists').select('id').eq('id', classification_id).single();
+    if (!list) {
+      return res.status(400).json({ error: 'Invalid classification_id' });
+    }
+
+    await sup.from('requests').update({ classification_id }).eq('id', requestId);
+
+    const { data: updated } = await sup
+      .from('requests')
+      .select(`*, pipeline_lists!left(name_ar, name_en, color), agencies!left(name_en)`)
+      .eq('id', requestId)
+      .single();
+
+    if (updated) {
+      updated.classification_name_ar = updated.pipeline_lists?.name_ar || null;
+      updated.classification_name_en = updated.pipeline_lists?.name_en || null;
+      updated.classification_color = updated.pipeline_lists?.color || null;
+      updated.agency_name = updated.agencies?.name_en || null;
+      delete updated.pipeline_lists;
+      delete updated.agencies;
+    }
+
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/requests/:id/channel — update request channel method
+router.put('/requests/:id/channel', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const requestId = parseInt(req.params.id);
+    const { channel_method, email_account_id, contact_value } = req.body;
+
+    const { data: existing } = await sup.from('requests').select('*').eq('id', requestId).single();
+    if (!existing) return res.status(404).json({ error: 'Request not found' });
+
+    await sup
+      .from('requests')
+      .update({
+        channel_method: channel_method || 'email',
+        email_account_id: email_account_id || null,
+        contact_value: contact_value || null
+      })
+      .eq('id', requestId);
+
+    // Activity log
+    const { logActivity } = require('../services/activityLogger');
+    logActivity({
+      user_id: req.user?.id, user_name: req.user?.name,
+      action_type: 'update_channel',
+      target_type: 'request',
+      target_id: requestId,
+      details: `طريقة الطلب: ${channel_method === 'email' ? '📧 إيميل' : channel_method === 'phone' ? '📞 هاتف' : channel_method === 'mail' ? '✉️ بريد' : '🌐 بوابة'}`
+    });
+
+    const { data: updated } = await sup
+      .from('requests')
+      .select(`*, agencies!left(name_ar, name_en)`)
+      .eq('id', requestId)
+      .single();
+
+    if (updated) {
+      updated.agency_name_ar = updated.agencies?.name_ar || null;
+      updated.agency_name_en = updated.agencies?.name_en || null;
+      delete updated.agencies;
+    }
+
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/requests/:id/sort — update sort order within a list
+router.put('/requests/:id/sort', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const requestId = parseInt(req.params.id);
+    const { sort_order } = req.body;
+    if (sort_order === undefined) return res.status(400).json({ error: 'sort_order مطلوب' });
+
+    const { data: existing } = await sup.from('requests').select('*').eq('id', requestId).single();
+    if (!existing) return res.status(404).json({ error: 'Request not found' });
+
+    await sup.from('requests').update({ sort_order }).eq('id', requestId);
+    res.json({ success: true, sort_order });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+module.exports = router;

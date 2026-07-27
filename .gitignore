@@ -1,0 +1,34 @@
+node_modules/
+dist/
+.vercel/
+__pycache__/
+*.pyc
+scripts/__pycache__/
+full_token.json
+full_token.txt
+foia_token.txt
+jwt_token.txt
+login_body.bin
+*.docx
+*.pdf
+backend/nul
+backend/.env
+.env
+gen_report*.py
+scripts/*.py
+main.py
+sprint_report.py
+user_guide*.py
+audit_*.py
+perf_*.py
+ux_audit_*.py
+generate_*.py
+# SQL migration backups
+supabase/*.sql
+migrations/*.sql
+# Markdown docs (architectural, not needed at runtime)
+*.md
+# Charts / AI files
+uv.lock
+pyproject.toml
+test_upload.txt

@@ -1,0 +1,78 @@
+/* FOIA OS v2 - Motion System */
+
+:root {
+  --ds-duration-instant: 0ms;
+  --ds-duration-fast: 150ms;
+  --ds-duration-normal: 250ms;
+  --ds-duration-slow: 400ms;
+  --ds-duration-xslow: 600ms;
+
+  --ds-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ds-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ds-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ds-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Fade */
+@keyframes ds-fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes ds-fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* Slide up */
+@keyframes ds-slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes ds-slideDown {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Scale */
+@keyframes ds-scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes ds-scaleOut {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.95); }
+}
+
+/* Spinner rotation */
+@keyframes ds-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Skeleton pulse */
+@keyframes ds-pulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 0.4; }
+}
+
+/* Utility classes */
+.ds-animate-fadeIn   { animation: ds-fadeIn var(--ds-duration-normal) var(--ds-ease-out); }
+.ds-animate-slideUp  { animation: ds-slideUp var(--ds-duration-normal) var(--ds-ease-out); }
+.ds-animate-scaleIn  { animation: ds-scaleIn var(--ds-duration-normal) var(--ds-ease-out); }
+.ds-animate-spin     { animation: ds-spin 1s linear infinite; }
+.ds-animate-pulse    { animation: ds-pulse 1.5s var(--ds-ease-in-out) infinite; }
+
+/* Transition shortcuts */
+.ds-transition { transition: all var(--ds-duration-fast) var(--ds-ease-out); }
+.ds-transition-colors { transition: background var(--ds-duration-fast) var(--ds-ease-out), border-color var(--ds-duration-fast) var(--ds-ease-out), color var(--ds-duration-fast) var(--ds-ease-out), box-shadow var(--ds-duration-fast) var(--ds-ease-out); }
+.ds-transition-transform { transition: transform var(--ds-duration-fast) var(--ds-ease-out); }
+.ds-transition-opacity { transition: opacity var(--ds-duration-fast) var(--ds-ease-out); }
+
+/* Hover lift */
+.ds-hover-lift { transition: transform var(--ds-duration-fast) var(--ds-ease-out), box-shadow var(--ds-duration-fast) var(--ds-ease-out); }
+.ds-hover-lift:hover { transform: translateY(-1px); box-shadow: var(--ds-shadow-md); }
+
+/* Focus ring */
+.ds-focus-ring:focus-visible {
+  outline: none;
+  box-shadow: var(--ds-shadow-focus);
+}

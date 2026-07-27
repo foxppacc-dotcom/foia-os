@@ -1,0 +1,30 @@
+{
+  "name": "foia-os-backend",
+  "version": "1.0.0",
+  "description": "FOIA OS Backend - Freedom of Information Act Operating System",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "seed": "node src/seed.js",
+    "dev": "node src/index.js"
+  },
+  "dependencies": {
+    "@google-cloud/local-auth": "^3.0.1",
+    "@supabase/supabase-js": "^2.110.2",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^11.0.0",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.5.2",
+    "googleapis": "^173.0.0",
+    "helmet": "^8.2.0",
+    "imap": "^0.8.19",
+    "jsonwebtoken": "^9.0.3",
+    "mailparser": "^3.9.14",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^9.0.3",
+    "uuid": "^9.0.0",
+    "xlsx": "^0.18.5"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "env": {
+    "BUILD_NUMBER": "1784787076",
+    "BUILD_EPOCH": "FINAL_1784808904.3089225",
+    "VITE_API_URL": "https://backend-six-flax-84.vercel.app"
+  },
+  "framework": "vite",
+  "buildCommand": "vite build",
+  "outputDirectory": "dist"
+}
