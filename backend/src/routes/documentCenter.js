@@ -105,6 +105,21 @@ router.get('/email-accounts', requireAuth, async (req, res) => {
   res.json({ accounts: data || [] });
 });
 
+// GET /api/imap/diagnose/:accountId — production IMAP diagnostic
+router.get('/imap/diagnose/:accountId', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
+    if (!account) return res.status(404).json({ success: false, error: 'Account not found' });
+
+    const imapService = require('../services/imapService');
+    const report = await imapService.diagnose(account);
+    res.json(report);
+  } catch (ex) {
+    res.status(500).json({ success: false, error: ex.message });
+  }
+});
+
 // POST /api/cases/:caseId/compose — send real email from investigation
 router.post('/cases/:caseId/compose', requireAuth, async (req, res) => {
   try {
@@ -200,13 +215,43 @@ router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
-// POST /api/imap/poll — Trigger IMAP polling
+// POST /api/imap/poll — Trigger IMAP polling (shared service)
 router.post('/imap/poll', requireAuth, async (req, res) => {
   try {
-    const mailPoller = require('../services/mailPoller');
-    const count = await mailPoller.pollAll();
-    res.json({ success: true, newMessages: count });
-  } catch (ex) { res.json({ success: false, error: ex.message }); }
+    const sup = getSupabase();
+    const { account_id } = req.body;
+    const imapService = require('../services/imapService');
+
+    if (account_id) {
+      const { data: account } = await sup.from('email_accounts').select('*').eq('id', account_id).single();
+      if (!account) return res.status(404).json({ success: false, error: 'Account not found' });
+
+      try {
+        const count = await imapService.pollAccount(account);
+        res.json({ success: true, account: account.email, newMessages: count });
+      } catch (pollErr) {
+        // Connection/auth failure — report clearly
+        res.json({ success: false, account: account.email, error: pollErr.message, newMessages: -1 });
+      }
+    } else {
+      // Poll all active accounts
+      const { data: accounts } = await sup.from('email_accounts').select('*').eq('is_active', true);
+      let total = 0;
+      const results = [];
+      for (const acct of accounts || []) {
+        try {
+          const count = await imapService.pollAccount(acct);
+          total += count;
+          results.push({ account: acct.email, newMessages: count, error: null });
+        } catch (err) {
+          results.push({ account: acct.email, newMessages: -1, error: err.message });
+        }
+      }
+      res.json({ success: true, totalNew: total, accounts: results });
+    }
+  } catch (ex) {
+    res.status(500).json({ success: false, error: ex.message });
+  }
 });
 
 // GET /api/inbox/unread-count

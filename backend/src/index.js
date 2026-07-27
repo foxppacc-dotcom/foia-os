@@ -5,9 +5,15 @@ const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const { getSupabase } = require('./supabase');
 const CONFIG = require('./config');
-const storage = require('./services/storage');
 
 const app = express();
+
+// Health endpoint — MUST be first, before any init that could fail
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+const storage = require('./services/storage');
 const PORT = CONFIG.server.port;
 
 // Initialize Supabase (skip on Vercel — created lazily on first request)
@@ -59,11 +65,6 @@ const limiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 app.use('/api', limiter);
-
-// Health endpoint (accessible without auth)
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
 
 // Auth routes
 app.use('/api', require('./routes/auth'));
