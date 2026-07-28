@@ -21,9 +21,11 @@ app.use(express.urlencoded({ extended: true }));
 // All routes
 const routes = [
   'auth', 'cases', 'requests', 'pipeline', 'agencies', 'communications',
-  'documents', 'dashboard', 'intake', 'email', 'aiAssistant', 'users',
+  'documents', 'dashboard', 'intake', 'email', 'emailProduction', 'aiAssistant', 'users',
   'automation', 'gdrive', 'phoneAndMail', 'portals', 'production',
   'settings', 'activity', 'classifier', 'cleanup', 'migration',
+  'case_detail.routes', 'checklist', 'assignees', 'teamManagement', 'team.routes',
+  'teams', 'permissions', 'pipelineLists',
 ];
 
 // Try each route, skip if it fails
