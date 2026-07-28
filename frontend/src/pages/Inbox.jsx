@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
-import { api } from '../api';
+import { api, getApiBase } from '../api';
 import { Mail, Search, Inbox, Archive, Link2, Eye, ChevronDown, RefreshCw, Loader2, ExternalLink } from 'lucide-react';
 import AppSection from '../components/ds/AppSection';
 import AppButton from '../components/ds/AppButton';
 import AppBadge from '../components/ds/AppBadge';
 import AppEmptyState from '../components/ds/AppEmptyState';
 
-const BASE = (import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app').replace(/\/$/, '').replace(/\/api$/, '') + '/api';
+const BASE = getApiBase();
 const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 

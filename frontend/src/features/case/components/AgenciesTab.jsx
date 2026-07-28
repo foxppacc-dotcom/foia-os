@@ -1,4 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { getApiBase } from '../../../api';
+const API = getApiBase();
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Building2, Plus, Trash2, Mail, Settings, Clock, CheckCircle, AlertCircle, Send, ChevronDown, ChevronUp, User, TrendingUp, Activity, FileText, Eye, Users, BarChart3, HelpCircle, RefreshCw, Phone, XCircle, UserPlus, BookOpen, AlertTriangle } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import { useRequests } from '../../request/hooks/useRequests';
@@ -10,7 +12,6 @@ import AppBadge from '../../../components/ds/AppBadge';
 import AppEmptyState from '../../../components/ds/AppEmptyState';
 import AppStack from '../../../components/ds/AppStack';
 
-const API = import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app/api';
 const tok = () => localStorage.getItem('token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 
@@ -84,7 +85,7 @@ export default function AgenciesTab() {
   const [showContactForm, setShowContactForm] = useState({});
 
   useEffect(() => {
-    fetch(`${API}/email-accounts`, { headers: hdrs() }).then(r => r.json()).then(d => setEmailAccounts(d.accounts || d || []));
+    fetch(`${API}/email-accounts`, { headers: hdrs() }).then(r => r.json()).then(d => setEmailAccounts(d.data || d.accounts || []));
     fetch(`${API}/cases/${id}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setCommRecords(d.threads || []));
     // Load contacts from stored configs
     (requests || []).forEach(r => {

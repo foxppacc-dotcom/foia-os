@@ -1,9 +1,10 @@
+import { getApiBase } from '../../api';
+const API = getApiBase();
 import { useState, useEffect } from 'react';
 import { Shield, Plus, Pencil, Save, X, Check, Users, Building2, Mail, Bell } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import Tabs from '../../components/ui/Tabs';
 
-const API = import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app/api';
 
 const tok = () => localStorage.getItem('token');
 const headers = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });

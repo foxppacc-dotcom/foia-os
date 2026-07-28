@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { getApiBase } from '../../api';
+const API = getApiBase();
+import { useState, useEffect, useMemo } from 'react';
 import AppBadge from '../../components/ds/AppBadge';
 import { Search, Users, AlertCircle, Clock, CheckCircle, XCircle, User, Briefcase, Calendar, Activity, Filter, RefreshCw } from 'lucide-react';
-
-const API = import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app/api';
 
 export default function WorkloadDashboard() {
   const [data, setData] = useState(null);

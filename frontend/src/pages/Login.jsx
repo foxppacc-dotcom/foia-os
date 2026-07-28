@@ -56,7 +56,21 @@ export default function Login({ onLogin }) {
         setError(res?.error || res?.message || 'بيانات الدخول غير صحيحة');
       }
     } catch (err) {
-      setError('تعذر الاتصال بالخادم. تحقق من اتصال الإنترنت وحاول مجدداً');
+      const msg = err.message || '';
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network request failed'))
+        setError('تعذر الاتصال بالخادم. تحقق من اتصال الإنترنت وحاول مجدداً');
+      else if (msg.includes('401') || msg.includes('Unauthorized'))
+        setError('انتهت صلاحية الجلسة. يرجى تحديث الصفحة');
+      else if (msg.includes('404'))
+        setError('الخدمة غير متوفرة حالياً. حاول لاحقاً');
+      else if (msg.includes('500') || msg.includes('Internal Server'))
+        setError('حدث خطأ في الخادم. تم تسجيل المشكلة');
+      else if (msg.includes('timeout') || msg.includes('Timed out'))
+        setError('انتهت مهلة الاتصال. حاول مجدداً');
+      else if (msg.includes('CORS') || msg.includes('cross-origin'))
+        setError('خطأ في الاتصال. تحقق من إعدادات الأمان');
+      else
+        setError(`تعذر الاتصال بالخادم: ${msg.substring(0, 60)}`);
     } finally {
       setLoading(false);
     }

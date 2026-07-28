@@ -3,10 +3,11 @@ import { ArrowRight, Calendar, MapPin, Shield, Users, FileText, Building2, Activ
 import { useCaseContext } from '../context/CaseContext';
 import AppBadge from '../../../components/ds/AppBadge';
 import { EvidenceStageBadge } from './EvidenceStageBadge';
+import { getApiBase } from '../../../api';
+const API = getApiBase();
 import { memo, useState } from 'react';
 import Button from '../../../components/ui/Button';
-
-const API = import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app/api';
+import Tabs from '../../../components/ui/Tabs';
 const tok = () => localStorage.getItem('token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 

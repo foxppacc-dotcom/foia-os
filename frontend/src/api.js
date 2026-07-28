@@ -4,7 +4,14 @@
 // If VITE_API_URL is not set in production, fallback to hardcoded backend.
 const RAW_API = import.meta.env.VITE_API_URL || 
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? '/api' : 'https://backend-six-flax-84.vercel.app');
-export const API = RAW_API === '/api' ? '/api' : RAW_API.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
+const API_BASE = RAW_API === '/api' ? RAW_API : RAW_API.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
+// Runtime API base resolver – always returns absolute URL in production
+const API = (function() {
+  // If RAW_API already has an absolute URL, use it directly
+  if (API_BASE.startsWith('http')) return API_BASE;
+  // For relative paths, resolve against the current origin
+  return window.location.origin + API_BASE;
+})();
 export const getApiBase = () => API;
 
 let TOKEN = localStorage.getItem('foia_token') || null;

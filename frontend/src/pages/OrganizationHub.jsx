@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { getApiBase } from '../api';
+const API = getApiBase();
+import { useState, useMemo } from 'react';
 import { Users, Shield, Building2, Mail, BarChart3, Settings, Search, RefreshCw, Plus, Pencil, Trash2, Check, X, User, Briefcase, AlertCircle, Clock } from 'lucide-react';
 import Button from '../../components/ui/Button';
+import Tabs from '../../components/ui/Tabs';
 
-const API = import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app/api';
 const tok = () => localStorage.getItem('token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 

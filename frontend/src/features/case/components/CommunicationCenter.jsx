@@ -1,8 +1,9 @@
+import { getApiBase } from '../../../api';
 import { useState, useEffect, useMemo } from 'react';
 import { Send, Reply, Forward, Paperclip, Search, Clock, AlertCircle, Inbox, FileText, Building2, User, Mail, Tag, ChevronDown, ExternalLink } from 'lucide-react';
 import Button from '../../../components/ui/Button';
 
-const API = import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app/api';
+const API = getApiBase();
 const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 

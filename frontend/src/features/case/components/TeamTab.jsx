@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
+import { getApiBase } from '../../../api';
+const API = getApiBase();
+import { useState, useEffect, useMemo } from 'react';
 import { Users, UserPlus, Trash2, Mail, Shield, Star, User, Briefcase, AlertCircle, ArrowUpCircle, X, Check } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import AppSection from '../../../components/ds/AppSection';
 import AppButton from '../../../components/ds/AppButton';
 import Button from '../../../components/ui/Button';
 
-const API = import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app/api';
 const tok = () => localStorage.getItem('token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 

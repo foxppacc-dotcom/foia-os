@@ -1,3 +1,5 @@
+import { getApiBase } from '../../../api';
+const API = getApiBase();
 import { useState, useEffect, useMemo } from 'react';
 import { Search, Trash2, FileText, Image, Video, Music, Folder, Upload, Eye } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
@@ -5,7 +7,6 @@ import UploadZone from '../../drive/components/UploadZone';
 import AppBadge from '../../../components/ds/AppBadge';
 import Button from '../../../components/ui/Button';
 
-const API = import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app/api';
 const tok = () => localStorage.getItem('token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 

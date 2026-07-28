@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api } from '../api';
+import { api, getApiBase } from '../api';
 import { Mail, Plus, Trash2, RefreshCw, Send, Power, PowerOff, Loader2, X, CheckCircle, AlertCircle } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
@@ -33,8 +33,7 @@ export default function EmailAccounts() {
     daily_limit: '100',
   });
 
-  const RAW_BASE = import.meta.env.VITE_API_URL || 'https://backend-six-flax-84.vercel.app';
-  const BASE = RAW_BASE.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
+  const BASE = getApiBase();
   const tok = () => localStorage.getItem('foia_token');
   const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 
