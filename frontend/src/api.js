@@ -15,6 +15,7 @@ const API = (function() {
   // In production, use the backend directly (bypasses Vercel proxy)
   return 'https://backend-six-flax-84.vercel.app/api';
 })();
+export { API };
 export const getApiBase = () => API;
 
 let TOKEN = localStorage.getItem('foia_token') || null;
