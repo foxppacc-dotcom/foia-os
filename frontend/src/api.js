@@ -4,7 +4,8 @@
 // If VITE_API_URL is not set in production, fallback to hardcoded backend.
 const RAW_API = import.meta.env.VITE_API_URL || 
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? '/api' : 'https://backend-six-flax-84.vercel.app');
-export const API = RAW_API === '/api' ? '/api' : RAW_API.replace(/\/$/, '') + '/api';
+export const API = RAW_API === '/api' ? '/api' : RAW_API.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
+export const getApiBase = () => API;
 
 let TOKEN = localStorage.getItem('foia_token') || null;
 
