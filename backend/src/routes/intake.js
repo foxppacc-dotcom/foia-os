@@ -11,7 +11,7 @@ router.use(requireAuth);
 // Configure multer for AI intake uploads
 const INTAKE_DIR = path.join(__dirname, '..', '..', 'uploads', 'intake');
 if (!fs.existsSync(INTAKE_DIR)) {
-  fs.mkdirSync(INTAKE_DIR, { recursive: true });
+  try { fs.mkdirSync(INTAKE_DIR, { recursive: true }); } catch (e) { /* Vercel read-only */ }
 }
 
 const storage = multer.diskStorage({

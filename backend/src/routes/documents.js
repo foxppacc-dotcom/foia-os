@@ -8,7 +8,7 @@ const { getDatabase } = require('../database');
 // Configure multer storage
 const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads', 'documents');
 if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  try { fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (e) { /* Vercel read-only */ }
 }
 
 const storage = multer.diskStorage({
@@ -17,7 +17,7 @@ const storage = multer.diskStorage({
     const caseId = req.params.caseId;
     const caseDir = path.join(UPLOADS_DIR, `case_${caseId}`);
     if (!fs.existsSync(caseDir)) {
-      fs.mkdirSync(caseDir, { recursive: true });
+      try { fs.mkdirSync(caseDir, { recursive: true }); } catch (e) { /* Vercel read-only */ }
     }
     cb(null, caseDir);
   },

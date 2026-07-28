@@ -424,7 +424,7 @@ const XLSX2 = require('xlsx');
 const path2 = require('path');
 const fs2 = require('fs');
 const UPLOADS_DIR2 = path2.join(__dirname, '..', '..', 'uploads', 'cases_bulk');
-if (!fs2.existsSync(UPLOADS_DIR2)) fs2.mkdirSync(UPLOADS_DIR2, { recursive: true });
+if (!fs2.existsSync(UPLOADS_DIR2)) { try { fs2.mkdirSync(UPLOADS_DIR2, { recursive: true }); } catch (e) { /* Vercel read-only — uploads go to Supabase */ } }
 
 const uploadCases = multer2({
   storage: multer2.diskStorage({

@@ -5,9 +5,11 @@ const fs = require('fs');
 const DB_PATH = path.join(__dirname, '..', 'data', 'foia_os.db');
 
 const dataDir = path.dirname(DB_PATH);
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
+try {
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+} catch (e) { /* Vercel read-only fs — SQLite unavailable, Supabase used instead */ }
 
 let db;
 

@@ -20,6 +20,7 @@
     "googleapis": "^173.0.0",
     "helmet": "^8.2.0",
     "imap": "^0.8.19",
+    "imapflow": "^1.6.1",
     "jsonwebtoken": "^9.0.3",
     "mailparser": "^3.9.14",
     "multer": "^1.4.5-lts.1",

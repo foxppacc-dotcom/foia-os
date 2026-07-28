@@ -2,6 +2,7 @@ const nodemailer = require('nodemailer');
 const Imap = require('imap');
 const { simpleParser } = require('mailparser');
 const { getSupabase } = require('../supabase');
+const { encrypt, decrypt } = require('./crypto');
 
 /**
  * Real Email Service for FOIA OS
@@ -21,7 +22,6 @@ class EmailService {
     if (this.transporters.has(key)) return this.transporters.get(key);
 
     // Decrypt password — DB stores AES-256-GCM encrypted value
-    const { decrypt } = require('./crypto');
     const smtpPass = decrypt(account.smtp_pass);
 
     const transporter = nodemailer.createTransport({
@@ -102,7 +102,7 @@ class EmailService {
 
           const imap = new Imap({
             user: account.imap_user || account.email,
-            password: account.imap_pass,
+            password: decrypt(account.imap_pass),
             host: account.imap_host,
             port: account.imap_port || 993,
             tls: true,

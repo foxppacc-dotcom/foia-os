@@ -2,18 +2,19 @@
 // In production, use VITE_API_URL for the backend origin.
 // Falls back to '/api' for dev (Vite proxy forwards to backend).
 // If VITE_API_URL is not set in production, fallback to hardcoded backend.
-const RAW_API = import.meta.env.VITE_API_URL || 
-  (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? '/api' : 'https://backend-six-flax-84.vercel.app');
-const API_BASE = RAW_API === '/api' ? RAW_API : RAW_API.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
-// Runtime API base resolver – always returns absolute URL in production
+// API base URL — read from meta tag or build-time env
 const API = (function() {
-  var h, o, r;
-  try { h = window.location.hostname; o = window.location.origin; } catch(e) { h = ''; o = ''; }
-  // In dev (localhost), use relative /api path (Vite proxy)
-  if (h === 'localhost' || h === '127.0.0.1') return o + '/api';
-  // In production, use the backend directly
-  r = 'https://' + 'backend-six-flax-84' + '.vercel' + '.app/api';
-  return r;
+  // Production: read from meta tag set by index.html
+  var m = typeof document !== 'undefined' && document.querySelector && document.querySelector('meta[name="api-base"]');
+  if (m) return m.getAttribute('content');
+  // Build-time: VITE_API_URL (empty in production = use fallback)
+  var r = import.meta.env.VITE_API_URL || '';
+  if (r && r !== '/api') return r.replace(/\/$/, '') + '/api';
+  // Dev localhost
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
+    return window.location.origin + '/api';
+  // Production fallback
+  return 'https://backend-six-flax-84.vercel.app/api';
 })();
 export { API };
 export const getApiBase = () => API;

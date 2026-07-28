@@ -1,4 +1,4 @@
-const ImapFlow = require('imapflow');
+const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const { getSupabase } = require('../supabase');
 const { decrypt } = require('./crypto');

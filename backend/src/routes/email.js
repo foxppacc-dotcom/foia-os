@@ -208,6 +208,8 @@ router.post('/send', requireAuth, async (req, res) => {
         body: body || html || '',
         sender: to,
         recipient: cc || '',
+        message_id: result.messageId,
+        thread_id: result.messageId,
         created_at: new Date().toISOString()
       });
 

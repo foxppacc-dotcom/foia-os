@@ -105,22 +105,102 @@ router.get('/email-accounts', requireAuth, async (req, res) => {
   res.json({ accounts: data || [] });
 });
 
-// GET /api/imap/diagnose/:accountId — production IMAP diagnostic
+// GET /api/imap/diagnose/:accountId — production IMAP diagnostic (instrumented)
 router.get('/imap/diagnose/:accountId', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
     const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
     if (!account) return res.status(404).json({ success: false, error: 'Account not found' });
-
     const imapService = require('../services/imapService');
     const report = await imapService.diagnose(account);
     res.json(report);
-  } catch (ex) {
-    res.status(500).json({ success: false, error: ex.message });
-  }
+  } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
 });
 
-// POST /api/cases/:caseId/compose — send real email from investigation
+// GET /api/imap/connectivity/:accountId — minimal connect+auth test
+router.get('/imap/connectivity/:accountId', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
+    if (!account) return res.status(404).json({ success: false, error: 'Account not found' });
+    const imapService = require('../services/imapService');
+    const result = await imapService.testConnectivity(account);
+    res.json(result);
+  } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
+});
+
+// GET /api/imap/compare/:accountId — compare SMTP vs IMAP credentials securely
+router.get('/imap/compare/:accountId', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
+    if (!account) return res.status(404).json({ success: false, error: 'Account not found' });
+    const imapService = require('../services/imapService');
+    const result = await imapService.compareCredentials(account);
+    res.json(result);
+  } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
+});
+
+// POST /api/imap/fix-credentials/:accountId — fix IMAP password + auto-test
+router.post('/imap/fix-credentials/:accountId', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { encrypt, decrypt } = require('../services/crypto');
+    const imapService = require('../services/imapService');
+
+    const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
+    if (!account) return res.status(404).json({ success: false, error: 'Account not found' });
+
+    const result = { account: account.email, smtpStatus: null, imapStatus: null, updated: false, error: null };
+
+    // Decrypt SMTP password
+    let smtpPass;
+    try {
+      smtpPass = decrypt(account.smtp_pass);
+      if (!smtpPass || smtpPass.length < 2) throw new Error('SMTP password empty after decrypt');
+    } catch (e) {
+      return res.json({ success: false, error: `Failed to decrypt SMTP password: ${e.message}` });
+    }
+
+    // Test SMTP with current password (should work)
+    try {
+      const transporter = require('nodemailer').createTransport({
+        host: account.smtp_host || 'smtp.gmail.com',
+        port: account.smtp_port || 587,
+        secure: false,
+        auth: { user: account.smtp_user || account.email, pass: smtpPass },
+      });
+      await transporter.verify();
+      result.smtpStatus = 'pass';
+    } catch (e) {
+      result.smtpStatus = `fail: ${e.message}`;
+    }
+
+    // Encrypt SMTP pass as new IMAP pass
+    const newImapPass = encrypt(smtpPass);
+
+    // Update imap_pass in database
+    const { error: updateError } = await sup.from('email_accounts')
+      .update({ imap_pass: newImapPass })
+      .eq('id', account.id);
+    if (updateError) return res.json({ success: false, error: `Update failed: ${updateError.message}` });
+
+    result.updated = true;
+
+    // Test IMAP with new password
+    const { data: updated } = await sup.from('email_accounts').select('*').eq('id', account.id).single();
+    if (updated) {
+      const imapResult = await imapService.testConnectivity(updated);
+      result.imapStatus = imapResult.result === 'connected' ? 'pass' : `fail: ${imapResult.error || 'unknown'}`;
+    }
+
+    // Compare to confirm
+    const compareResult = await imapService.compareCredentials(updated || account);
+    result.passwordsMatch = compareResult.passwordsEqual;
+
+    res.json({ success: true, result });
+  } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
+});
 router.post('/cases/:caseId/compose', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
@@ -157,6 +237,7 @@ router.post('/cases/:caseId/compose', requireAuth, async (req, res) => {
       case_id: caseId,
       type: 'email', direction: 'outbound',
       subject, body: body || '', sender: account.email, recipient: to,
+      message_id: info.messageId,
       thread_id: info.messageId,
       created_at: new Date().toISOString(),
     }).select();
@@ -215,43 +296,13 @@ router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
-// POST /api/imap/poll — Trigger IMAP polling (shared service)
+// POST /api/imap/poll — Trigger IMAP polling
 router.post('/imap/poll', requireAuth, async (req, res) => {
   try {
-    const sup = getSupabase();
-    const { account_id } = req.body;
-    const imapService = require('../services/imapService');
-
-    if (account_id) {
-      const { data: account } = await sup.from('email_accounts').select('*').eq('id', account_id).single();
-      if (!account) return res.status(404).json({ success: false, error: 'Account not found' });
-
-      try {
-        const count = await imapService.pollAccount(account);
-        res.json({ success: true, account: account.email, newMessages: count });
-      } catch (pollErr) {
-        // Connection/auth failure — report clearly
-        res.json({ success: false, account: account.email, error: pollErr.message, newMessages: -1 });
-      }
-    } else {
-      // Poll all active accounts
-      const { data: accounts } = await sup.from('email_accounts').select('*').eq('is_active', true);
-      let total = 0;
-      const results = [];
-      for (const acct of accounts || []) {
-        try {
-          const count = await imapService.pollAccount(acct);
-          total += count;
-          results.push({ account: acct.email, newMessages: count, error: null });
-        } catch (err) {
-          results.push({ account: acct.email, newMessages: -1, error: err.message });
-        }
-      }
-      res.json({ success: true, totalNew: total, accounts: results });
-    }
-  } catch (ex) {
-    res.status(500).json({ success: false, error: ex.message });
-  }
+    const mailPoller = require('../services/mailPoller');
+    const count = await mailPoller.pollAll();
+    res.json({ success: true, newMessages: count });
+  } catch (ex) { res.json({ success: false, error: ex.message }); }
 });
 
 // GET /api/inbox/unread-count
