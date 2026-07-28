@@ -7,10 +7,13 @@ const RAW_API = import.meta.env.VITE_API_URL ||
 const API_BASE = RAW_API === '/api' ? RAW_API : RAW_API.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
 // Runtime API base resolver – always returns absolute URL in production
 const API = (function() {
-  // If RAW_API already has an absolute URL, use it directly
-  if (API_BASE.startsWith('http')) return API_BASE;
-  // For relative paths, resolve against the current origin
-  return window.location.origin + API_BASE;
+  // Production: use the hardcoded backend URL via the Vercel proxy or directly
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+  // In dev (localhost), use relative /api path (Vite proxy)
+  if (hostname === 'localhost' || hostname === '127.0.0.1') return origin + '/api';
+  // In production, use the backend directly (bypasses Vercel proxy)
+  return 'https://backend-six-flax-84.vercel.app/api';
 })();
 export const getApiBase = () => API;
 
