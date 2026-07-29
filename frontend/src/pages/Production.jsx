@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Plus, Trash2, User, RefreshCw, FolderOpen, Calendar, ChevronDown, AlertTriangle } from 'lucide-react';
 
@@ -16,13 +17,24 @@ const priorityConfig = {
 };
 
 export default function Production() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const prefilledCaseId = searchParams.get('case_id') || '';
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ case_id: '', assigned_to: '', priority: 'medium', notes: '' });
+  const [showForm, setShowForm] = useState(!!prefilledCaseId);
+  const [form, setForm] = useState({ case_id: prefilledCaseId, assigned_to: '', priority: 'medium', notes: '' });
   const [autoChecking, setAutoChecking] = useState(false);
+
+  useEffect(() => {
+    if (prefilledCaseId) {
+      setShowForm(true);
+      setForm(f => ({ ...f, case_id: prefilledCaseId }));
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchProduction = () => {
     api.get('/api/production').then(d => {

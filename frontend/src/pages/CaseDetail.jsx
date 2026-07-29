@@ -35,7 +35,7 @@ export default function CaseDetail() {
   );
 
   const { case: c, team, requests, checklist, documents, timeline, records_progress } = data;
-  const ctx = { id, c, team, requests, checklist, documents, timeline, records_progress, users, specializedUsers, allAgencies, refetch, updateChecklist, debouncedSaveNote, newDoc, setNewDoc, addDocument, removeDocument, detectFileType, previewFile, setPreviewFile, handleAddTeam, handleRemoveTeam, getFilteredUsers };
+  const ctx = { id, c, team, requests, checklist, documents, timeline, records_progress, users, specializedUsers, allAgencies, refetch, updateChecklist, debouncedSaveNote, newDoc, setNewDoc, addDocument, removeDocument, detectFileType, previewFile, setPreviewFile, handleAddTeam, handleRemoveTeam, getFilteredUsers, activeTab, setActiveTab };
 
   return (
     <CaseProvider value={ctx}>

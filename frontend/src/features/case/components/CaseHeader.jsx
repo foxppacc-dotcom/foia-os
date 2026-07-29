@@ -25,7 +25,7 @@ const STAGE_LABELS = {
 };
 
 export default memo(function CaseHeader() {
-  const { id: caseId, c, requests, team, documents, checklist, refetch } = useCaseContext();
+  const { id: caseId, c, requests, team, documents, checklist, refetch, setActiveTab } = useCaseContext();
   const navigate = useNavigate();
   const currentUser = getCurrentUser();
   const canDelete = currentUser?.role === 'admin' || currentUser?.role === 'manager';
@@ -85,10 +85,10 @@ export default memo(function CaseHeader() {
         </Link>
         {/* Action buttons */}
         <div className="flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" title="تعيين فريق"><UserPlus className="w-3.5 h-3.5" /></Button>
-          <Button variant="ghost" size="sm" title="رفع ملف"><Upload className="w-3.5 h-3.5" /></Button>
-          <Button variant="ghost" size="sm" title="توثيق"><Eye className="w-3.5 h-3.5" /></Button>
-          <Button variant="ghost" size="sm" title="تجهيز الحزمة"><Package className="w-3.5 h-3.5" /></Button>
+          <Button variant="ghost" size="sm" title="تعيين فريق" onClick={() => setActiveTab?.('team')}><UserPlus className="w-3.5 h-3.5" /></Button>
+          <Button variant="ghost" size="sm" title="رفع ملف" onClick={() => setActiveTab?.('documents')}><Upload className="w-3.5 h-3.5" /></Button>
+          <Button variant="ghost" size="sm" title="توثيق" onClick={() => setActiveTab?.('checklist')}><Eye className="w-3.5 h-3.5" /></Button>
+          <Button variant="ghost" size="sm" title="تجهيز الحزمة (مونتاج)" onClick={() => navigate(`/production?case_id=${caseId}`)}><Package className="w-3.5 h-3.5" /></Button>
           <Button variant="ghost" size="sm" title="نقل الملكية" onClick={() => setShowTransfer(!showTransfer)}><ArrowUpCircle className="w-3.5 h-3.5" /></Button>
           <Button variant="ghost" size="sm" title="إغلاق القضية" onClick={handleClose} disabled={c.status === 'closed'}><XCircle className="w-3.5 h-3.5" style={{ color: '#ef4444' }} /></Button>
           {canDelete && (
