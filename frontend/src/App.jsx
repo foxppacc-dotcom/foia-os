@@ -151,6 +151,8 @@ function App() {
             <Route path="/profile" element={<Profile />} />
             {user.role === 'admin' && <Route path="/teams" element={<Teams />} />}
             {canAccess('communications') && <Route path="/gdrive" element={<CaseGDrive />} />}
+            {canAccess('communications') && <Route path="/phone-logs" element={<PhoneLogs />} />}
+            {canAccess('communications') && <Route path="/mail-logs" element={<MailLogs />} />}
             {canAccess('users') && <Route path="/users" element={<Users />} />}
             {user.role === 'admin' && <Route path="/organization" element={<OrganizationHub />} />}
             {user.role === 'admin' && <Route path="/permissions" element={<TeamPermissions />} />}

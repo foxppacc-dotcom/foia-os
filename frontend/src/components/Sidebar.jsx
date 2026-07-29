@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
-import { FolderOpen, LayoutDashboard, GitBranch, Building2, Sparkles, Users, Mail, Timer, Key, FileText, ChevronRight, ChevronLeft, Cloud, UserCog, Network, ShieldCheck } from 'lucide-react';
+import { FolderOpen, LayoutDashboard, GitBranch, Building2, Sparkles, Users, Mail, Timer, Key, FileText, ChevronRight, ChevronLeft, Cloud, UserCog, Network, ShieldCheck, Phone, MailPlus } from 'lucide-react';
 
 const navGroups = [
   {
@@ -30,6 +30,8 @@ const navGroups = [
       { path: '/organization', label: 'المؤسسة', icon: Network, roles: ['admin'] },
       { path: '/permissions', label: 'الصلاحيات', icon: ShieldCheck, roles: ['admin'] },
       { path: '/gdrive', label: 'Google Drive', icon: Cloud, roles: ['admin', 'manager', 'member'] },
+      { path: '/phone-logs', label: 'سجل المكالمات', icon: Phone, roles: ['admin', 'manager', 'member'] },
+      { path: '/mail-logs', label: 'البريد الفعلي', icon: MailPlus, roles: ['admin', 'manager', 'member'] },
     ],
   },
 ];

@@ -1,21 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
-const { getDatabase } = require('../database');
+const { getSupabase } = require('../supabase');
 
 // ===================== PHONE LOGS =====================
 
 // GET /api/cases/:caseId/phone-logs
-router.get('/cases/:caseId/phone-logs', requireAuth, (req, res) => {
+router.get('/cases/:caseId/phone-logs', requireAuth, async (req, res) => {
   try {
-    const db = getDatabase();
-    const logs = db.prepare(`
-      SELECT pl.*, u.name AS created_by_name
-      FROM phone_logs pl
-      LEFT JOIN users u ON pl.created_by = u.id
-      WHERE pl.case_id = ?
-      ORDER BY pl.created_at DESC
-    `).all(parseInt(req.params.caseId));
+    const sup = getSupabase();
+    const { data, error } = await sup.from('phone_logs')
+      .select('*, users!phone_logs_created_by_fkey(name)')
+      .eq('case_id', parseInt(req.params.caseId))
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    const logs = (data || []).map(l => ({ ...l, created_by_name: l.users?.name || null, users: undefined }));
     res.json({ success: true, data: logs });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -23,60 +22,49 @@ router.get('/cases/:caseId/phone-logs', requireAuth, (req, res) => {
 });
 
 // POST /api/cases/:caseId/phone-logs
-router.post('/cases/:caseId/phone-logs', requireAuth, (req, res) => {
+router.post('/cases/:caseId/phone-logs', requireAuth, async (req, res) => {
   try {
-    const db = getDatabase();
+    const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
     const { direction, caller_name, caller_number, duration_seconds, summary, notes, recording_path } = req.body;
-
     if (!direction) return res.status(400).json({ error: 'direction (inbound/outbound) مطلوب' });
 
-    const result = db.prepare(`
-      INSERT INTO phone_logs (case_id, direction, caller_name, caller_number, duration_seconds, summary, notes, recording_path, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).run(
-      caseId, direction, caller_name || null, caller_number || null,
-      duration_seconds || 0, summary || null, notes || null,
-      recording_path || null, req.user.id || null
-    );
+    const { data: created, error } = await sup.from('phone_logs').insert({
+      case_id: caseId, direction, caller_name: caller_name || null, caller_number: caller_number || null,
+      duration_seconds: duration_seconds || 0, summary: summary || null, notes: notes || null,
+      recording_path: recording_path || null, created_by: req.user.id || null,
+    }).select().single();
+    if (error) throw error;
 
     // Also add as communication entry for unified inbox
-    db.prepare(`
-      INSERT INTO communications (case_id, type, direction, subject, body, created_at)
-      VALUES (?, 'phone', ?, ?, ?, datetime('now'))
-    `).run(
-      caseId, direction,
-      direction === 'inbound' ? `📞 مكالمة واردة من ${caller_name || caller_number || 'مجهول'}` : `📞 مكالمة صادرة إلى ${caller_name || caller_number || 'مجهول'}`,
-      summary || notes || 'مكالمة هاتفية'
-    );
+    await sup.from('communications').insert({
+      case_id: caseId, type: 'phone', direction,
+      subject: direction === 'inbound' ? `📞 مكالمة واردة من ${caller_name || caller_number || 'مجهول'}` : `📞 مكالمة صادرة إلى ${caller_name || caller_number || 'مجهول'}`,
+      body: summary || notes || 'مكالمة هاتفية',
+    });
 
-    const created = db.prepare(`SELECT pl.*, u.name AS created_by_name
-      FROM phone_logs pl LEFT JOIN users u ON pl.created_by = u.id WHERE pl.id = ?`).get(result.lastInsertRowid);
-
-    res.status(201).json({ success: true, data: created });
+    res.status(201).json({ success: true, data: { ...created, created_by_name: req.user.name || null } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // PUT /api/phone-logs/:id
-router.put('/phone-logs/:id', requireAuth, (req, res) => {
+router.put('/phone-logs/:id', requireAuth, async (req, res) => {
   try {
-    const db = getDatabase();
-    const id = parseInt(req.params.id);
+    const sup = getSupabase();
     const { direction, caller_name, caller_number, duration_seconds, summary, notes, recording_path } = req.body;
+    const updates = {};
+    if (direction !== undefined) updates.direction = direction;
+    if (caller_name !== undefined) updates.caller_name = caller_name;
+    if (caller_number !== undefined) updates.caller_number = caller_number;
+    if (duration_seconds !== undefined) updates.duration_seconds = duration_seconds;
+    if (summary !== undefined) updates.summary = summary;
+    if (notes !== undefined) updates.notes = notes;
+    if (recording_path !== undefined) updates.recording_path = recording_path;
 
-    db.prepare(`
-      UPDATE phone_logs SET
-        direction = COALESCE(?, direction), caller_name = COALESCE(?, caller_name),
-        caller_number = COALESCE(?, caller_number), duration_seconds = COALESCE(?, duration_seconds),
-        summary = COALESCE(?, summary), notes = COALESCE(?, notes),
-        recording_path = COALESCE(?, recording_path)
-      WHERE id = ?
-    `).run(direction || null, caller_name !== undefined ? caller_name : null, caller_number !== undefined ? caller_number : null,
-      duration_seconds !== undefined ? duration_seconds : null, summary !== undefined ? summary : null,
-      notes !== undefined ? notes : null, recording_path !== undefined ? recording_path : null, id);
-
+    const { error } = await sup.from('phone_logs').update(updates).eq('id', parseInt(req.params.id));
+    if (error) throw error;
     res.json({ success: true, message: '✅ تم تحديث سجل المكالمة' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -84,24 +72,29 @@ router.put('/phone-logs/:id', requireAuth, (req, res) => {
 });
 
 // DELETE /api/phone-logs/:id
-router.delete('/phone-logs/:id', requireAuth, (req, res) => {
-  getDatabase().prepare('DELETE FROM phone_logs WHERE id = ?').run(parseInt(req.params.id));
-  res.json({ success: true });
+router.delete('/phone-logs/:id', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { error } = await sup.from('phone_logs').delete().eq('id', parseInt(req.params.id));
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ===================== PHYSICAL MAIL =====================
 
 // GET /api/cases/:caseId/mail-logs
-router.get('/cases/:caseId/mail-logs', requireAuth, (req, res) => {
+router.get('/cases/:caseId/mail-logs', requireAuth, async (req, res) => {
   try {
-    const db = getDatabase();
-    const logs = db.prepare(`
-      SELECT ml.*, u.name AS created_by_name
-      FROM mail_logs ml
-      LEFT JOIN users u ON ml.created_by = u.id
-      WHERE ml.case_id = ?
-      ORDER BY ml.created_at DESC
-    `).all(parseInt(req.params.caseId));
+    const sup = getSupabase();
+    const { data, error } = await sup.from('mail_logs')
+      .select('*, users!mail_logs_created_by_fkey(name)')
+      .eq('case_id', parseInt(req.params.caseId))
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    const logs = (data || []).map(l => ({ ...l, created_by_name: l.users?.name || null, users: undefined }));
     res.json({ success: true, data: logs });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -109,64 +102,55 @@ router.get('/cases/:caseId/mail-logs', requireAuth, (req, res) => {
 });
 
 // POST /api/cases/:caseId/mail-logs
-router.post('/cases/:caseId/mail-logs', requireAuth, (req, res) => {
+router.post('/cases/:caseId/mail-logs', requireAuth, async (req, res) => {
   try {
-    const db = getDatabase();
+    const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
     const { direction, mail_type, tracking_number, courier, sender_name, recipient_name, sent_date, received_date, notes, scanned_path } = req.body;
-
     if (!direction) return res.status(400).json({ error: 'direction مطلوب' });
 
-    const result = db.prepare(`
-      INSERT INTO mail_logs (case_id, direction, mail_type, tracking_number, courier, sender_name, recipient_name, sent_date, received_date, notes, scanned_path, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).run(
-      caseId, direction, mail_type || 'letter', tracking_number || null, courier || null,
-      sender_name || null, recipient_name || null, sent_date || null, received_date || null,
-      notes || null, scanned_path || null, req.user.id || null
-    );
+    const { data: created, error } = await sup.from('mail_logs').insert({
+      case_id: caseId, direction, mail_type: mail_type || 'letter', tracking_number: tracking_number || null,
+      courier: courier || null, sender_name: sender_name || null, recipient_name: recipient_name || null,
+      sent_date: sent_date || null, received_date: received_date || null, notes: notes || null,
+      scanned_path: scanned_path || null, created_by: req.user.id || null,
+    }).select().single();
+    if (error) throw error;
 
     // Add as communication entry
     const mailLabel = mail_type === 'package' ? '📦' : '✉️';
-    db.prepare(`
-      INSERT INTO communications (case_id, type, direction, subject, body, metadata, created_at)
-      VALUES (?, 'mail', ?, ?, ?, ?, datetime('now'))
-    `).run(
-      caseId, direction,
-      `${mailLabel} ${direction === 'inbound' ? 'بريد وارد' : 'بريد صادر'} ${tracking_number ? `(${tracking_number})` : ''} - ${sender_name || recipient_name || ''}`,
-      notes || '',
-      JSON.stringify({ tracking_number, courier, mail_type })
-    );
+    await sup.from('communications').insert({
+      case_id: caseId, type: 'mail', direction,
+      subject: `${mailLabel} ${direction === 'inbound' ? 'بريد وارد' : 'بريد صادر'} ${tracking_number ? `(${tracking_number})` : ''} - ${sender_name || recipient_name || ''}`,
+      body: notes || '',
+      metadata: JSON.stringify({ tracking_number, courier, mail_type }),
+    });
 
-    const created = db.prepare(`SELECT ml.*, u.name AS created_by_name
-      FROM mail_logs ml LEFT JOIN users u ON ml.created_by = u.id WHERE ml.id = ?`).get(result.lastInsertRowid);
-
-    res.status(201).json({ success: true, data: created });
+    res.status(201).json({ success: true, data: { ...created, created_by_name: req.user.name || null } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // PUT /api/mail-logs/:id
-router.put('/mail-logs/:id', requireAuth, (req, res) => {
+router.put('/mail-logs/:id', requireAuth, async (req, res) => {
   try {
-    const db = getDatabase();
-    const id = parseInt(req.params.id);
+    const sup = getSupabase();
     const { direction, mail_type, tracking_number, courier, sender_name, recipient_name, sent_date, received_date, notes, scanned_path } = req.body;
+    const updates = {};
+    if (direction !== undefined) updates.direction = direction;
+    if (mail_type !== undefined) updates.mail_type = mail_type;
+    if (tracking_number !== undefined) updates.tracking_number = tracking_number;
+    if (courier !== undefined) updates.courier = courier;
+    if (sender_name !== undefined) updates.sender_name = sender_name;
+    if (recipient_name !== undefined) updates.recipient_name = recipient_name;
+    if (sent_date !== undefined) updates.sent_date = sent_date;
+    if (received_date !== undefined) updates.received_date = received_date;
+    if (notes !== undefined) updates.notes = notes;
+    if (scanned_path !== undefined) updates.scanned_path = scanned_path;
 
-    db.prepare(`
-      UPDATE mail_logs SET
-        direction = COALESCE(?, direction), mail_type = COALESCE(?, mail_type),
-        tracking_number = COALESCE(?, tracking_number), courier = COALESCE(?, courier),
-        sender_name = COALESCE(?, sender_name), recipient_name = COALESCE(?, recipient_name),
-        sent_date = COALESCE(?, sent_date), received_date = COALESCE(?, received_date),
-        notes = COALESCE(?, notes), scanned_path = COALESCE(?, scanned_path)
-      WHERE id = ?
-    `).run(direction || null, mail_type || null, tracking_number || null, courier || null,
-      sender_name !== undefined ? sender_name : null, recipient_name !== undefined ? recipient_name : null,
-      sent_date !== undefined ? sent_date : null, received_date !== undefined ? received_date : null,
-      notes !== undefined ? notes : null, scanned_path !== undefined ? scanned_path : null, id);
-
+    const { error } = await sup.from('mail_logs').update(updates).eq('id', parseInt(req.params.id));
+    if (error) throw error;
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -174,9 +158,15 @@ router.put('/mail-logs/:id', requireAuth, (req, res) => {
 });
 
 // DELETE /api/mail-logs/:id
-router.delete('/mail-logs/:id', requireAuth, (req, res) => {
-  getDatabase().prepare('DELETE FROM mail_logs WHERE id = ?').run(parseInt(req.params.id));
-  res.json({ success: true });
+router.delete('/mail-logs/:id', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { error } = await sup.from('mail_logs').delete().eq('id', parseInt(req.params.id));
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
