@@ -38,7 +38,6 @@ const EmailAccounts = lazy(() => import('./pages/EmailAccounts'));
 const Profile = lazy(() => import('./pages/Profile'));
 const ListDetail = lazy(() => import('./pages/ListDetail'));
 const Inbox = lazy(() => import('./pages/Inbox'));
-const OrganizationHub = lazy(() => import('./pages/OrganizationHub'));
 const TeamPermissions = lazy(() => import('./components/TeamPermissions'));
 
 function AppFallback() { return <div style={{padding:"20px",color:"var(--ds-text-muted)"}}>جاري التحميل...</div>; }
@@ -154,7 +153,6 @@ function App() {
             {canAccess('communications') && <Route path="/phone-logs" element={<PhoneLogs />} />}
             {canAccess('communications') && <Route path="/mail-logs" element={<MailLogs />} />}
             {canAccess('users') && <Route path="/users" element={<Users />} />}
-            {user.role === 'admin' && <Route path="/organization" element={<OrganizationHub />} />}
             {user.role === 'admin' && <Route path="/permissions" element={<TeamPermissions />} />}
           </Routes></Suspense>
           </ErrorBoundary>
