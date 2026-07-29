@@ -132,9 +132,10 @@ class MailPoller {
           target_title: `📩 ${msg.subject}`,
           user_name: msg.from,
           created_at: msg.date.toISOString(),
-        }).catch(() => {});
+        }).catch(e => console.error(`[mailPoller] activity_logs insert failed for case ${matchedCaseId}:`, e.message));
 
-        await this.notifyCaseUsers(sup, matchedCaseId, msg.subject, msg.from).catch(() => {});
+        await this.notifyCaseUsers(sup, matchedCaseId, msg.subject, msg.from)
+          .catch(e => console.error(`[mailPoller] notifyCaseUsers failed for case ${matchedCaseId}:`, e.message));
       }
     }
 
@@ -152,7 +153,7 @@ class MailPoller {
         type: 'email_received',
         title: '📩 رد جديد من جهة',
         body: `${from}: ${subject}`,
-      }).catch(() => {});
+      }).catch(e => console.error(`[mailPoller] notification insert failed for user ${userId}:`, e.message));
     }
   }
 
