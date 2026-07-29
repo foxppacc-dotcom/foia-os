@@ -80,11 +80,13 @@ router.post('/intake/upload', upload.single('file'), async (req, res) => {
     const caseId = created.id;
 
     // Add a note about AI extraction
-    await sup.from('activity_logs').insert({
-      user_id: req.user?.id, user_name: req.user?.name,
-      action_type: 'ai_intake', target_type: 'case', target_id: caseId,
-      target_title: `🤖 تم استخراج تلقائي من الملف: ${originalName}`,
-    }).catch(e => console.error('[intake] activity_logs insert failed:', e.message));
+    try {
+      await sup.from('activity_logs').insert({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'ai_intake', target_type: 'case', target_id: caseId,
+        target_title: `🤖 تم استخراج تلقائي من الملف: ${originalName}`,
+      });
+    } catch (e) { console.error('[intake] activity_logs insert failed:', e.message); }
 
     // If agencies were detected, create requests
     for (const agency of metadata.agencies.slice(0, 5)) {

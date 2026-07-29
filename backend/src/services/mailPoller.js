@@ -145,17 +145,20 @@ class MailPoller {
 
       // Create timeline event + notify assignees for matched emails
       if (matchedCaseId) {
-        await sup.from('activity_logs').insert({
-          action_type: 'email_received',
-          target_type: 'case',
-          target_id: matchedCaseId,
-          target_title: `📩 ${msg.subject}`,
-          user_name: msg.from,
-          created_at: msg.date.toISOString(),
-        }).catch(e => console.error(`[mailPoller] activity_logs insert failed for case ${matchedCaseId}:`, e.message));
+        try {
+          await sup.from('activity_logs').insert({
+            action_type: 'email_received',
+            target_type: 'case',
+            target_id: matchedCaseId,
+            target_title: `📩 ${msg.subject}`,
+            user_name: msg.from,
+            created_at: msg.date.toISOString(),
+          });
+        } catch (e) { console.error(`[mailPoller] activity_logs insert failed for case ${matchedCaseId}:`, e.message); }
 
-        await this.notifyCaseUsers(sup, matchedCaseId, msg.subject, msg.from)
-          .catch(e => console.error(`[mailPoller] notifyCaseUsers failed for case ${matchedCaseId}:`, e.message));
+        try {
+          await this.notifyCaseUsers(sup, matchedCaseId, msg.subject, msg.from);
+        } catch (e) { console.error(`[mailPoller] notifyCaseUsers failed for case ${matchedCaseId}:`, e.message); }
       }
     }
 
@@ -168,12 +171,14 @@ class MailPoller {
     const userIds = new Set((assignees || []).map(a => a.user_id));
     if (caseRow?.created_by) userIds.add(caseRow.created_by);
     for (const userId of userIds) {
-      await sup.from('notifications').insert({
-        user_id: userId,
-        type: 'email_received',
-        title: '📩 رد جديد من جهة',
-        body: `${from}: ${subject}`,
-      }).catch(e => console.error(`[mailPoller] notification insert failed for user ${userId}:`, e.message));
+      try {
+        await sup.from('notifications').insert({
+          user_id: userId,
+          type: 'email_received',
+          title: '📩 رد جديد من جهة',
+          body: `${from}: ${subject}`,
+        });
+      } catch (e) { console.error(`[mailPoller] notification insert failed for user ${userId}:`, e.message); }
     }
   }
 

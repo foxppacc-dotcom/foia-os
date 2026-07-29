@@ -149,10 +149,12 @@ async function autoClassifyCommunication(sup, commId) {
       }).eq('id', request.id);
 
       const { data: list } = await sup.from('pipeline_lists').select('name_ar').eq('id', listId).maybeSingle();
-      await sup.from('activity_logs').insert({
-        action_type: 'auto_classify', target_type: 'case', target_id: comm.case_id,
-        target_title: `🤖 تم تصنيف الرد تلقائياً: ${list?.name_ar || 'تصنيف ' + listId}`,
-      }).catch(e => console.error('[classifier] activity_logs insert failed:', e.message));
+      try {
+        await sup.from('activity_logs').insert({
+          action_type: 'auto_classify', target_type: 'case', target_id: comm.case_id,
+          target_title: `🤖 تم تصنيف الرد تلقائياً: ${list?.name_ar || 'تصنيف ' + listId}`,
+        });
+      } catch (e) { console.error('[classifier] activity_logs insert failed:', e.message); }
     }
 
     return listId;

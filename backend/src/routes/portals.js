@@ -55,11 +55,13 @@ router.post('/portals/:id/decrypt', requireAuth, requireRole('admin'), async (re
   if (decrypted === null) return res.status(500).json({ error: 'فشل فك التشفير' });
 
   await sup.from('portal_credentials').update({ last_used: new Date().toISOString() }).eq('id', id);
-  await sup.from('activity_logs').insert({
-    user_id: req.user.id, user_name: req.user.name,
-    action_type: 'portal_credential_viewed', target_type: 'portal_credential', target_id: id,
-    target_title: `👁️ ${portal.portal_name}`,
-  }).catch(e => console.error('[portals] activity_logs insert failed:', e.message));
+  try {
+    await sup.from('activity_logs').insert({
+      user_id: req.user.id, user_name: req.user.name,
+      action_type: 'portal_credential_viewed', target_type: 'portal_credential', target_id: id,
+      target_title: `👁️ ${portal.portal_name}`,
+    });
+  } catch (e) { console.error('[portals] activity_logs insert failed:', e.message); }
 
   res.json({ success: true, password: decrypted });
 });
