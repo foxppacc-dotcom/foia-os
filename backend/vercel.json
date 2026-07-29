@@ -9,6 +9,6 @@
     { "source": "/(.*)", "destination": "/src/index.js" }
   ],
   "crons": [
-    { "path": "/api/cron/imap-poll", "schedule": "*/5 * * * *" }
+    { "path": "/api/cron/imap-poll", "schedule": "0 6 * * *" }
   ]
 }
