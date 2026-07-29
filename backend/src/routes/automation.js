@@ -1,154 +1,180 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { getDatabase } = require('../database');
+const { getSupabase } = require('../supabase');
 
 // All automation routes require auth
 router.use(requireAuth);
 
 // GET /api/automations — list all
-router.get('/automations', (req, res) => {
-  const db = getDatabase();
-  const list = db.prepare('SELECT * FROM automations ORDER BY created_at DESC').all();
-  res.json({ success: true, data: list });
+router.get('/automations', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('automations').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/automations — create
-router.post('/automations', requireRole('admin'), (req, res) => {
-  const { name, trigger_type, trigger_config, action_type, action_config } = req.body;
-  if (!name || !trigger_type || !action_type) return res.status(400).json({ error: 'name, trigger_type, action_type required' });
+router.post('/automations', requireRole('admin'), async (req, res) => {
+  try {
+    const { name, trigger_type, trigger_config, action_type, action_config } = req.body;
+    if (!name || !trigger_type || !action_type) return res.status(400).json({ error: 'name, trigger_type, action_type required' });
 
-  const db = getDatabase();
-  const result = db.prepare(`
-    INSERT INTO automations (name, trigger_type, trigger_config, action_type, action_config)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(name, trigger_type, JSON.stringify(trigger_config || {}), action_type, JSON.stringify(action_config || {}));
+    const sup = getSupabase();
+    const { data, error } = await sup.from('automations').insert({
+      name, trigger_type, trigger_config: JSON.stringify(trigger_config || {}),
+      action_type, action_config: JSON.stringify(action_config || {}),
+    }).select().single();
+    if (error) throw error;
 
-  res.json({ success: true, id: result.lastInsertRowid });
+    res.json({ success: true, id: data.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // PUT /api/automations/:id — update
-router.put('/automations/:id', requireRole('admin'), (req, res) => {
-  const { name, trigger_type, trigger_config, action_type, action_config, is_active } = req.body;
-  const db = getDatabase();
-  const a = db.prepare('SELECT id FROM automations WHERE id = ?').get(parseInt(req.params.id));
-  if (!a) return res.status(404).json({ error: 'Not found' });
+router.put('/automations/:id', requireRole('admin'), async (req, res) => {
+  try {
+    const { name, trigger_type, trigger_config, action_type, action_config, is_active } = req.body;
+    const sup = getSupabase();
+    const id = parseInt(req.params.id);
+    const { data: a } = await sup.from('automations').select('id').eq('id', id).maybeSingle();
+    if (!a) return res.status(404).json({ error: 'Not found' });
 
-  db.prepare(`
-    UPDATE automations SET name=?, trigger_type=?, trigger_config=?, action_type=?, action_config=?, is_active=?
-    WHERE id=?
-  `).run(name, trigger_type, JSON.stringify(trigger_config||{}), action_type, JSON.stringify(action_config||{}), is_active ?? 1, parseInt(req.params.id));
+    const { error } = await sup.from('automations').update({
+      name, trigger_type, trigger_config: JSON.stringify(trigger_config || {}),
+      action_type, action_config: JSON.stringify(action_config || {}),
+      is_active: is_active ?? true,
+    }).eq('id', id);
+    if (error) throw error;
 
-  res.json({ success: true });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // DELETE /api/automations/:id
-router.delete('/automations/:id', requireRole('admin'), (req, res) => {
-  getDatabase().prepare('DELETE FROM automations WHERE id=?').run(parseInt(req.params.id));
-  res.json({ success: true });
+router.delete('/automations/:id', requireRole('admin'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { error } = await sup.from('automations').delete().eq('id', parseInt(req.params.id));
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/automations/:id/run — run manually
-router.post('/automations/:id/run', requireRole('admin'), (req, res) => {
-  const db = getDatabase();
-  const a = db.prepare('SELECT * FROM automations WHERE id=?').get(parseInt(req.params.id));
-  if (!a) return res.status(404).json({ error: 'Not found' });
+router.post('/automations/:id/run', requireRole('admin'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data: a } = await sup.from('automations').select('*').eq('id', parseInt(req.params.id)).maybeSingle();
+    if (!a) return res.status(404).json({ error: 'Not found' });
 
-  const result = executeAutomation(a, db);
-  res.json({ success: true, result });
+    const result = await executeAutomation(a, sup);
+    res.json({ success: true, result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/automations/run-all — run all active
-router.post('/automations/run-all', requireRole('admin'), (req, res) => {
-  const db = getDatabase();
-  const list = db.prepare('SELECT * FROM automations WHERE is_active=1').all();
-  const results = list.map(a => {
-    try {
-      return { name: a.name, result: executeAutomation(a, db) };
-    } catch (e) {
-      return { name: a.name, error: e.message };
+router.post('/automations/run-all', requireRole('admin'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data: list } = await sup.from('automations').select('*').eq('is_active', true);
+    const results = [];
+    for (const a of list || []) {
+      try {
+        results.push({ name: a.name, result: await executeAutomation(a, sup) });
+      } catch (e) {
+        results.push({ name: a.name, error: e.message });
+      }
     }
-  });
-  res.json({ success: true, results });
+    res.json({ success: true, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/automations/logs — automation history
-router.get('/automations/logs', (req, res) => {
-  const db = getDatabase();
-  const logs = db.prepare(`
-    SELECT al.*, a.name AS automation_name, c.title AS case_title
-    FROM automation_logs al
-    LEFT JOIN automations a ON al.automation_id = a.id
-    LEFT JOIN cases c ON al.case_id = c.id
-    ORDER BY al.created_at DESC LIMIT 50
-  `).all();
-  res.json({ success: true, data: logs });
+router.get('/automations/logs', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('automation_logs')
+      .select('*, automations!left(name), cases!left(title)')
+      .order('created_at', { ascending: false }).limit(50);
+    if (error) throw error;
+    const logs = (data || []).map(l => ({
+      ...l, automation_name: l.automations?.name || null, case_title: l.cases?.title || null,
+      automations: undefined, cases: undefined,
+    }));
+    res.json({ success: true, data: logs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /**
  * Execute a single automation
  */
-function executeAutomation(a, db) {
-  const config = (() => { try { return JSON.parse(a.action_config || '{}'); } catch { return {}; } })();
+async function executeAutomation(a, sup) {
   const result = { matched: 0, actions: [] };
+  const today = new Date().toISOString().split('T')[0];
 
   // CASE 1: Send follow-up for overdue deadlines
   if (a.action_type === 'follow_up_overdue') {
-    const overdue = db.prepare(`
-      SELECT id, title, deadline, status FROM cases
-      WHERE deadline IS NOT NULL AND deadline < date('now') AND status != 'closed'
-      LIMIT 20
-    `).all();
+    const { data: overdue } = await sup.from('cases')
+      .select('id, title, deadline, status')
+      .not('deadline', 'is', null).lt('deadline', today).neq('status', 'closed').limit(20);
 
-    overdue.forEach(c => {
-      db.prepare(`
-        INSERT INTO communications (case_id, type, direction, subject, body, created_at)
-        VALUES (?, 'email', 'outbound', ?, ?, datetime('now'))
-      `).run(c.id, `متابعة الطلب — ${c.title}`, `هذا تذكير بأن الموعد النهائي ${c.deadline} قد مضى. نرجو المتابعة.`);
-
-      db.prepare(`
-        INSERT INTO case_comments (case_id, content, created_at)
-        VALUES (?, ?, datetime('now'))
-      `).run(c.id, `🤖 أتمتة: تم إرسال متابعة تلقائية للطلب المتأخر`);
-
-      logAction(db, a.id, c.id, 'follow_up_sent');
+    for (const c of overdue || []) {
+      await sup.from('communications').insert({
+        case_id: c.id, type: 'email', direction: 'outbound',
+        subject: `متابعة الطلب — ${c.title}`,
+        body: `هذا تذكير بأن الموعد النهائي ${c.deadline} قد مضى. نرجو المتابعة.`,
+      });
+      await logAction(sup, a.id, c.id, 'follow_up_sent', '🤖 أتمتة: تم إرسال متابعة تلقائية للطلب المتأخر');
       result.matched++;
       result.actions.push({ case_id: c.id, action: 'follow_up' });
-    });
+    }
   }
 
   // CASE 2: Escalate high-priority cases without recent activity
   else if (a.action_type === 'escalate_stale_high') {
-    const stale = db.prepare(`
-      SELECT id, title, status, updated_at FROM cases
-      WHERE priority = 'high' AND status = 'open'
-      AND updated_at < datetime('now', '-3 days')
-      LIMIT 10
-    `).all();
+    const threeDaysAgo = new Date(Date.now() - 3 * 86400000).toISOString();
+    const { data: stale } = await sup.from('cases')
+      .select('id, title, status, updated_at')
+      .eq('priority', 'high').eq('status', 'open').lt('updated_at', threeDaysAgo).limit(10);
 
-    stale.forEach(c => {
-      db.prepare(`UPDATE cases SET priority = 'high', status = 'in_progress' WHERE id = ?`).run(c.id);
-      db.prepare(`INSERT INTO case_comments (case_id, content, created_at) VALUES (?, ?, datetime('now'))`)
-        .run(c.id, `🚨 أتمتة: تم تصعيد القضية لعدم وجود نشاط لمدة 3 أيام`);
-      logAction(db, a.id, c.id, 'escalated');
+    for (const c of stale || []) {
+      await sup.from('cases').update({ priority: 'high', status: 'in_progress' }).eq('id', c.id);
+      await logAction(sup, a.id, c.id, 'escalated', '🚨 أتمتة: تم تصعيد القضية لعدم وجود نشاط لمدة 3 أيام');
       result.matched++;
       result.actions.push({ case_id: c.id, action: 'escalated' });
-    });
+    }
   }
 
   // CASE 3: Auto-classify newly created cases without classification
   else if (a.action_type === 'auto_classify') {
-    const unclassified = db.prepare(`
-      SELECT r.id, r.case_id, r.notes, c.title, c.description
-      FROM requests r JOIN cases c ON r.case_id = c.id
-      WHERE r.classification_id IS NULL AND c.status = 'open'
-      LIMIT 20
-    `).all();
+    const { data: openCases } = await sup.from('cases').select('id, title, description').eq('status', 'open');
+    const openIds = (openCases || []).map(c => c.id);
+    const caseMap = {}; (openCases || []).forEach(c => caseMap[c.id] = c);
 
-    const textToClassify = (item) => `${item.title} ${item.description || ''} ${item.notes || ''}`.toLowerCase();
+    const { data: unclassified } = openIds.length
+      ? await sup.from('requests').select('id, case_id, notes').is('classification_id', null).in('case_id', openIds).limit(20)
+      : { data: [] };
 
-    unclassified.forEach(r => {
-      const txt = textToClassify(r);
+    for (const r of unclassified || []) {
+      const c = caseMap[r.case_id];
+      const txt = `${c?.title || ''} ${c?.description || ''} ${r.notes || ''}`.toLowerCase();
       let listId = null;
       if (/body[- ]?cam|footage|video|تسجيل|فيديو/.test(txt)) listId = 1;
       else if (/payment|fee|charge|رسوم|دفع/.test(txt)) listId = 2;
@@ -159,60 +185,59 @@ function executeAutomation(a, db) {
       else if (/citizenship|identity|إثبات|مواطنة|هوية/.test(txt)) listId = 7;
 
       if (listId) {
-        db.prepare('UPDATE requests SET classification_id = ? WHERE id = ?').run(listId, r.id);
-        logAction(db, a.id, r.case_id, `classified_to_${listId}`);
+        await sup.from('requests').update({ classification_id: listId }).eq('id', r.id);
+        await logAction(sup, a.id, r.case_id, `classified_to_${listId}`);
         result.matched++;
         result.actions.push({ case_id: r.case_id, request_id: r.id, list_id: listId });
       }
-    });
+    }
   }
 
   // CASE 4: Notify about upcoming deadlines (within 3 days)
   else if (a.action_type === 'deadline_reminder') {
-    const upcoming = db.prepare(`
-      SELECT id, title, deadline FROM cases
-      WHERE deadline IS NOT NULL AND deadline BETWEEN date('now') AND date('now', '+3 days') AND status != 'closed'
-      LIMIT 20
-    `).all();
+    const threeDaysOut = new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0];
+    const { data: upcoming } = await sup.from('cases')
+      .select('id, title, deadline')
+      .not('deadline', 'is', null).gte('deadline', today).lte('deadline', threeDaysOut).neq('status', 'closed').limit(20);
 
-    upcoming.forEach(c => {
-      db.prepare(`INSERT INTO case_comments (case_id, content, created_at) VALUES (?, ?, datetime('now'))`)
-        .run(c.id, `⏰ أتمتة: الموعد النهائي ${c.deadline} يقترب (خلال 3 أيام)`);
-      logAction(db, a.id, c.id, 'reminder_sent');
+    for (const c of upcoming || []) {
+      await logAction(sup, a.id, c.id, 'reminder_sent', `⏰ أتمتة: الموعد النهائي ${c.deadline} يقترب (خلال 3 أيام)`);
       result.matched++;
       result.actions.push({ case_id: c.id, action: 'reminder' });
-    });
+    }
   }
 
   // CASE 5: Auto-close cases where all requests are responded
   else if (a.action_type === 'auto_close_completed') {
-    const candidates = db.prepare(`
-      SELECT c.id, c.title FROM cases c
-      WHERE c.status != 'closed'
-      AND (SELECT COUNT(*) FROM requests r WHERE r.case_id = c.id AND r.status != 'responded') = 0
-      AND (SELECT COUNT(*) FROM requests r WHERE r.case_id = c.id) > 0
-      LIMIT 10
-    `).all();
-
-    candidates.forEach(c => {
-      db.prepare("UPDATE cases SET status = 'closed', updated_at = datetime('now') WHERE id = ?").run(c.id);
-      db.prepare(`INSERT INTO case_comments (case_id, content, created_at) VALUES (?, ?, datetime('now'))`)
-        .run(c.id, `✅ أتمتة: تم إغلاق القضية — جميع الطلبات تم الرد عليها`);
-      logAction(db, a.id, c.id, 'auto_closed');
-      result.matched++;
-      result.actions.push({ case_id: c.id, action: 'closed' });
-    });
+    const { data: openCases } = await sup.from('cases').select('id, title').neq('status', 'closed');
+    for (const c of openCases || []) {
+      const { data: reqs } = await sup.from('requests').select('status').eq('case_id', c.id);
+      if (!reqs || reqs.length === 0) continue;
+      if (reqs.every(r => r.status === 'responded')) {
+        await sup.from('cases').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', c.id);
+        await logAction(sup, a.id, c.id, 'auto_closed', '✅ أتمتة: تم إغلاق القضية — جميع الطلبات تم الرد عليها');
+        result.matched++;
+        result.actions.push({ case_id: c.id, action: 'closed' });
+        if (result.matched >= 10) break;
+      }
+    }
   }
 
   // Update last_run
-  db.prepare('UPDATE automations SET last_run = datetime(\'now\') WHERE id = ?').run(a.id);
+  await sup.from('automations').update({ last_run: new Date().toISOString() }).eq('id', a.id);
 
   return result;
 }
 
-function logAction(db, automationId, caseId, status) {
-  db.prepare('INSERT INTO automation_logs (automation_id, case_id, status) VALUES (?, ?, ?)')
-    .run(automationId, caseId, status);
+async function logAction(sup, automationId, caseId, status, activityTitle) {
+  try {
+    await sup.from('automation_logs').insert({ automation_id: automationId, case_id: caseId, status });
+    if (activityTitle) {
+      await sup.from('activity_logs').insert({
+        action_type: 'automation', target_type: 'case', target_id: caseId, target_title: activityTitle,
+      });
+    }
+  } catch (e) { console.error('[automation] logAction failed:', e.message); }
 }
 
 module.exports = router;
