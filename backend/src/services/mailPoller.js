@@ -31,8 +31,17 @@ class MailPoller {
       try {
         for await (const msg of client.fetch('1:*', { uid: true, envelope: true, bodyStructure: true, source: true, flags: true })) {
           const parsed = await simpleParser(msg.source);
+          // Some messages (e.g. provider security-alert notices, some
+          // webmail-composed replies) arrive with no Message-ID header at
+          // all. Falling back to `null` here breaks dedup permanently --
+          // `.eq('message_id', null)` never matches an existing NULL row in
+          // SQL (NULL is never equal to NULL), so a message like this gets
+          // re-inserted as a fresh "new" communication on every single poll,
+          // forever. Fall back to a synthetic ID keyed on account+UID, which
+          // is stable across polls of the same mailbox.
+          const messageId = parsed.messageId || msg.envelope.messageId || `imap-${account.id}-${msg.uid}`;
           messages.push({
-            messageId: parsed.messageId || msg.envelope.messageId,
+            messageId,
             inReplyTo: parsed.inReplyTo || '',
             references: Array.isArray(parsed.references) ? parsed.references.join(' ') : (parsed.references || ''),
             from: parsed.from?.value?.[0]?.address || '',
@@ -49,7 +58,7 @@ class MailPoller {
             uid: msg.uid,
             flags: msg.flags || [],
           });
-          this.messageIdCache.add(parsed.messageId);
+          this.messageIdCache.add(messageId);
         }
       } finally { lock.release(); }
       await client.logout();
