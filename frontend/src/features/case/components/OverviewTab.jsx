@@ -8,6 +8,7 @@ import NextActionPanel from './NextActionPanel';
 import FollowUpCenter from './FollowUpCenter';
 import InvestigationNotes from './InvestigationNotes';
 import SourceBadge from './SourceBadge';
+import CaseClassificationSelector from './CaseClassificationSelector';
 
 const recordMeta = {
   '911_calls': { label: 'مكالمات 911', icon: Phone },
@@ -41,6 +42,7 @@ export default function OverviewTab() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 ds-animate-fadeIn">
       <div className="lg:col-span-7 space-y-3">
+        <CaseClassificationSelector />
         <InvestigationSummary />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <NextActionPanel />
