@@ -212,10 +212,20 @@ class MailPoller {
 
   async pollAll() {
     const sup = getSupabase();
-    const { data: accounts } = await sup.from('email_accounts').select('*').eq('is_active', true);
+    // is_active is stored as INTEGER (1/0), not boolean -- .eq('is_active',
+    // true) silently returned zero rows every single time (PostgREST/Postgres
+    // does not coerce integer 1 == boolean true), which pollAll never checked
+    // (no `error` destructured here either). Every poll therefore iterated
+    // over zero accounts and reported newMessages: 0 with no error at all,
+    // identical to "genuinely nothing new" -- this is why a real message
+    // sitting in INBOX never got fetched no matter how many times "Fetch
+    // Emails" was clicked. Filtering in JS avoids the fragile type match.
+    const { data: allAccounts, error: acctError } = await sup.from('email_accounts').select('*');
+    if (acctError) console.error('[mailPoller] failed to load email_accounts:', acctError.message);
+    const accounts = (allAccounts || []).filter(a => a.is_active === true || a.is_active === 1);
     let total = 0;
     const errors = [];
-    for (const acct of accounts || []) {
+    for (const acct of accounts) {
       try {
         const messages = await this.pollAccount(acct);
         const { count, errors: msgErrors } = await this.processMessages(acct.id, messages);

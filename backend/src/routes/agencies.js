@@ -133,9 +133,13 @@ router.get('/agencies/:id', requireAuth, async (req, res) => {
   let contacts = [];
   try { if (agency.notes) { const parsed = JSON.parse(agency.notes); if (parsed._contacts) contacts = parsed._contacts; } } catch {}
 
-  const [{ data: emailAccounts }] = await Promise.all([
-    sup.from('email_accounts').select('id, email, name').eq('is_active', true).then(r => r.error ? { data: [] } : r),
+  // is_active is stored as INTEGER (1/0) on email_accounts, not boolean --
+  // .eq('is_active', true) silently matched zero rows (same bug fixed in
+  // mailPoller.pollAll). Filter in JS instead of relying on the DB-side type match.
+  const [{ data: allEmailAccounts }] = await Promise.all([
+    sup.from('email_accounts').select('id, email, name, is_active').then(r => r.error ? { data: [] } : r),
   ]);
+  const emailAccounts = (allEmailAccounts || []).filter(a => a.is_active === true || a.is_active === 1);
 
   res.json({ ...agency, contacts, available_email_accounts: emailAccounts || [] });
 });
