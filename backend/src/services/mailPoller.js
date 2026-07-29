@@ -2,6 +2,7 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const { getSupabase } = require('../supabase');
 const { decrypt } = require('./crypto');
+const storage = require('./storage');
 
 class MailPoller {
   constructor() {
@@ -107,6 +108,24 @@ class MailPoller {
         }
       }
 
+      // Persist attachment content to Supabase Storage (was previously
+      // discarded after just counting them).
+      const storedAttachments = [];
+      for (const att of msg.attachments) {
+        if (!att.content) continue;
+        try {
+          const buffer = Buffer.from(att.content, 'base64');
+          const subdir = matchedCaseId ? `case_${matchedCaseId}/email` : 'unmatched_email';
+          const ext = att.filename?.includes('.') ? att.filename.slice(att.filename.lastIndexOf('.')) : '';
+          const storagePath = `${subdir}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+          const storageKey = await storage.upload('case-documents', storagePath, buffer, att.contentType);
+          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, storageKey });
+        } catch (e) {
+          console.error(`[mailPoller] attachment upload failed for "${att.filename}":`, e.message);
+          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, error: e.message });
+        }
+      }
+
       // Insert communication record
       const insertData = {
         type: 'email', direction: 'inbound',
@@ -116,7 +135,7 @@ class MailPoller {
         thread_id: msg.inReplyTo || msg.messageId,
         created_at: msg.date.toISOString(),
         is_read: false,
-        metadata: { attachments: msg.attachments.length, flags: msg.flags },
+        metadata: JSON.stringify({ attachments: storedAttachments, flags: msg.flags, cc: msg.cc || '' }),
       };
       if (matchedCaseId) insertData.case_id = matchedCaseId;
       if (matchedAgencyId) insertData.agency_id = matchedAgencyId;

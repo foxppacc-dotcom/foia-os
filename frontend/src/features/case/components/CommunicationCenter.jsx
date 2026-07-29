@@ -1,11 +1,19 @@
 import { getApiBase } from '../../../api';
-import { useState, useEffect, useMemo } from 'react';
-import { Send, Reply, Forward, Paperclip, Search, Clock, AlertCircle, Inbox, FileText, Building2, User, Mail, Tag, ChevronDown, ExternalLink } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { Send, Reply, Forward, Paperclip, Search, Clock, AlertCircle, Inbox, FileText, Building2, User, Mail, Tag, ChevronDown, ExternalLink, X, Download, Trash2 } from 'lucide-react';
 import Button from '../../../components/ui/Button';
 
 const API = getApiBase();
 const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
+const authHdrs = () => ({ 'Authorization': `Bearer ${tok()}` });
+
+function formatSize(bytes) {
+  if (!bytes && bytes !== 0) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
 
 const ACCOUNT_SLA_RULES_KEY = 'foia_last_account_filter';
 
@@ -29,17 +37,26 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
   );
   const [body, setBody] = useState(isForward ? quoteOriginal(replyTo).trim() : '');
   const [sending, setSending] = useState(false);
+  const [files, setFiles] = useState([]);
+  const fileInputRef = useRef(null);
 
   const send = async () => {
     if (!to || !subject || !body) return;
     setSending(true);
     try {
-      const r = await fetch(`${API}/cases/${caseId}/compose`, { method: 'POST', headers: hdrs(),
-        body: JSON.stringify({
-          to, cc: cc || undefined, bcc: bcc || undefined, subject, body,
-          account_id: accountId || null, agency_id: agencyId || null, request_id: replyTo?.request_id,
-          reply_to_id: isForward ? null : (replyTo?.id || null),
-        }) });
+      const fd = new FormData();
+      fd.append('to', to);
+      if (cc) fd.append('cc', cc);
+      if (bcc) fd.append('bcc', bcc);
+      fd.append('subject', subject);
+      fd.append('body', body);
+      if (accountId) fd.append('account_id', accountId);
+      if (agencyId) fd.append('agency_id', agencyId);
+      if (replyTo?.request_id) fd.append('request_id', replyTo.request_id);
+      if (!isForward && replyTo?.id) fd.append('reply_to_id', replyTo.id);
+      files.forEach(f => fd.append('attachments', f));
+
+      const r = await fetch(`${API}/cases/${caseId}/compose`, { method: 'POST', headers: authHdrs(), body: fd });
       const d = await r.json();
       if (d.success) { onSent?.(d); onClose?.(); }
     } catch(e) { console.error(e); }
@@ -78,8 +95,19 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
           placeholder="الموضوع..." value={subject} onChange={e => setSubject(e.target.value)} />
         <textarea className="w-full px-2 py-1.5 rounded text-xs min-h-[100px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
           placeholder="محتوى الرسالة..." value={body} onChange={e => setBody(e.target.value)} />
+        {files.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {files.map((f, i) => (
+              <span key={i} className="flex items-center gap-1 text-[10px] px-2 py-1 rounded" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-secondary)' }}>
+                <Paperclip className="w-3 h-3" />{f.name} ({formatSize(f.size)})
+                <button onClick={() => setFiles(files.filter((_, fi) => fi !== i))} style={{ color: 'var(--ds-text-muted)' }}><X className="w-3 h-3" /></button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex items-center justify-between">
-          <Button variant="ghost" size="sm"><Paperclip className="w-3 h-3" />مرفقات</Button>
+          <input ref={fileInputRef} type="file" multiple hidden onChange={e => setFiles([...files, ...Array.from(e.target.files || [])])} />
+          <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()}><Paperclip className="w-3 h-3" />مرفقات</Button>
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>حفظ كمسودة</Button>
             <Button variant="primary" size="sm" onClick={send} disabled={sending}>
@@ -92,9 +120,21 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
   );
 }
 
-function ThreadCard({ thread, accounts, onReply }) {
+function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted }) {
   const acct = (accounts || []).find(a => a.id === thread.email_account_id);
   const daysWaiting = thread.created_at ? Math.floor((Date.now() - new Date(thread.created_at)) / (1000*60*60*24)) : 0;
+  const attachments = thread.metadata?.attachments || [];
+
+  const download = async (index) => {
+    const r = await fetch(`${API}/communications/${thread.id}/attachments/${index}/download`, { headers: authHdrs() });
+    const d = await r.json();
+    if (d.url) window.open(d.url, '_blank', 'noopener,noreferrer');
+  };
+
+  const remove = async (index) => {
+    await fetch(`${API}/communications/${thread.id}/attachments/${index}`, { method: 'DELETE', headers: authHdrs() });
+    onAttachmentDeleted?.();
+  };
 
   return (
     <div className="rounded-lg p-3 ds-transition-colors cursor-pointer" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: thread.direction === 'inbound' ? '3px solid #22c55e' : '3px solid #3b82f6' }}
@@ -122,6 +162,19 @@ function ThreadCard({ thread, accounts, onReply }) {
 
       {/* Thread body preview */}
       <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--ds-text-secondary)' }}>{thread.body?.substring(0, 150)}</div>
+
+      {/* Attachments */}
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-1.5">
+          {attachments.map((att, i) => (
+            <span key={i} className="flex items-center gap-1 text-[9px] px-2 py-1 rounded" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-secondary)' }}>
+              <Paperclip className="w-3 h-3" />{att.filename} {att.size != null && `(${formatSize(att.size)})`}
+              {att.storageKey && <button onClick={() => download(i)} title="تحميل" style={{ color: 'var(--ds-text-muted)' }}><Download className="w-3 h-3" /></button>}
+              <button onClick={() => remove(i)} title="حذف" style={{ color: '#ef4444' }}><Trash2 className="w-3 h-3" /></button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Quick actions */}
       <div className="flex items-center gap-1.5 mt-2">
@@ -216,7 +269,8 @@ export default function CommunicationCenter({ caseId }) {
         ) : (
           <>
             <div className="text-[10px] font-medium px-1 mb-1" style={{ color: 'var(--ds-text-muted)' }}>{filtered.length} محادثة</div>
-            {filtered.map(t => <ThreadCard key={t.id} thread={t} accounts={accounts} onReply={openComposer} />)}
+            {filtered.map(t => <ThreadCard key={t.id} thread={t} accounts={accounts} onReply={openComposer}
+              onAttachmentDeleted={() => fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []))} />)}
           </>
         )}
       </div>

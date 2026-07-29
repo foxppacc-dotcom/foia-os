@@ -75,7 +75,15 @@ router.get('/cases/:caseId/threads', async (req, res) => {
   const sup = getSupabase();
   const { data, error } = await sup.from('communications').select('*').eq('case_id', parseInt(req.params.caseId)).order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ threads: data || [] });
+  const threads = (data || []).map(c => {
+    let metadata = {};
+    if (c.metadata) {
+      if (typeof c.metadata !== 'string') metadata = c.metadata;
+      else { try { metadata = JSON.parse(c.metadata); } catch { metadata = {}; } }
+    }
+    return { ...c, metadata };
+  });
+  res.json({ threads });
 });
 
 module.exports = router;

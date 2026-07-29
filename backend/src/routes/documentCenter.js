@@ -2,6 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
+const multer = require('multer');
+const storage = require('../services/storage');
+const composeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+// communications.metadata is a plain TEXT column (not jsonb) — must stringify/parse manually.
+function parseMetadata(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); } catch { return {}; }
+}
 
 // ============ AGENCY COMMUNICATION CONFIG ============
 
@@ -201,7 +211,7 @@ router.post('/imap/fix-credentials/:accountId', requireAuth, async (req, res) =>
     res.json({ success: true, result });
   } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
 });
-router.post('/cases/:caseId/compose', requireAuth, async (req, res) => {
+router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachments', 10), async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
@@ -224,8 +234,20 @@ router.post('/cases/:caseId/compose', requireAuth, async (req, res) => {
       }
     }
 
+    // Upload attachments to Supabase Storage AND attach them to the outgoing
+    // email itself (nodemailer accepts a raw Buffer for `content`).
+    const storedAttachments = [];
+    const mailAttachments = [];
+    for (const file of req.files || []) {
+      const ext = file.originalname?.includes('.') ? file.originalname.slice(file.originalname.lastIndexOf('.')) : '';
+      const storagePath = `case_${caseId}/email/${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+      const storageKey = await storage.upload('case-documents', storagePath, file.buffer, file.mimetype);
+      storedAttachments.push({ filename: file.originalname, size: file.size, mimeType: file.mimetype, storageKey });
+      mailAttachments.push({ filename: file.originalname, content: file.buffer });
+    }
+
     const emailService = require('../services/emailService');
-    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, inReplyTo, references });
+    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, inReplyTo, references, attachments: mailAttachments });
 
     // Create communication record (insert only — .select() may not return on all Supabase versions)
     await sup.from('communications').insert({
@@ -235,6 +257,7 @@ router.post('/cases/:caseId/compose', requireAuth, async (req, res) => {
       message_id: info.messageId,
       thread_id: threadId || info.messageId,
       created_at: new Date().toISOString(),
+      metadata: storedAttachments.length ? JSON.stringify({ attachments: storedAttachments }) : null,
     }).select();
 
     // Create timeline event (best-effort)
@@ -249,6 +272,54 @@ router.post('/cases/:caseId/compose', requireAuth, async (req, res) => {
     res.json({ success: true, messageId: info.messageId });
   } catch (ex) {
     res.json({ success: false, error: ex.message });
+  }
+});
+
+// GET /api/communications/:id/attachments/:index/download — signed URL for an attachment
+router.get('/communications/:id/attachments/:index/download', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data: comm } = await sup.from('communications').select('metadata').eq('id', parseInt(req.params.id)).maybeSingle();
+    const attachments = parseMetadata(comm?.metadata).attachments || [];
+    const att = attachments[parseInt(req.params.index)];
+    if (!att || !att.storageKey) return res.status(404).json({ error: 'Attachment not found' });
+    const [bucket, ...pathParts] = att.storageKey.split('/');
+    const url = await storage.getSignedUrl(bucket, pathParts.join('/'));
+    if (!url) return res.status(500).json({ error: 'Could not generate download URL' });
+    res.json({ success: true, url, filename: att.filename });
+  } catch (ex) {
+    res.status(500).json({ error: ex.message });
+  }
+});
+
+// DELETE /api/communications/:id/attachments/:index — remove one attachment
+router.delete('/communications/:id/attachments/:index', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const commId = parseInt(req.params.id);
+    const index = parseInt(req.params.index);
+    const { data: comm } = await sup.from('communications').select('metadata').eq('id', commId).maybeSingle();
+    const meta = parseMetadata(comm?.metadata);
+    const attachments = meta.attachments || [];
+    const att = attachments[index];
+    if (!att) return res.status(404).json({ error: 'Attachment not found' });
+
+    if (att.storageKey) await storage.deleteByKey(att.storageKey).catch(e => console.warn('Storage delete failed:', e.message));
+
+    const updatedAttachments = attachments.filter((_, i) => i !== index);
+    await sup.from('communications').update({ metadata: JSON.stringify({ ...meta, attachments: updatedAttachments }) }).eq('id', commId);
+
+    try {
+      await sup.from('activity_logs').insert({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'attachment_deleted', target_type: 'communication', target_id: commId,
+        target_title: `🗑️ ${att.filename}`,
+      });
+    } catch (e) { console.error('[attachments] activity_logs insert failed:', e.message); }
+
+    res.json({ success: true });
+  } catch (ex) {
+    res.status(500).json({ error: ex.message });
   }
 });
 
