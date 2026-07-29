@@ -9,21 +9,24 @@ const { logActivity } = require('../services/activityLogger');
 router.get('/cases', async (req, res) => {
   try {
     const sup = getSupabase();
-    const { status, priority, search } = req.query;
+    const { status, priority, search, assigned_to, limit, offset } = req.query;
 
     let query = sup
       .from('cases')
-      .select(`*, users!cases_assigned_to_fkey(name), users!cases_created_by_fkey(name)`);
+      .select('*');
 
     if (status) query = query.eq('status', status);
     if (priority) query = query.eq('priority', priority);
     if (search) {
       query = query.or(`title.ilike.%${search}%,client_name.ilike.%${search}%,uuid.ilike.%${search}%`);
     }
-
+    if (assigned_to) query = query.eq('assigned_to', assigned_to);
+    if (limit) query = query.limit(limit);
+    if (offset) query = query.range(offset, offset + (limit || 10) - 1);
     query = query.order('created_at', { ascending: false });
 
-    const { data: cases } = await query;
+    const { data: cases, error } = await query;
+    if (error) throw error;
 
     // For each case, get request_count and classified_count
     const result = [];
@@ -61,13 +64,15 @@ router.get('/cases/:id', async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
+    if (isNaN(caseId)) return res.status(400).json({ error: 'Invalid case ID' });
 
-    const { data: caseRow } = await sup
+    const { data: caseRow, error } = await sup
       .from('cases')
-      .select(`*, users!cases_assigned_to_fkey(name), users!cases_created_by_fkey(name)`)
+      .select(`*`)
       .eq('id', caseId)
-      .single();
+      .maybeSingle();
 
+    if (error) throw error;
     if (!caseRow) return res.status(404).json({ error: 'Case not found' });
 
     const { data: requests } = await sup
@@ -244,7 +249,7 @@ router.post('/cases', async (req, res) => {
     // 4. Return full case
     const { data: newCase } = await sup
       .from('cases')
-      .select(`*, users!cases_assigned_to_fkey(name)`)
+      .select('*')
       .eq('id', caseId)
       .single();
 

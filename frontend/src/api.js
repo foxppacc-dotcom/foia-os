@@ -2,37 +2,24 @@
 // In production, use VITE_API_URL for the backend origin.
 // Falls back to '/api' for dev (Vite proxy forwards to backend).
 // If VITE_API_URL is not set in production, fallback to hardcoded backend.
-// API base URL — read from meta tag or build-time env
-const API = (function() {
-  // Production: read from meta tag set by index.html
-  var m = typeof document !== 'undefined' && document.querySelector && document.querySelector('meta[name="api-base"]');
-  if (m) return m.getAttribute('content');
-  // Build-time: VITE_API_URL (empty in production = use fallback)
-  var r = import.meta.env.VITE_API_URL || '';
-  if (r && r !== '/api') return r.replace(/\/$/, '') + '/api';
-  // Dev localhost
-  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
-    return window.location.origin + '/api';
-  // Production fallback
-  return 'https://backend-six-flax-84.vercel.app/api';
-})();
+// API base URL — always relative /api (Vercel proxy forwards to backend)
+const API = '/api';
 export { API };
-export const getApiBase = () => API;
+export function getApiBase() { return '/api'; }
 
+// Token management
 let TOKEN = localStorage.getItem('foia_token') || null;
 
 function setToken(token) { TOKEN = token; }
 
 async function request(path, options = {}) {
+  const BASE = '/api';
   const headers = { ...options.headers };
   if (TOKEN) headers['Authorization'] = `Bearer ${TOKEN}`;
-  
-  // Only set Content-Type for non-FormData bodies
   if (options.body && typeof options.body === 'string') {
     headers['Content-Type'] = 'application/json';
   }
-  
-  const res = await fetch(`${API}${path}`, {
+  const res = await fetch(`${BASE}${path}`, {
     credentials: 'include',
     headers,
     ...options,
