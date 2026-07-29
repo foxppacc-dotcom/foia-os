@@ -1,6 +1,79 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
-import { Plus, Search, Upload, Trash2, Edit3, Save, X } from 'lucide-react';
+import { Plus, Search, Upload, Trash2, Edit3, Save, X, Users, ChevronDown } from 'lucide-react';
+
+const BLANK_FORM = { name_en: '', name_ar: '', state: '', city: '', type: '', email: '', phone: '', portal_url: '', website: '', tracking_portal_url: '', notes: '' };
+const BLANK_CONTACT = { name: '', title: '', email: '', phone: '', extension: '', department: '', preferred_contact: 'email' };
+
+function ContactsSection({ agency, onChanged }) {
+  const [expanded, setExpanded] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState(BLANK_CONTACT);
+  const contacts = agency.contacts || [];
+
+  const addContact = async () => {
+    if (!form.name.trim()) return;
+    try {
+      await api.post(`/agencies/${agency.id}/contacts`, form);
+      setForm(BLANK_CONTACT);
+      setAdding(false);
+      onChanged();
+    } catch (e) { alert(e.message); }
+  };
+
+  const removeContact = async (contactId) => {
+    if (!confirm('حذف جهة الاتصال؟')) return;
+    await api.delete(`/agencies/${agency.id}/contacts/${contactId}`);
+    onChanged();
+  };
+
+  return (
+    <div className="mt-2 pt-2" style={{ borderTop: '1px dashed var(--border)' }}>
+      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1 text-[10px] w-full" style={{ color: 'var(--text-muted)' }}>
+        <Users className="w-3 h-3" /> جهات الاتصال ({contacts.length})
+        <ChevronDown className="w-3 h-3 mr-auto transition-transform" style={{ transform: expanded ? 'rotate(180deg)' : 'none' }} />
+      </button>
+      {expanded && (
+        <div className="mt-1.5 space-y-1.5">
+          {contacts.map(c => (
+            <div key={c.id} className="flex items-center justify-between gap-2 p-1.5 rounded-lg text-[10px]" style={{ background: 'var(--bg-tertiary)' }}>
+              <div className="min-w-0">
+                <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{c.name}</span>
+                {c.title && <span style={{ color: 'var(--text-muted)' }}> — {c.title}</span>}
+                <div style={{ color: 'var(--text-muted)' }}>
+                  {[c.email, c.phone && c.extension ? `${c.phone} x${c.extension}` : c.phone, c.department].filter(Boolean).join(' · ')}
+                </div>
+              </div>
+              <button onClick={() => removeContact(c.id)} style={{ color: '#EF4444' }}><Trash2 className="w-3 h-3" /></button>
+            </div>
+          ))}
+          {adding ? (
+            <div className="p-2 rounded-lg space-y-1" style={{ background: 'var(--bg-tertiary)' }}>
+              <div className="grid grid-cols-2 gap-1">
+                <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="الاسم *" className="p-1.5 rounded text-[10px]" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="المنصب" className="p-1.5 rounded text-[10px]" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                <input value={form.email} onChange={e => setForm({...form, email: e.target.value})} placeholder="البريد" className="p-1.5 rounded text-[10px]" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                <input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} placeholder="الهاتف" className="p-1.5 rounded text-[10px]" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                <input value={form.extension} onChange={e => setForm({...form, extension: e.target.value})} placeholder="التحويلة" className="p-1.5 rounded text-[10px]" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                <input value={form.department} onChange={e => setForm({...form, department: e.target.value})} placeholder="القسم" className="p-1.5 rounded text-[10px]" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                <select value={form.preferred_contact} onChange={e => setForm({...form, preferred_contact: e.target.value})} className="p-1.5 rounded text-[10px] col-span-2" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
+                  <option value="email">البريد المفضل</option>
+                  <option value="phone">الهاتف المفضل</option>
+                </select>
+              </div>
+              <div className="flex gap-1 justify-end">
+                <button onClick={() => setAdding(false)} className="px-2 py-1 rounded text-[10px]" style={{ color: 'var(--text-muted)' }}>إلغاء</button>
+                <button onClick={addContact} className="px-2 py-1 rounded text-[10px] font-semibold" style={{ background: 'var(--accent)', color: '#1A1A2E' }}>حفظ</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setAdding(true)} className="text-[10px] w-full text-center py-1 rounded" style={{ color: 'var(--accent)' }}>+ إضافة جهة اتصال</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Agencies() {
   const [agencies, setAgencies] = useState([]);
@@ -8,7 +81,7 @@ export default function Agencies() {
   const [search, setSearch] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ name_en: '', name_ar: '', state: '', city: '', type: '', email: '', phone: '', portal_url: '', notes: '' });
+  const [editForm, setEditForm] = useState(BLANK_FORM);
 
   const fetchAgencies = () => {
     api.get('/agencies?limit=1000').then(d => {
@@ -48,7 +121,7 @@ export default function Agencies() {
     if (!editForm.name_en.trim()) return;
     try {
       await api.post('/agencies', editForm);
-      setEditForm({ name_en: '', name_ar: '', state: '', city: '', type: '', email: '', phone: '', portal_url: '', notes: '' });
+      setEditForm(BLANK_FORM);
       setShowAddForm(false);
       fetchAgencies();
     } catch (e) { alert(e.message); }
@@ -56,7 +129,7 @@ export default function Agencies() {
 
   const startEdit = (a) => {
     setEditingId(a.id);
-    setEditForm({ name_en: a.name_en, name_ar: a.name_ar || '', state: a.state || '', city: a.city || '', type: a.type || '', email: a.email || '', phone: a.phone || '', portal_url: a.portal_url || '', notes: a.notes || '' });
+    setEditForm({ name_en: a.name_en, name_ar: a.name_ar || '', state: a.state || '', city: a.city || '', type: a.type || '', email: a.email || '', phone: a.phone || '', portal_url: a.portal_url || '', website: a.website || '', tracking_portal_url: a.tracking_portal_url || '', notes: a.notes || '' });
   };
 
   const saveEdit = async (id) => {
@@ -95,7 +168,7 @@ export default function Agencies() {
             رفع Excel
             <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUpload} className="hidden" />
           </label>
-          <button onClick={() => { setShowAddForm(true); setEditForm({ name_en: '', name_ar: '', state: '', city: '', type: '', email: '', phone: '', portal_url: '', notes: '' }); }}
+          <button onClick={() => { setShowAddForm(true); setEditForm(BLANK_FORM); }}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all"
             style={{ background: 'var(--accent)', color: '#1A1A2E' }}>
             <Plus className="w-4 h-4" />
@@ -130,6 +203,10 @@ export default function Agencies() {
               <option value="sheriff">شريف</option>
             </select>
             <input value={editForm.email} onChange={e => setEditForm({...editForm, email: e.target.value})} placeholder="البريد الإلكتروني" className="p-2.5 rounded-xl border text-sm" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+            <input value={editForm.phone} onChange={e => setEditForm({...editForm, phone: e.target.value})} placeholder="الهاتف" className="p-2.5 rounded-xl border text-sm" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+            <input value={editForm.portal_url} onChange={e => setEditForm({...editForm, portal_url: e.target.value})} placeholder="رابط البوابة (Portal URL)" className="p-2.5 rounded-xl border text-sm" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+            <input value={editForm.website} onChange={e => setEditForm({...editForm, website: e.target.value})} placeholder="الموقع الرسمي (Website)" className="p-2.5 rounded-xl border text-sm" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+            <input value={editForm.tracking_portal_url} onChange={e => setEditForm({...editForm, tracking_portal_url: e.target.value})} placeholder="رابط متابعة الطلب" className="p-2.5 rounded-xl border text-sm" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
           </div>
           <div className="flex gap-2 justify-end mt-3">
             <button onClick={() => setShowAddForm(false)} className="px-4 py-2 rounded-xl text-sm border" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>إلغاء</button>
@@ -159,6 +236,9 @@ export default function Agencies() {
                     <input value={editForm.phone} onChange={e => setEditForm({...editForm, phone: e.target.value})} className="p-2 rounded-lg border text-xs" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
                     <input value={editForm.state} onChange={e => setEditForm({...editForm, state: e.target.value})} className="p-2 rounded-lg border text-xs" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
                     <input value={editForm.city} onChange={e => setEditForm({...editForm, city: e.target.value})} className="p-2 rounded-lg border text-xs" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+                    <input value={editForm.portal_url} onChange={e => setEditForm({...editForm, portal_url: e.target.value})} placeholder="Portal URL" className="p-2 rounded-lg border text-xs" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+                    <input value={editForm.website} onChange={e => setEditForm({...editForm, website: e.target.value})} placeholder="Website" className="p-2 rounded-lg border text-xs" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+                    <input value={editForm.tracking_portal_url} onChange={e => setEditForm({...editForm, tracking_portal_url: e.target.value})} placeholder="Tracking Portal" className="p-2 rounded-lg border text-xs" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
                   </div>
                   <div className="flex gap-2 justify-end">
                     <button onClick={() => setEditingId(null)} className="p-1.5 rounded" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
@@ -203,8 +283,11 @@ export default function Agencies() {
                     {(a.city || a.state) && <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>📍 {[a.city, a.state].filter(Boolean).join(', ')}</p>}
                     {a.email && <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>📧 {a.email}</p>}
                     {a.phone && <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>📞 {a.phone}</p>}
-                    {a.portal_url && <a href={a.portal_url} target="_blank" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>🔗 {a.portal_url}</a>}
+                    {a.portal_url && <a href={a.portal_url} target="_blank" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>🔗 بوابة الطلبات: {a.portal_url}</a>}
+                    {a.website && <a href={a.website} target="_blank" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>🌐 الموقع الرسمي: {a.website}</a>}
+                    {a.tracking_portal_url && <a href={a.tracking_portal_url} target="_blank" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>📍 متابعة الطلب: {a.tracking_portal_url}</a>}
                   </div>
+                  <ContactsSection agency={a} onChanged={fetchAgencies} />
                 </>
               )}
             </div>

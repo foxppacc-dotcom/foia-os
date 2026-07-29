@@ -143,7 +143,7 @@ router.get('/agencies/:id', requireAuth, async (req, res) => {
 // POST /api/agencies — إضافة جهة يدوية
 router.post('/agencies', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   const sup = getSupabase();
-  const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, reply_to, default_email_account_id } = req.body;
+  const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, reply_to, default_email_account_id, website, tracking_portal_url } = req.body;
   if (!name_en) return res.status(400).json({ error: 'name_en (English name) مطلوب' });
 
   const { data: existing } = await sup.from('agencies').select('id').eq('name_en', name_en).maybeSingle();
@@ -158,11 +158,15 @@ router.post('/agencies', requireAuth, requireRole('admin', 'manager'), async (re
   if (address !== undefined) insertData.address = address || null;
   if (reply_to !== undefined) insertData.reply_to = reply_to || null;
   if (default_email_account_id !== undefined) insertData.default_email_account_id = default_email_account_id || null;
+  if (website !== undefined) insertData.website = website || null;
+  if (tracking_portal_url !== undefined) insertData.tracking_portal_url = tracking_portal_url || null;
 
   let { data: created, error } = await sup.from('agencies').insert(insertData).select().single();
-  if (error && /column .* does not exist/.test(error.message)) {
-    // Fallback: strip optional columns not yet migrated
-    delete insertData.address; delete insertData.reply_to; delete insertData.default_email_account_id;
+  while (error && /column .* does not exist|Could not find the '(\w+)' column/.test(error.message)) {
+    const m = error.message.match(/'(\w+)' column|column "(\w+)"/);
+    const badCol = m && (m[1] || m[2]);
+    if (!badCol || !(badCol in insertData)) break;
+    delete insertData[badCol];
     ({ data: created, error } = await sup.from('agencies').insert(insertData).select().single());
   }
   if (error) throw error;
@@ -178,7 +182,7 @@ router.put('/agencies/:id', requireAuth, requireRole('admin', 'manager'), async 
   const { data: existing } = await sup.from('agencies').select('id').eq('id', id).single();
   if (!existing) return res.status(404).json({ error: 'Not found' });
 
-  const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, is_active, reply_to, default_email_account_id } = req.body;
+  const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, is_active, reply_to, default_email_account_id, website, tracking_portal_url } = req.body;
 
   const updates = {};
   if (name_ar !== undefined) updates.name_ar = name_ar;
@@ -194,6 +198,8 @@ router.put('/agencies/:id', requireAuth, requireRole('admin', 'manager'), async 
   if (is_active !== undefined) updates.is_active = !!is_active;
   if (reply_to !== undefined) updates.reply_to = reply_to;
   if (default_email_account_id !== undefined) updates.default_email_account_id = default_email_account_id || null;
+  if (website !== undefined) updates.website = website || null;
+  if (tracking_portal_url !== undefined) updates.tracking_portal_url = tracking_portal_url || null;
 
   let { error } = await sup.from('agencies').update(updates).eq('id', id);
   let skipped = [];
@@ -247,7 +253,7 @@ router.post('/agencies/bulk/delete', requireAuth, requireRole('admin'), async (r
 router.post('/agencies/:id/contacts', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   const sup = getSupabase();
   const agency_id = parseInt(req.params.id);
-  const { name, title, phone, email, notes } = req.body;
+  const { name, title, phone, email, notes, extension, department, preferred_contact } = req.body;
   if (!name) return res.status(400).json({ error: 'اسم جهة الاتصال مطلوب' });
 
   // Get current agency
@@ -261,13 +267,18 @@ router.post('/agencies/:id/contacts', requireAuth, requireRole('admin', 'manager
 
   // Generate new ID
   const newId = contacts.length > 0 ? Math.max(...contacts.map(c => c.id)) + 1 : 1;
-  contacts.push({ id: newId, name, title: title || '', phone: phone || '', email: email || '', notes: notes || '', is_active: true, created_at: new Date().toISOString() });
+  const newContact = {
+    id: newId, name, title: title || '', phone: phone || '', email: email || '', notes: notes || '',
+    extension: extension || '', department: department || '', preferred_contact: preferred_contact || 'email',
+    is_active: true, created_at: new Date().toISOString(),
+  };
+  contacts.push(newContact);
 
   parsed._contacts = contacts;
   const { error } = await sup.from('agencies').update({ notes: JSON.stringify(parsed) }).eq('id', agency_id);
   if (error) return res.status(400).json({ error: error.message });
 
-  res.status(201).json({ success: true, data: { id: newId, name, title, phone, email, notes, is_active: true } });
+  res.status(201).json({ success: true, data: newContact });
 });
 
 // PUT /api/agencies/:id/contacts/:contactId — update contact
@@ -275,7 +286,7 @@ router.put('/agencies/:id/contacts/:contactId', requireAuth, requireRole('admin'
   const sup = getSupabase();
   const agency_id = parseInt(req.params.id);
   const contactId = parseInt(req.params.contactId);
-  const { name, title, phone, email, notes, is_active } = req.body;
+  const { name, title, phone, email, notes, is_active, extension, department, preferred_contact } = req.body;
 
   const { data: agency } = await sup.from('agencies').select('notes').eq('id', agency_id).maybeSingle();
   if (!agency) return res.status(404).json({ error: 'Agency not found' });
@@ -292,6 +303,9 @@ router.put('/agencies/:id/contacts/:contactId', requireAuth, requireRole('admin'
   if (email !== undefined) contacts[idx].email = email;
   if (notes !== undefined) contacts[idx].notes = notes;
   if (is_active !== undefined) contacts[idx].is_active = is_active;
+  if (extension !== undefined) contacts[idx].extension = extension;
+  if (department !== undefined) contacts[idx].department = department;
+  if (preferred_contact !== undefined) contacts[idx].preferred_contact = preferred_contact;
   contacts[idx].updated_at = new Date().toISOString();
 
   parsed._contacts = contacts;
