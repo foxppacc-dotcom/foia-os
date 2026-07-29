@@ -123,18 +123,18 @@
 .dark {
   /* ---- Dark theme (default brand identity) ---- */
   --bg-primary:      #0A0A0F;
-  --bg-secondary:    #12121B;
-  --bg-tertiary:     #1A1A24;
-  --bg-elevated:     #20202C;
+  --bg-secondary:    #151520;
+  --bg-tertiary:     #1C1C28;
+  --bg-elevated:     #242438;
   --bg-overlay:      rgba(6, 6, 10, 0.72);
 
-  --border:          #22222E;
-  --border-default:  #22222E;
-  --border-strong:   #2E2E3D;
+  --border:          #28283A;
+  --border-default:  #28283A;
+  --border-strong:   #323248;
 
   --text-primary:    #F5F5F7;
   --text-secondary:  #A6A8B8;
-  --text-muted:      #6E7185;
+  --text-muted:      #7C7F94;
   --text-inverse:    #14141C;
 
   --accent:          #D4A843;
@@ -151,9 +151,9 @@
   --info:            #3B82F6;
   --info-subtle:     rgba(59, 130, 246, 0.14);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
-  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.32);
-  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.44);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.30);
+  --shadow-md: 0 8px 28px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.48);
   --focus-ring: 0 0 0 3px rgba(212, 168, 67, 0.35);
 
   --radius-sm: 8px;

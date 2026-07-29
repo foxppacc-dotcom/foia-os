@@ -41,11 +41,6 @@ export default function Dashboard() {
     totalRequests: data.totalRequests || 0,
   };
 
-  const cardStyle = {
-    background: 'var(--bg-secondary)',
-    border: '1px solid var(--border)',
-  };
-
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* Header */}
@@ -56,8 +51,7 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/intake')} 
-            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all active:scale-[0.97]"
-            style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}>
+            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all active:scale-[0.97] btn-accent">
             <Sparkles className="w-4 h-4" />
             استقبال ذكي
           </button>
@@ -67,9 +61,13 @@ export default function Dashboard() {
       {/* Stats Grid */}
       <div className="grid grid-cols-6 gap-4">
         {statCards.map(card => (
-          <div key={card.key} className="relative overflow-hidden rounded-2xl p-4 transition-all duration-300 group ds-hover-lift"
-            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-            <div className="relative">
+          <div key={card.key} className="relative overflow-hidden rounded-2xl p-4 transition-all duration-300 group"
+            style={{
+              background: 'linear-gradient(135deg, var(--bg-tertiary), var(--bg-secondary))',
+              border: '1px solid var(--border-strong)',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+            }}>
+            <div className="relative z-10">
               <div className="flex items-center justify-between mb-2">
                 <card.icon className="w-4 h-4" style={{ color: card.color }} />
                 <TrendingUp className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
@@ -84,7 +82,11 @@ export default function Dashboard() {
       {/* Status Distribution + Pipeline Summary */}
       <div className="grid grid-cols-2 gap-4">
         {/* Status Distribution */}
-        <div className="rounded-2xl p-5" style={cardStyle}>
+        <div className="rounded-2xl p-5" style={{
+          background: 'var(--bg-tertiary)',
+          border: '1px solid var(--border-strong)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+        }}>
           <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--accent)' }}>حالة القضايا</h2>
           <div className="space-y-3">
             {data.byStatus?.map(s => (
@@ -119,7 +121,11 @@ export default function Dashboard() {
         </div>
 
         {/* Pipeline Summary */}
-        <div className="rounded-2xl p-5" style={cardStyle}>
+        <div className="rounded-2xl p-5" style={{
+          background: 'var(--bg-tertiary)',
+          border: '1px solid var(--border-strong)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+        }}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>توزيع خط الإنتاج</h2>
             <button onClick={() => navigate('/pipeline')} className="flex items-center gap-1 text-[10px] transition-colors"
@@ -159,7 +165,11 @@ export default function Dashboard() {
       {/* Recent Cases + Deadlines */}
       <div className="grid grid-cols-2 gap-4">
         {/* Recent Cases */}
-        <div className="rounded-2xl p-5" style={cardStyle}>
+        <div className="rounded-2xl p-5" style={{
+          background: 'var(--bg-tertiary)',
+          border: '1px solid var(--border-strong)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+        }}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>أحدث القضايا</h2>
             <button onClick={() => navigate('/cases')} className="flex items-center gap-1 text-[10px] transition-colors"
@@ -199,7 +209,11 @@ export default function Dashboard() {
         </div>
 
         {/* Upcoming Deadlines */}
-        <div className="rounded-2xl p-5" style={cardStyle}>
+        <div className="rounded-2xl p-5" style={{
+          background: 'var(--bg-tertiary)',
+          border: '1px solid var(--border-strong)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+        }}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>المواعيد النهائية القادمة</h2>
             <Calendar className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
@@ -230,7 +244,11 @@ export default function Dashboard() {
       </div>
 
       {/* Recent Communications */}
-      <div className="rounded-2xl p-5" style={cardStyle}>
+      <div className="rounded-2xl p-5" style={{
+        background: 'var(--bg-tertiary)',
+        border: '1px solid var(--border-strong)',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+      }}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>آخر المراسلات</h2>
           <Mail className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
