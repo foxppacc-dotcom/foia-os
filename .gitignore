@@ -9,6 +9,10 @@ full_token.txt
 foia_token.txt
 jwt_token.txt
 login_body.bin
+token.txt
+login_resp.json
+backend/fresh_token.txt
+get_token.sh
 *.docx
 *.pdf
 backend/nul
