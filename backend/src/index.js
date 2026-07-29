@@ -25,7 +25,7 @@ const routes = [
   'automation', 'gdrive', 'phoneAndMail', 'portals', 'production',
   'settings', 'activity', 'classifier', 'cleanup', 'migration',
   'case_detail.routes', 'checklist', 'assignees', 'teamManagement', 'team.routes',
-  'teams', 'permissions', 'pipelineLists',
+  'teams', 'permissions', 'pipelineLists', 'cron',
 ];
 
 // Try each route, skip if it fails

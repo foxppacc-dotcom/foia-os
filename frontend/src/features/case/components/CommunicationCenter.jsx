@@ -22,7 +22,7 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, onSent })
     setSending(true);
     try {
       const r = await fetch(`${API}/cases/${caseId}/compose`, { method: 'POST', headers: hdrs(),
-        body: JSON.stringify({ to, subject, body, account_id: accountId || null, agency_id: agencyId || null, request_id: replyTo?.request_id }) });
+        body: JSON.stringify({ to, subject, body, account_id: accountId || null, agency_id: agencyId || null, request_id: replyTo?.request_id, reply_to_id: replyTo?.id || null }) });
       const d = await r.json();
       if (d.success) { onSent?.(d); onClose?.(); }
     } catch(e) { console.error(e); }

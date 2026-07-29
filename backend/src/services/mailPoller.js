@@ -59,7 +59,7 @@ class MailPoller {
     }
   }
 
-  async processMessages(accountId, messages) {
+  async processMessages(accountId, messages, forceCaseId = null) {
     const sup = getSupabase();
     let newCount = 0;
 
@@ -69,11 +69,11 @@ class MailPoller {
       if (existing) continue;
 
       // Auto-matching
-      let matchedCaseId = null;
+      let matchedCaseId = forceCaseId || null;
       let matchedAgencyId = null;
 
       // 1. By Message-ID (already sent from this system)
-      if (msg.inReplyTo) {
+      if (!matchedCaseId && msg.inReplyTo) {
         const { data: ref } = await sup.from('communications').select('case_id, agency_id').eq('thread_id', msg.inReplyTo).maybeSingle();
         if (ref) { matchedCaseId = ref.case_id; matchedAgencyId = ref.agency_id; }
       }
@@ -123,20 +123,37 @@ class MailPoller {
       await sup.from('communications').insert(insertData);
       newCount++;
 
-      // Create timeline event for matched emails
+      // Create timeline event + notify assignees for matched emails
       if (matchedCaseId) {
-        await sup.from('case_activities').insert({
-          case_id: matchedCaseId,
+        await sup.from('activity_logs').insert({
           action_type: 'email_received',
-          target_type: 'communication',
+          target_type: 'case',
+          target_id: matchedCaseId,
           target_title: `📩 ${msg.subject}`,
           user_name: msg.from,
           created_at: msg.date.toISOString(),
         }).catch(() => {});
+
+        await this.notifyCaseUsers(sup, matchedCaseId, msg.subject, msg.from).catch(() => {});
       }
     }
 
     return newCount;
+  }
+
+  async notifyCaseUsers(sup, caseId, subject, from) {
+    const { data: assignees } = await sup.from('case_assignees').select('user_id').eq('case_id', caseId);
+    const { data: caseRow } = await sup.from('cases').select('created_by').eq('id', caseId).maybeSingle();
+    const userIds = new Set((assignees || []).map(a => a.user_id));
+    if (caseRow?.created_by) userIds.add(caseRow.created_by);
+    for (const userId of userIds) {
+      await sup.from('notifications').insert({
+        user_id: userId,
+        type: 'email_received',
+        title: '📩 رد جديد من جهة',
+        body: `${from}: ${subject}`,
+      }).catch(() => {});
+    }
   }
 
   async pollAll() {

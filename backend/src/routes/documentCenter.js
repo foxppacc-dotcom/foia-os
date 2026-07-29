@@ -205,47 +205,44 @@ router.post('/cases/:caseId/compose', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
-    const { to, subject, body, account_id, agency_id, request_id } = req.body;
+    const { to, cc, bcc, subject, body, account_id, agency_id, request_id, reply_to_id } = req.body;
     if (!to || !subject || !account_id) return res.status(400).json({ error: 'to, subject, account_id مطلوبون' });
 
-    // Get the email account
-    const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(account_id)).single();
+    const { data: account } = await sup.from('email_accounts').select('email').eq('id', parseInt(account_id)).single();
     if (!account) return res.status(404).json({ error: 'Email account not found' });
 
-    // Decrypt password and send via SMTP
-    let nodemailer;
-    try { nodemailer = require('nodemailer'); }
-    catch (e) { return res.json({ success: false, error: 'Nodemailer unavailable' }); }
+    // Reply/Reply-All/Forward: thread against the original message so both
+    // our own matching (thread_id) and the recipient's mail client (In-Reply-To/
+    // References headers) group this into the same conversation.
+    let inReplyTo, references, threadId;
+    if (reply_to_id) {
+      const { data: original } = await sup.from('communications').select('message_id, thread_id').eq('id', parseInt(reply_to_id)).maybeSingle();
+      if (original) {
+        inReplyTo = original.message_id;
+        references = original.message_id;
+        threadId = original.thread_id || original.message_id;
+      }
+    }
 
-    const { decrypt } = require('../services/crypto');
-    const smtpPass = decrypt(account.smtp_pass);
-    const transporter = nodemailer.createTransport({
-      host: account.smtp_host || 'smtp.gmail.com',
-      port: account.smtp_port || 587,
-      secure: account.smtp_port === 465,
-      auth: { user: account.smtp_user || account.email, pass: smtpPass },
-      tls: { rejectUnauthorized: false },
-    });
-
-    const info = await transporter.sendMail({
-      from: `"${account.name || account.email}" <${account.smtp_user || account.email}>`,
-      to, subject, text: body,
-    });
+    const emailService = require('../services/emailService');
+    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, inReplyTo, references });
 
     // Create communication record (insert only — .select() may not return on all Supabase versions)
-    const { data: comm } = await sup.from('communications').insert({
+    await sup.from('communications').insert({
       case_id: caseId,
       type: 'email', direction: 'outbound',
       subject, body: body || '', sender: account.email, recipient: to,
       message_id: info.messageId,
-      thread_id: info.messageId,
+      thread_id: threadId || info.messageId,
       created_at: new Date().toISOString(),
     }).select();
 
     // Create timeline event (best-effort)
     try {
-      await sup.from('case_comments').insert({
-        case_id: caseId, content: `📧 ${subject}`,
+      await sup.from('activity_logs').insert({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: reply_to_id ? 'email_reply' : 'email_sent',
+        target_type: 'case', target_id: caseId, target_title: `📧 ${subject}`,
       });
     } catch (tlErr) { console.error('Timeline insert error:', tlErr.message); }
 

@@ -1,8 +1,6 @@
 const nodemailer = require('nodemailer');
-const Imap = require('imap');
-const { simpleParser } = require('mailparser');
 const { getSupabase } = require('../supabase');
-const { encrypt, decrypt } = require('./crypto');
+const { decrypt } = require('./crypto');
 
 /**
  * Real Email Service for FOIA OS
@@ -42,7 +40,7 @@ class EmailService {
   /**
    * Send an email via the specified account
    */
-  async sendEmail(accountId, { to, cc, subject, html, text, attachments = [] }) {
+  async sendEmail(accountId, { to, cc, bcc, subject, html, text, inReplyTo, references, attachments = [] }) {
     const sup = getSupabase();
     const { data: account, error } = await sup
       .from('email_accounts')
@@ -64,9 +62,12 @@ class EmailService {
       from: `"${account.name}" <${account.email}>`,
       to,
       cc,
+      bcc,
       subject,
       html: html || text,
       text: text || html?.replace(/<[^>]*>/g, ''),
+      inReplyTo,
+      references,
       attachments: attachments.map(a => ({
         filename: a.filename,
         path: a.path,
@@ -84,194 +85,44 @@ class EmailService {
   }
 
   /**
-   * Fetch unread emails from IMAP for a given account
-   * Returns parsed emails ready to be stored as communications
+   * Fetch emails from IMAP for a given account.
+   * Delegates to mailPoller — the single shared IMAP engine — so this and
+   * /api/imap/poll never run divergent fetch/matching logic against the same mailbox.
    */
   async fetchInbox(accountId, maxEmails = 20) {
-    return new Promise((resolve, reject) => {
-      const sup = getSupabase();
-      sup
-        .from('email_accounts')
-        .select('*')
-        .eq('id', accountId)
-        .maybeSingle()
-        .then(({ data: account, error }) => {
-          if (error || !account || !account.imap_host) {
-            return resolve([]);
-          }
+    const sup = getSupabase();
+    const { data: account, error } = await sup.from('email_accounts').select('*').eq('id', accountId).maybeSingle();
+    if (error || !account || !account.imap_host) return [];
 
-          const imap = new Imap({
-            user: account.imap_user || account.email,
-            password: decrypt(account.imap_pass),
-            host: account.imap_host,
-            port: account.imap_port || 993,
-            tls: true,
-            tlsOptions: { rejectUnauthorized: false },
-          });
-
-          const emails = [];
-
-          imap.once('ready', () => {
-            imap.openBox('INBOX', false, (err, box) => {
-              if (err) { imap.end(); return reject(err); }
-
-              // Search for unseen (unread) emails only, or recent ones
-              imap.search(['UNSEEN'], (err, results) => {
-                if (err) { imap.end(); return reject(err); }
-                if (!results || results.length === 0) {
-                  imap.end();
-                  return resolve([]);
-                }
-
-                // Take only first N
-                const fetchIds = results.slice(0, maxEmails);
-                const f = imap.fetch(fetchIds, { bodies: '', struct: true });
-
-                f.on('message', (msg, seqno) => {
-                  let buffer = '';
-
-                  msg.on('body', (stream, info) => {
-                    stream.on('data', chunk => { buffer += chunk.toString('utf8'); });
-                  });
-
-                  msg.once('end', async () => {
-                    try {
-                      const parsed = await simpleParser(buffer);
-                      emails.push({
-                        messageId: parsed.messageId,
-                        subject: parsed.subject || '(بدون موضوع)',
-                        from: parsed.from?.text || '',
-                        to: parsed.to?.text || '',
-                        cc: parsed.cc?.text || '',
-                        date: parsed.date || new Date(),
-                        text: parsed.text || '',
-                        html: parsed.html || '',
-                        attachments: (parsed.attachments || []).map(a => ({
-                          filename: a.filename,
-                          contentType: a.contentType,
-                          size: a.size,
-                        })),
-                      });
-                    } catch (e) {
-                      // skip malformed
-                    }
-                  });
-                });
-
-                f.once('end', () => {
-                  imap.end();
-                  resolve(emails);
-                });
-
-                f.once('error', err => {
-                  imap.end();
-                  reject(err);
-                });
-              });
-            });
-          });
-
-          imap.once('error', err => reject(err));
-          imap.once('end', () => { /* cleanup */ });
-
-          imap.connect();
-        })
-        .catch(err => reject(err));
-    });
+    const mailPoller = require('./mailPoller');
+    const messages = await mailPoller.pollAccount(account);
+    return messages.slice(0, maxEmails).map(m => ({
+      messageId: m.messageId,
+      subject: m.subject,
+      from: m.from,
+      to: m.to,
+      cc: '',
+      date: m.date,
+      text: m.text,
+      html: m.html,
+      attachments: m.attachments.map(a => ({ filename: a.filename, contentType: a.contentType, size: a.size })),
+    }));
   }
 
   /**
-   * Convert fetched emails into communications and auto-link to cases
+   * Fetch + store incoming emails as communications, auto-linking to a case.
+   * Delegates matching/dedup/insert to mailPoller.processMessages so this and
+   * /api/imap/poll share one insertion path — no more duplicate communications.
    */
   async processIncomingEmails(accountId, caseId = null) {
     const sup = getSupabase();
-    const emails = await this.fetchInbox(accountId);
+    const { data: account, error } = await sup.from('email_accounts').select('*').eq('id', accountId).maybeSingle();
+    if (error || !account || !account.imap_host) return { emails_fetched: 0, communications_created: 0 };
 
-    let created = 0;
-
-    for (const email of emails) {
-      // Try to auto-match to a case by subject or content
-      let targetCaseId = caseId;
-
-      if (!targetCaseId) {
-        // Try to match by subject: look for UUID or case ID patterns
-        const caseMatch = email.subject?.match(/\[FOIA\s*[#:]\s*(\d+)\]/i);
-        if (caseMatch) {
-          targetCaseId = parseInt(caseMatch[1]);
-        }
-
-        // If no match, try searching by email subject in case titles
-        if (!targetCaseId) {
-          const subjectWords = (email.subject || '').replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 3);
-          if (subjectWords.length > 0) {
-            const likeConditions = subjectWords.map(w => `title.ilike.%${w}%`);
-
-            let query = sup.from('cases').select('id');
-            for (const word of subjectWords) {
-              query = query.ilike('title', `%${word}%`);
-            }
-            const { data: matchedCases } = await query.limit(1);
-
-            if (matchedCases && matchedCases.length > 0) targetCaseId = matchedCases[0].id;
-          }
-        }
-      }
-
-      // Still no match? Create an unlinked communication (goes to inbox)
-      if (!targetCaseId) {
-        await sup.from('communications').insert({
-          case_id: null,
-          type: 'email',
-          direction: 'inbound',
-          subject: email.subject,
-          body: email.text?.substring(0, 5000) || '',
-          sender: email.from || '',
-          recipient: email.to || '',
-          metadata: JSON.stringify({ messageId: email.messageId, cc: email.cc, account_id: accountId }),
-          created_at: email.date?.toISOString() || new Date().toISOString()
-        });
-      } else {
-        // Link to the existing case
-        await sup.from('communications').insert({
-          case_id: targetCaseId,
-          type: 'email',
-          direction: 'inbound',
-          subject: email.subject,
-          body: email.text?.substring(0, 5000) || '',
-          sender: email.from || '',
-          recipient: email.to || '',
-          metadata: JSON.stringify({ messageId: email.messageId, cc: email.cc, account_id: accountId }),
-          created_at: email.date?.toISOString() || new Date().toISOString()
-        });
-
-        // Add a comment
-        await sup.from('case_comments').insert({
-          case_id: targetCaseId,
-          content: `📩 بريد وارد: "${email.subject}"`,
-          created_at: new Date().toISOString()
-        });
-
-        // Auto-update pending request status
-        const { data: pendingRequest } = await sup
-          .from('requests')
-          .select('id')
-          .eq('case_id', targetCaseId)
-          .eq('status', 'pending')
-          .limit(1)
-          .maybeSingle();
-
-        if (pendingRequest) {
-          await sup
-            .from('requests')
-            .update({ status: 'responded', response_date: new Date().toISOString().split('T')[0] })
-            .eq('id', pendingRequest.id);
-        }
-      }
-
-      created++;
-    }
-
-    return { emails_fetched: emails.length, communications_created: created };
+    const mailPoller = require('./mailPoller');
+    const messages = await mailPoller.pollAccount(account);
+    const created = await mailPoller.processMessages(accountId, messages, caseId);
+    return { emails_fetched: messages.length, communications_created: created };
   }
 }
 
