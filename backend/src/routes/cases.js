@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireRole } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { logActivity } = require('../services/activityLogger');
@@ -308,14 +308,15 @@ router.put('/cases/:id', async (req, res) => {
 });
 
 // DELETE /api/cases/:id
-router.delete('/cases/:id', async (req, res) => {
+router.delete('/cases/:id', requireRole('admin', 'manager'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
 
   const { data: c } = await sup.from('cases').select('id, title').eq('id', id).single();
   if (!c) return res.status(404).json({ error: 'Case not found' });
 
-  await sup.from('cases').delete().eq('id', id);
+  const { error } = await sup.from('cases').delete().eq('id', id);
+  if (error) return res.status(500).json({ success: false, error: error.message });
 
   logActivity({
     user_id: req.user?.id,

@@ -12,6 +12,21 @@ let TOKEN = localStorage.getItem('foia_token') || null;
 
 function setToken(token) { TOKEN = token; }
 
+// Decode the current JWT's payload client-side (role/id/name) without an
+// extra API round-trip -- useful for components that don't have the `user`
+// object threaded down as a prop (e.g. anything under a route <Route
+// element>, which App.jsx's user state never reaches).
+export function getCurrentUser() {
+  const token = TOKEN || localStorage.getItem('foia_token');
+  if (!token) return null;
+  try {
+    const payload = token.split('.')[1];
+    return JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+  } catch {
+    return null;
+  }
+}
+
 async function request(path, options = {}) {
   const BASE = '/api';
   const headers = { ...options.headers };
