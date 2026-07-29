@@ -1,8 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { getDatabase } = require('../database');
-const emailService = require('../services/emailService');
+const { getSupabase } = require('../supabase');
 
 /**
  * Email Auto-Classifier Service
@@ -100,7 +99,7 @@ function classifyText(text) {
   if (!text) return null;
 
   const lower = text.toLowerCase();
-  const arabic = /[\u0600-\u06FF]/.test(text);
+  const arabic = /[؀-ۿ]/.test(text);
   let bestMatch = null;
   let bestScore = 0;
 
@@ -130,9 +129,8 @@ function classifyText(text) {
 /**
  * Auto-classify an incoming communication
  */
-function autoClassifyCommunication(commId) {
-  const db = getDatabase();
-  const comm = db.prepare('SELECT * FROM communications WHERE id = ?').get(commId);
+async function autoClassifyCommunication(sup, commId) {
+  const { data: comm } = await sup.from('communications').select('*').eq('id', commId).maybeSingle();
   if (!comm) return null;
 
   const text = `${comm.subject || ''} ${comm.body || ''}`;
@@ -140,17 +138,21 @@ function autoClassifyCommunication(commId) {
 
   if (listId && comm.case_id) {
     // Update the most recent pending request for this case
-    const request = db.prepare(`
-      SELECT id FROM requests WHERE case_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1
-    `).get(comm.case_id);
+    const { data: request } = await sup.from('requests')
+      .select('id').eq('case_id', comm.case_id).eq('status', 'pending')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
 
     if (request) {
-      db.prepare(`UPDATE requests SET classification_id = ?, status = 'classified', response_date = date('now') WHERE id = ?`)
-        .run(listId, request.id);
+      await sup.from('requests').update({
+        classification_id: listId, status: 'classified',
+        response_date: new Date().toISOString().split('T')[0],
+      }).eq('id', request.id);
 
-      const list = db.prepare('SELECT name_ar FROM pipeline_lists WHERE id = ?').get(listId);
-      db.prepare("INSERT INTO case_comments (case_id, content, created_at) VALUES (?, ?, datetime('now'))")
-        .run(comm.case_id, `🤖 تم تصنيف الرد تلقائياً: ${list?.name_ar || 'تصنيف ' + listId}`);
+      const { data: list } = await sup.from('pipeline_lists').select('name_ar').eq('id', listId).maybeSingle();
+      await sup.from('activity_logs').insert({
+        action_type: 'auto_classify', target_type: 'case', target_id: comm.case_id,
+        target_title: `🤖 تم تصنيف الرد تلقائياً: ${list?.name_ar || 'تصنيف ' + listId}`,
+      }).catch(e => console.error('[classifier] activity_logs insert failed:', e.message));
     }
 
     return listId;
@@ -162,14 +164,15 @@ function autoClassifyCommunication(commId) {
 // ============ API ROUTES ============
 
 // POST /api/classifier/analyze — classify a text without saving
-router.post('/classifier/analyze', requireAuth, (req, res) => {
+router.post('/classifier/analyze', requireAuth, async (req, res) => {
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: 'text مطلوب' });
 
   const listId = classifyText(text);
-  const list = listId
-    ? getDatabase().prepare('SELECT id, name_ar, name_en, color FROM pipeline_lists WHERE id = ?').get(listId)
-    : null;
+  const sup = getSupabase();
+  const { data: list } = listId
+    ? await sup.from('pipeline_lists').select('id, name_ar, name_en, color').eq('id', listId).maybeSingle()
+    : { data: null };
 
   res.json({
     success: true,
@@ -181,98 +184,61 @@ router.post('/classifier/analyze', requireAuth, (req, res) => {
 });
 
 // POST /api/classifier/auto-classify — run on inbox
-router.post('/classifier/auto-classify', requireAuth, requireRole('admin', 'manager'), (req, res) => {
-  const db = getDatabase();
+router.post('/classifier/auto-classify', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  const sup = getSupabase();
   const { case_id } = req.body;
 
-  let communications;
-  if (case_id) {
-    communications = db.prepare(`
-      SELECT id, case_id, subject, body FROM communications
-      WHERE case_id = ? AND direction = 'inbound' AND type = 'email'
-      ORDER BY created_at DESC
-    `).all(parseInt(case_id));
-  } else {
-    communications = db.prepare(`
-      SELECT id, case_id, subject, body FROM communications
-      WHERE direction = 'inbound' AND type = 'email' AND case_id IS NOT NULL
-      ORDER BY created_at DESC
-    `).all();
-  }
+  let query = sup.from('communications').select('id, case_id, subject, body')
+    .eq('direction', 'inbound').eq('type', 'email').order('created_at', { ascending: false });
+  query = case_id ? query.eq('case_id', parseInt(case_id)) : query.not('case_id', 'is', null);
+
+  const { data: communications, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
 
   let classified = 0;
   let unclassified = 0;
 
-  for (const comm of communications) {
-    const result = autoClassifyCommunication(comm.id);
+  for (const comm of communications || []) {
+    const result = await autoClassifyCommunication(sup, comm.id);
     if (result) classified++;
     else unclassified++;
   }
 
   res.json({
     success: true,
-    total_checked: communications.length,
+    total_checked: (communications || []).length,
     classified,
     unclassified,
     message: classified > 0
-      ? `✅ تم تصنيف ${classified} رد من ${communications.length}`
+      ? `✅ تم تصنيف ${classified} رد من ${(communications || []).length}`
       : 'ℹ️ لم يتم العثور على ردود قابلة للتصنيف'
   });
 });
 
-// POST /api/classifier/auto-fetch-and-classify — fetch IMAP then classify
+// POST /api/classifier/auto-fetch-and-classify — poll IMAP (via the single
+// shared mailPoller pipeline — no separate fetch/insert logic here anymore)
+// then auto-classify whatever inbound emails matched a case.
 router.post('/classifier/auto-fetch-and-classify', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const db = getDatabase();
-    const accounts = db.prepare('SELECT id FROM email_accounts WHERE is_active = 1 AND imap_host IS NOT NULL').all();
+    const sup = getSupabase();
+    const mailPoller = require('../services/mailPoller');
+    const newMessages = await mailPoller.pollAll();
 
-    let totalFetched = 0;
+    const { data: communications, error } = await sup.from('communications')
+      .select('id, case_id').eq('direction', 'inbound').eq('type', 'email')
+      .not('case_id', 'is', null).order('created_at', { ascending: false }).limit(newMessages || 50);
+    if (error) return res.status(500).json({ error: error.message });
+
     let totalClassified = 0;
-    const results = [];
-
-    for (const account of accounts) {
-      try {
-        const fetchResult = await emailService.fetchInbox(account.id, 10);
-
-        // Store each fetched email
-        for (const email of fetchResult) {
-          // Try to match to a case
-          const caseMatch = email.subject?.match(/\[FOIA\s*[#:]\s*(\d+)\]/i);
-          const targetCaseId = caseMatch ? parseInt(caseMatch[1]) : null;
-
-          const db = getDatabase();
-          const result = db.prepare(`
-            INSERT INTO communications (case_id, type, direction, subject, body, sender, recipient, metadata, created_at)
-            VALUES (?, 'email', 'inbound', ?, ?, ?, ?, ?, ?)
-          `).run(
-            targetCaseId,
-            email.subject?.substring(0, 255) || '',
-            email.text?.substring(0, 5000) || '',
-            email.from || '',
-            email.to || '',
-            JSON.stringify({ messageId: email.messageId }),
-            email.date?.toISOString() || new Date().toISOString()
-          );
-
-          totalFetched++;
-
-          // Auto-classify
-          const classResult = autoClassifyCommunication(result.lastInsertRowid);
-          if (classResult) totalClassified++;
-        }
-
-        results.push({ account_id: account.id, fetched: fetchResult.length });
-      } catch (e) {
-        results.push({ account_id: account.id, error: e.message });
-      }
+    for (const comm of communications || []) {
+      const result = await autoClassifyCommunication(sup, comm.id);
+      if (result) totalClassified++;
     }
 
     res.json({
       success: true,
-      accounts_checked: accounts.length,
-      total_fetched: totalFetched,
+      new_messages_polled: newMessages,
       total_classified: totalClassified,
-      details: results
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

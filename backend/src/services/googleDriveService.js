@@ -1,219 +1,153 @@
-const fs = require('fs');
-const path = require('path');
-const { getDatabase } = require('../database');
+const { getSupabase } = require('../supabase');
 
 /**
  * Google Drive Service for FOIA OS
  *
- * Two modes:
- * 1. REAL MODE: Uses googleapis library with OAuth2 credentials
- * 2. MOCK MODE: Stores Drive file references locally (for testing / no API keys)
- *
- * To enable REAL mode:
- * - Place credentials.json in backend/config/gdrive-credentials.json
- * - Set FOIA_GDRIVE_MODE=real in environment
+ * Real-mode only — no local mock/fake storage. Until GOOGLE_CLIENT_ID /
+ * GOOGLE_CLIENT_SECRET / GOOGLE_DRIVE_ROOT_FOLDER are configured, Drive
+ * operations return a clear "not configured" result instead of pretending
+ * to succeed. Metadata (folder id/status, linked file records) lives in
+ * Supabase — cases.drive_folder_id / cases.drive_folder_status, and
+ * case_documents for linked files — never in local SQLite.
  */
-
-const CONFIG_DIR = path.join(__dirname, '..', '..', 'config');
-const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'gdrive-credentials.json');
-const TOKEN_PATH = path.join(CONFIG_DIR, 'gdrive-token.json');
-const GDRIVE_STORAGE = path.join(__dirname, '..', '..', 'uploads', 'gdrive-links');
-
-// Ensure storage exists
-if (!fs.existsSync(GDRIVE_STORAGE)) {
-  fs.mkdirSync(GDRIVE_STORAGE, { recursive: true });
-}
 
 class GoogleDriveService {
   constructor() {
-    this.realMode = process.env.FOIA_GDRIVE_MODE === 'real' && fs.existsSync(CREDENTIALS_PATH);
     this.drive = null;
   }
 
+  get configured() {
+    return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_DRIVE_ROOT_FOLDER);
+  }
+
   /**
-   * Initialize real Google Drive client
+   * Initialize the real Google Drive client (OAuth2). Returns null if not configured.
    */
   async initRealDrive() {
     if (this.drive) return this.drive;
-    if (!this.realMode) return null;
+    if (!this.configured) return null;
 
     try {
       const { google } = require('googleapis');
-      const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
-
       const auth = new google.auth.OAuth2(
-        credentials.installed?.client_id || credentials.web?.client_id,
-        credentials.installed?.client_secret || credentials.web?.client_secret,
-        credentials.installed?.redirect_uris?.[0] || 'http://localhost'
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI
       );
 
-      // Try loading saved token
-      if (fs.existsSync(TOKEN_PATH)) {
-        const token = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
-        auth.setCredentials(token);
+      if (process.env.GOOGLE_DRIVE_REFRESH_TOKEN) {
+        auth.setCredentials({ refresh_token: process.env.GOOGLE_DRIVE_REFRESH_TOKEN });
+      } else {
+        return null; // no token yet — needs the OAuth consent flow to be completed once
       }
 
       this.drive = google.drive({ version: 'v3', auth });
       return this.drive;
     } catch (err) {
-      console.warn('⚠️ Google Drive real mode failed, falling back to mock:', err.message);
-      this.realMode = false;
+      console.error('[googleDriveService] init failed:', err.message);
       return null;
     }
   }
 
   /**
-   * List files in a shared Drive folder
+   * List files in a shared Drive folder.
    */
   async listFolder(folderId) {
-    if (this.realMode) {
-      const drive = await this.initRealDrive();
-      if (drive) {
-        const res = await drive.files.list({
-          q: `'${folderId}' in parents and trashed=false`,
-          fields: 'files(id, name, mimeType, size, webViewLink, iconLink,modifiedTime)',
-          pageSize: 100,
-        });
-        return res.data.files || [];
-      }
-    }
+    const drive = await this.initRealDrive();
+    if (!drive) return { configured: false, files: [] };
 
-    // Mock mode: return locally stored links
-    return this.getMockFiles(folderId);
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and trashed=false`,
+      fields: 'files(id, name, mimeType, size, webViewLink, iconLink, modifiedTime)',
+      pageSize: 100,
+    });
+    return { configured: true, files: res.data.files || [] };
   }
 
   /**
-   * Upload a local file to Google Drive
+   * Create a per-case Drive folder under the configured root, recording it on the case.
    */
-  async uploadFile(filePath, fileName, folderId) {
-    if (this.realMode) {
-      const drive = await this.initRealDrive();
-      if (drive) {
-        const res = await drive.files.create({
-          requestBody: {
-            name: fileName,
-            parents: [folderId],
-          },
-          media: {
-            body: fs.createReadStream(filePath),
-          },
-          fields: 'id, name, mimeType, size, webViewLink',
-        });
-        return res.data;
-      }
-    }
+  async createCaseFolder(caseId) {
+    const drive = await this.initRealDrive();
+    if (!drive) return { configured: false };
 
-    // Mock: just create a reference
-    return this.addMockLink(fileName, `https://drive.google.com/file/d/mock-${Date.now()}/view`, folderId);
-  }
-
-  /**
-   * Add a Drive link to a case (metadata + optional download)
-   */
-  async linkToCase(caseId, driveFileId, fileName, webViewLink, mimeType, fileSize) {
-    const db = getDatabase();
-
-    // Verify case exists
-    const caseRow = db.prepare('SELECT id FROM cases WHERE id = ?').get(caseId);
+    const sup = getSupabase();
+    const { data: caseRow } = await sup.from('cases').select('id, title').eq('id', caseId).maybeSingle();
     if (!caseRow) throw new Error('Case not found');
 
-    // Check for duplicates
-    const existing = db.prepare(
-      'SELECT id FROM case_documents WHERE case_id = ? AND original_name = ? AND mime_type = ?'
-    ).get(caseId, `[Drive] ${fileName}`, 'application/vnd.google-apps.drive-link');
+    const res = await drive.files.create({
+      requestBody: {
+        name: `Case #${caseId} — ${caseRow.title}`,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [process.env.GOOGLE_DRIVE_ROOT_FOLDER],
+      },
+      fields: 'id, webViewLink',
+    });
 
+    await sup.from('cases').update({ drive_folder_id: res.data.id, drive_folder_status: 'ready' }).eq('id', caseId);
+    return { configured: true, folderId: res.data.id, webViewLink: res.data.webViewLink };
+  }
+
+  /**
+   * Link an already-uploaded Drive file's metadata to a case (as a case_documents row).
+   */
+  async linkToCase(caseId, driveFileId, fileName, webViewLink, mimeType, fileSize) {
+    const sup = getSupabase();
+
+    const { data: caseRow } = await sup.from('cases').select('id').eq('id', caseId).maybeSingle();
+    if (!caseRow) throw new Error('Case not found');
+
+    const { data: existing } = await sup.from('case_documents')
+      .select('id').eq('case_id', caseId).eq('original_name', `[Drive] ${fileName}`).maybeSingle();
     if (existing) return { exists: true, id: existing.id };
 
-    const result = db.prepare(`
-      INSERT INTO case_documents (case_id, filename, original_name, mime_type, size, file_path, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-    `).run(
-      caseId,
-      `gdrive_${driveFileId}`,
-      `[Drive] ${fileName}`,
-      'application/vnd.google-apps.drive-link',
-      fileSize || 0,
-      webViewLink || `https://drive.google.com/file/d/${driveFileId}/view`
-    );
+    const { data: created, error } = await sup.from('case_documents').insert({
+      case_id: caseId,
+      filename: `gdrive_${driveFileId}`,
+      original_name: `[Drive] ${fileName}`,
+      mime_type: mimeType || 'application/vnd.google-apps.drive-link',
+      size: fileSize || 0,
+      file_path: webViewLink || `https://drive.google.com/file/d/${driveFileId}/view`,
+      file_type: 'gdrive_link',
+    }).select().single();
+    if (error) throw error;
 
-    db.prepare(`
-      INSERT INTO case_comments (case_id, content, created_at)
-      VALUES (?, ?, datetime('now'))
-    `).run(caseId, `☁️ تم ربط ملف من Google Drive: ${fileName}`);
-
-    return { success: true, id: result.lastInsertRowid };
+    return { success: true, id: created.id };
   }
 
   /**
-   * Get all Drive-linked files for a case
+   * Get all Drive-linked files for a case.
    */
-  getCaseDriveFiles(caseId) {
-    const db = getDatabase();
-    return db.prepare(`
-      SELECT id, original_name, filename, mime_type, size, file_path as drive_url, created_at
-      FROM case_documents
-      WHERE case_id = ? AND mime_type = 'application/vnd.google-apps.drive-link'
-      ORDER BY created_at DESC
-    `).all(caseId);
+  async getCaseDriveFiles(caseId) {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('case_documents')
+      .select('id, original_name, filename, mime_type, size, file_path, created_at')
+      .eq('case_id', caseId).eq('file_type', 'gdrive_link')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return (data || []).map(d => ({ ...d, drive_url: d.file_path }));
   }
 
   /**
-   * Save a Drive folder reference for a case
+   * Save/get a case's Drive folder reference — uses the real cases.drive_folder_id/status columns.
    */
-  setCaseDriveFolder(caseId, folderId, folderName) {
-    const db = getDatabase();
-    // Store in case metadata (using description as JSON for now)
-    const c = db.prepare('SELECT description FROM cases WHERE id = ?').get(caseId);
-    if (!c) throw new Error('Case not found');
+  async setCaseDriveFolder(caseId, folderId, folderName) {
+    const sup = getSupabase();
+    const { data: caseRow } = await sup.from('cases').select('id').eq('id', caseId).maybeSingle();
+    if (!caseRow) throw new Error('Case not found');
 
-    let meta = {};
-    try {
-      meta = JSON.parse(c.description || '{}');
-    } catch { /* ignore */ }
-
-    meta._gdrive = { folderId, folderName };
-
-    db.prepare('UPDATE cases SET description = ? WHERE id = ?').run(JSON.stringify(meta), caseId);
+    const { error } = await sup.from('cases')
+      .update({ drive_folder_id: folderId, drive_folder_status: 'ready' })
+      .eq('id', caseId);
+    if (error) throw error;
+    return { folderId, folderName };
   }
 
-  /**
-   * Get Drive folder for a case
-   */
-  getCaseDriveFolder(caseId) {
-    const db = getDatabase();
-    const c = db.prepare('SELECT description FROM cases WHERE id = ?').get(caseId);
-    if (!c) return null;
-
-    try {
-      const meta = JSON.parse(c.description || '{}');
-      return meta._gdrive || null;
-    } catch {
-      return null;
-    }
-  }
-
-  // ========== MOCK MODE HELPERS ==========
-
-  getMockFiles(folderId) {
-    const filePath = path.join(GDRIVE_STORAGE, `${folderId}.json`);
-    if (!fs.existsSync(filePath)) return [];
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  }
-
-  addMockLink(fileName, url, folderId) {
-    const filePath = path.join(GDRIVE_STORAGE, `${folderId}.json`);
-    const files = fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, 'utf8')) : [];
-    const entry = {
-      id: `mock-${Date.now()}`,
-      name: fileName,
-      webViewLink: url,
-      mimeType: 'application/vnd.google-apps.file',
-      size: null,
-      modifiedTime: new Date().toISOString(),
-    };
-    files.push(entry);
-    fs.writeFileSync(filePath, JSON.stringify(files, null, 2));
-    return entry;
+  async getCaseDriveFolder(caseId) {
+    const sup = getSupabase();
+    const { data } = await sup.from('cases').select('drive_folder_id, drive_folder_status').eq('id', caseId).maybeSingle();
+    if (!data || !data.drive_folder_id) return null;
+    return { folderId: data.drive_folder_id, status: data.drive_folder_status };
   }
 }
 

@@ -148,6 +148,7 @@ function App() {
             <Route path="/profile/:id" element={<Profile />} />
             <Route path="/profile" element={<Profile />} />
             {user.role === 'admin' && <Route path="/teams" element={<Teams />} />}
+            {canAccess('communications') && <Route path="/gdrive" element={<CaseGDrive />} />}
           </Routes></Suspense>
           </ErrorBoundary>
         </main>
