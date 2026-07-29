@@ -285,37 +285,11 @@ router.post('/fetch-all', requireAuth, async (req, res) => {
 // ============ UNIFIED INBOX VIEW ============
 
 // GET /api/email/inbox — unified inbox
-router.get('/inbox', requireAuth, async (req, res) => {
-  const sup = getSupabase();
-  try {
-    const { limit = 50, offset = 0, type, direction, case_id } = req.query;
-
-    let query = sup
-      .from('communications')
-      .select('*, cases!left(title, uuid)', { count: 'exact' });
-
-    if (type) query = query.eq('type', type);
-    if (direction) query = query.eq('direction', direction);
-    if (case_id) query = query.eq('case_id', parseInt(case_id));
-
-    query = query.order('created_at', { ascending: false }).range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
-
-    const { data: items, count: total, error } = await query;
-    if (error) return res.status(500).json({ error: error.message });
-
-    // Remap joined fields
-    const mapped = (items || []).map(c => ({
-      ...c,
-      case_title: c.cases?.title || null,
-      case_uuid: c.cases?.uuid || null,
-      cases: undefined
-    }));
-
-    res.json({ success: true, data: mapped, total: total || 0 });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// NOTE: GET /inbox used to be defined here too, shadowing documentCenter.js's
+// richer version (which supports status=unread/unlinked/linked + search --
+// what the Inbox.jsx frontend actually calls) since 'email' mounts before
+// documentCenter in index.js. Removed as dead/superseded code so the real
+// implementation is finally reachable.
 
 // ============ SIMULATE RECEIVE (backward compat + test) ============
 

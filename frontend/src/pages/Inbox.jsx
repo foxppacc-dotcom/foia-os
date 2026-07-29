@@ -125,7 +125,7 @@ export default function InboxPage() {
                   <div className="text-[10px] flex items-center gap-2" style={{ color: 'var(--ds-text-muted)' }}>
                     <span>إلى: {msg.recipient}</span>
                     <span>{new Date(msg.created_at).toLocaleDateString('ar-SA')}</span>
-                    {msg.metadata?.attachments > 0 && <span>📎 {msg.metadata.attachments}</span>}
+                    {msg.metadata?.attachments?.length > 0 && <span>📎 {msg.metadata.attachments.length}</span>}
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">

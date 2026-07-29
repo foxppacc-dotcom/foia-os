@@ -338,7 +338,15 @@ router.get('/inbox', requireAuth, async (req, res) => {
 
     const { data: messages, count, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ success: true, data: messages || [], total: count || 0 });
+    const parsed = (messages || []).map(m => {
+      let metadata = {};
+      if (m.metadata) {
+        if (typeof m.metadata !== 'string') metadata = m.metadata;
+        else { try { metadata = JSON.parse(m.metadata); } catch { metadata = {}; } }
+      }
+      return { ...m, metadata };
+    });
+    res.json({ success: true, data: parsed, total: count || 0 });
   } catch (ex) { res.status(500).json({ error: ex.message }); }
 });
 
