@@ -2,8 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
 router.use(requireAuth);
-router.use(requireAuth);
-const { getDatabase } = require('../database');
+const { getSupabase } = require('../supabase');
 
 /**
  * AI Assistant Service
@@ -12,35 +11,42 @@ const { getDatabase } = require('../database');
  */
 
 // POST /api/ai/ask - Ask AI about a case
-router.post('/ai/ask', (req, res) => {
-  const { case_id, question } = req.body;
-  if (!case_id || !question) return res.status(400).json({ error: 'case_id and question required' });
+router.post('/ai/ask', async (req, res) => {
+  try {
+    const { case_id, question } = req.body;
+    if (!case_id || !question) return res.status(400).json({ error: 'case_id and question required' });
 
-  const db = getDatabase();
-  const c = db.prepare('SELECT * FROM cases WHERE id = ?').get(case_id);
-  if (!c) return res.status(404).json({ error: 'Case not found' });
+    const sup = getSupabase();
+    const { data: c } = await sup.from('cases').select('*').eq('id', case_id).maybeSingle();
+    if (!c) return res.status(404).json({ error: 'Case not found' });
 
-  const q = question.toLowerCase();
-  const answer = generateAnswer(q, c, db, case_id);
+    const q = question.toLowerCase();
+    const answer = await generateAnswer(q, c, sup, case_id);
 
-  res.json({ success: true, answer, case_id });
+    res.json({ success: true, answer, case_id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /**
  * Generate AI response based on question type
  */
-function generateAnswer(question, caseData, db, caseId) {
-  const requests = db.prepare('SELECT * FROM requests WHERE case_id = ?').all(caseId);
-  const comms = db.prepare('SELECT * FROM communications WHERE case_id = ? ORDER BY created_at DESC').all(caseId);
-  const docs = db.prepare('SELECT * FROM case_documents WHERE case_id = ?').all(caseId);
-  const tasks = db.prepare('SELECT * FROM case_tasks WHERE case_id = ?').all(caseId);
-  const comments = db.prepare('SELECT * FROM case_comments WHERE case_id = ? ORDER BY created_at DESC').all(caseId);
+async function generateAnswer(question, caseData, sup, caseId) {
+  const [{ data: requests }, { data: comms }, { data: docs }, { data: tasks }, { data: comments }] = await Promise.all([
+    sup.from('requests').select('*').eq('case_id', caseId),
+    sup.from('communications').select('*').eq('case_id', caseId).order('created_at', { ascending: false }),
+    sup.from('case_documents').select('*').eq('case_id', caseId),
+    sup.from('case_tasks').select('*').eq('case_id', caseId),
+    sup.from('activity_logs').select('*').eq('target_type', 'case').eq('target_id', caseId).order('created_at', { ascending: false }),
+  ]);
+  const reqs = requests || [], communications = comms || [], documents = docs || [], caseTasks = tasks || [], activity = comments || [];
 
   // === 1. Summarize the case ===
   if (/لخص\s*(القضية|هذه|الموضوع)|summarize|summary|ملخص/.test(question)) {
-    const pendingReqs = requests.filter(r => r.status === 'pending').length;
-    const respondedReqs = requests.filter(r => r.status === 'responded').length;
-    const overdueTasks = tasks.filter(t => t.due_date && new Date(t.due_date) < new Date()).length;
+    const pendingReqs = reqs.filter(r => r.status === 'pending').length;
+    const respondedReqs = reqs.filter(r => r.status === 'responded').length;
+    const overdueTasks = caseTasks.filter(t => t.due_date && new Date(t.due_date) < new Date()).length;
 
     return `📋 **ملخص القضية #${caseData.id}**
 
@@ -51,30 +57,30 @@ function generateAnswer(question, caseData, db, caseId) {
 **التاريخ:** ${caseData.created_at || '—'}
 
 📊 **إحصائيات:**
-• ${requests.length} طلب (${pendingReqs} pending، ${respondedReqs} تم الرد)
-• ${comms.length} مراسلة
-• ${docs.length} مستند
-• ${tasks.length} مهمة
+• ${reqs.length} طلب (${pendingReqs} pending، ${respondedReqs} تم الرد)
+• ${communications.length} مراسلة
+• ${documents.length} مستند
+• ${caseTasks.length} مهمة
 • ${overdueTasks > 0 ? `⚠️ ${overdueTasks} مهمة متأخرة` : '✅ لا توجد مهام متأخرة'}
 ${caseData.deadline ? `\n📅 **الموعد النهائي:** ${caseData.deadline}` : ''}`;
   }
 
   // === 2. What am I waiting for? ===
   if (/ناقص|محتاج|متبقي|بانتظار|waiting|pending|missing/i.test(question)) {
-    const pending = requests.filter(r => r.status === 'pending');
-    if (pending.length === 0 && tasks.filter(t => t.status !== 'done').length === 0) {
+    const pending = reqs.filter(r => r.status === 'pending');
+    if (pending.length === 0 && caseTasks.filter(t => t.status !== 'done').length === 0) {
       return '✅ **لا يوجد شيء ناقص.** كل الطلبات تم الرد عليها وكل المهام مكتملة.';
     }
 
     let response = '⏳ **بانتظار:**\n';
     if (pending.length > 0) {
       response += `\n📨 **طلبات بانتظار الرد (${pending.length}):**`;
-      pending.forEach(r => {
-        const agency = r.agency_id ? db.prepare('SELECT name_ar FROM agencies WHERE id = ?').get(r.agency_id) : null;
+      for (const r of pending) {
+        const agency = r.agency_id ? (await sup.from('agencies').select('name_ar').eq('id', r.agency_id).maybeSingle()).data : null;
         response += `\n• ${agency ? agency.name_ar : 'جهة غير محددة'} — أُرسل: ${r.sent_date || '—'}`;
-      });
+      }
     }
-    const activeTasks = tasks.filter(t => t.status !== 'done');
+    const activeTasks = caseTasks.filter(t => t.status !== 'done');
     if (activeTasks.length > 0) {
       response += `\n\n📋 **مهام نشطة (${activeTasks.length}):**`;
       activeTasks.forEach(t => response += `\n• ${t.title}${t.due_date ? ` (تاريخ: ${t.due_date})` : ''}`);
@@ -85,15 +91,16 @@ ${caseData.deadline ? `\n📅 **الموعد النهائي:** ${caseData.deadli
   // === 3. Draft a follow-up / reply ===
   const draftRegex = /(اكتب|صغ|draft|write)\s*(متابعة|follow.up|رد|reply|إيميل|email)/i;
   if (draftRegex.test(question)) {
-    const pendingAgencies = requests.filter(r => r.status === 'pending');
+    const pendingAgencies = reqs.filter(r => r.status === 'pending');
     if (pendingAgencies.length === 0) {
       return '✅ **لا تحتاج متابعة.** كل الجهات ردت.';
     }
 
     const agency = pendingAgencies[0];
-    const agencyName = agency.agency_id 
-      ? (db.prepare('SELECT name_ar FROM agencies WHERE id = ?').get(agency.agency_id)?.name_ar || 'الجهة المعنية')
-      : 'الجهة المعنية';
+    const agencyRow = agency.agency_id
+      ? (await sup.from('agencies').select('name_ar').eq('id', agency.agency_id).maybeSingle()).data
+      : null;
+    const agencyName = agencyRow?.name_ar || 'الجهة المعنية';
 
     return `📧 **صيغة متابعة مقترحة:**
 
@@ -126,23 +133,22 @@ ${caseData.deadline ? `\n📅 **الموعد النهائي:** ${caseData.deadli
   if (actionRegex.test(question)) {
     let actions = [];
 
-    const pendingReqs = requests.filter(r => r.status === 'pending');
+    const pendingReqs = reqs.filter(r => r.status === 'pending');
     if (pendingReqs.length > 0) {
       actions.push(`📨 **متابعة ${pendingReqs.length} طلب(بات)** لم يتم الرد عليها بعد`);
     }
 
-    const overdueTasks = tasks.filter(t => t.due_date && new Date(t.due_date) < new Date() && t.status !== 'done');
+    const overdueTasks = caseTasks.filter(t => t.due_date && new Date(t.due_date) < new Date() && t.status !== 'done');
     if (overdueTasks.length > 0) {
       actions.push(`⚠️ **${overdueTasks.length} مهمة متأخرة** تحتاج إعادة جدولة`);
     }
 
-    const activeTasks = tasks.filter(t => t.status !== 'done' && (!t.due_date || new Date(t.due_date) >= new Date()));
+    const activeTasks = caseTasks.filter(t => t.status !== 'done' && (!t.due_date || new Date(t.due_date) >= new Date()));
     if (activeTasks.length > 0) {
       actions.push(`📋 **${activeTasks.length} مهمة نشطة** قيد التنفيذ`);
     }
 
-    const noDocs = docs.length === 0;
-    if (noDocs) {
+    if (documents.length === 0) {
       actions.push('📄 **رفع المستندات** المتعلقة بالقضية');
     }
 
@@ -162,10 +168,10 @@ ${actions.map((a, i) => `${i + 1}. ${a}`).join('\n')}`;
   // === 5. Show documents / evidence ===
   const docRegex = /(مستندات|وثائق|ملفات|documents|files|evidence|أدلة)/i;
   if (docRegex.test(question)) {
-    if (docs.length === 0) return '📄 **لا توجد مستندات** مرفوعة لهذه القضية بعد.';
+    if (documents.length === 0) return '📄 **لا توجد مستندات** مرفوعة لهذه القضية بعد.';
 
-    let response = `📁 **المستندات (${docs.length}):**\n`;
-    docs.forEach(d => {
+    let response = `📁 **المستندات (${documents.length}):**\n`;
+    documents.forEach(d => {
       response += `\n• ${d.original_name} (${(d.size / 1024).toFixed(1)} KB) — ${d.created_at}`;
     });
     return response;
@@ -174,13 +180,14 @@ ${actions.map((a, i) => `${i + 1}. ${a}`).join('\n')}`;
   // === 6. Similar cases / duplicates ===
   const similarRegex = /(مشابه|مكرر|similar|duplicate|آخر|same)/i;
   if (similarRegex.test(question)) {
-    const similar = db.prepare(`
-      SELECT id, title, status, created_at FROM cases 
-      WHERE id != ? AND (description LIKE ? OR title LIKE ?)
-      ORDER BY created_at DESC LIMIT 5
-    `).all(caseId, `%${caseData.title.substring(0, 20)}%`, `%${caseData.title.substring(0, 20)}%`);
+    const titlePrefix = caseData.title.substring(0, 20);
+    const { data: similar } = await sup.from('cases')
+      .select('id, title, status, created_at')
+      .neq('id', caseId)
+      .or(`description.ilike.%${titlePrefix}%,title.ilike.%${titlePrefix}%`)
+      .order('created_at', { ascending: false }).limit(5);
 
-    if (similar.length === 0) return '🔍 **لا توجد قضايا مشابهة.**';
+    if (!similar || similar.length === 0) return '🔍 **لا توجد قضايا مشابهة.**';
 
     let response = `🔍 **قضايا مشابهة (${similar.length}):**\n`;
     similar.forEach(s => {
@@ -193,16 +200,16 @@ ${actions.map((a, i) => `${i + 1}. ${a}`).join('\n')}`;
   const tlRegex = /(timeline|activity|نشاط|أحداث|سجل|تاريخ|متى)/i;
   if (tlRegex.test(question)) {
     let response = `📅 **نشاط القضية:**\n\n**الإنشاء:** ${caseData.created_at || '—'}`;
-    if (comms.length > 0) {
+    if (communications.length > 0) {
       response += `\n\n**آخر المراسلات:**`;
-      comms.slice(0, 5).forEach(c => {
+      communications.slice(0, 5).forEach(c => {
         const icon = c.direction === 'outbound' ? '📤' : '📥';
         response += `\n${icon} ${c.subject || 'بدون موضوع'} — ${c.created_at}`;
       });
     }
-    if (comments.length > 0) {
-      response += `\n\n**آخر التعليقات:**`;
-      comments.slice(0, 3).forEach(c => response += `\n💬 ${c.content?.substring(0, 100)} — ${c.created_at}`);
+    if (activity.length > 0) {
+      response += `\n\n**آخر الأنشطة:**`;
+      activity.slice(0, 3).forEach(a => response += `\n💬 ${a.target_title?.substring(0, 100)} — ${a.created_at}`);
     }
     return response;
   }
@@ -210,14 +217,13 @@ ${actions.map((a, i) => `${i + 1}. ${a}`).join('\n')}`;
   // === 8. Generate response / reply to specific agency ===
   const replyRegex = /(generate|رد|respond|answer|إجابة)/i;
   if (replyRegex.test(question)) {
-    const agencies = db.prepare(`
-      SELECT DISTINCT a.name_ar, a.email FROM agencies a
-      JOIN requests r ON r.agency_id = a.id
-      WHERE r.case_id = ?
-    `).all(caseId);
+    const agencyIds = [...new Set(reqs.map(r => r.agency_id).filter(Boolean))];
+    const { data: agencies } = agencyIds.length
+      ? await sup.from('agencies').select('name_ar, email').in('id', agencyIds)
+      : { data: [] };
 
-    if (agencies.length === 0) return '📧 **لم يتم تحديد جهات** لهذه القضية.';
-    
+    if (!agencies || agencies.length === 0) return '📧 **لم يتم تحديد جهات** لهذه القضية.';
+
     let response = `✍️ **صيغ الرد المقترحة:**\n`;
     agencies.forEach(a => {
       response += `\n📨 **${a.name_ar}**`;
