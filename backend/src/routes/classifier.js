@@ -224,11 +224,11 @@ router.post('/classifier/auto-fetch-and-classify', requireAuth, requireRole('adm
   try {
     const sup = getSupabase();
     const mailPoller = require('../services/mailPoller');
-    const newMessages = await mailPoller.pollAll();
+    const { total: newMessages, errors: pollErrors } = await mailPoller.pollAll();
 
     const { data: communications, error } = await sup.from('communications')
       .select('id, case_id').eq('direction', 'inbound').eq('type', 'email')
-      .not('case_id', 'is', null).order('created_at', { ascending: false }).limit(newMessages || 50);
+      .not('case_id', 'is', null).order('created_at', { ascending: false }).limit(Math.max(newMessages, 1) + 49);
     if (error) return res.status(500).json({ error: error.message });
 
     let totalClassified = 0;
@@ -241,6 +241,7 @@ router.post('/classifier/auto-fetch-and-classify', requireAuth, requireRole('adm
       success: true,
       new_messages_polled: newMessages,
       total_classified: totalClassified,
+      poll_errors: pollErrors.length ? pollErrors : undefined,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

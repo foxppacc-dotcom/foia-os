@@ -390,8 +390,8 @@ router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
 router.post('/imap/poll', requireAuth, async (req, res) => {
   try {
     const mailPoller = require('../services/mailPoller');
-    const count = await mailPoller.pollAll();
-    res.json({ success: true, newMessages: count });
+    const { total, errors } = await mailPoller.pollAll();
+    res.json({ success: true, newMessages: total, errors: errors.length ? errors : undefined });
   } catch (ex) { res.json({ success: false, error: ex.message }); }
 });
 

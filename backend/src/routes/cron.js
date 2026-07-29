@@ -15,8 +15,9 @@ router.get('/cron/imap-poll', async (req, res) => {
 
   try {
     const mailPoller = require('../services/mailPoller');
-    const count = await mailPoller.pollAll();
-    res.json({ success: true, newMessages: count, polledAt: new Date().toISOString() });
+    const { total, errors } = await mailPoller.pollAll();
+    if (errors.length) console.error('[cron] poll errors:', JSON.stringify(errors));
+    res.json({ success: true, newMessages: total, errors: errors.length ? errors : undefined, polledAt: new Date().toISOString() });
   } catch (ex) {
     console.error('Cron IMAP poll error:', ex.message);
     res.status(500).json({ success: false, error: ex.message });

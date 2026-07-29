@@ -73,8 +73,10 @@ class MailPoller {
   async processMessages(accountId, messages, forceCaseId = null) {
     const sup = getSupabase();
     let newCount = 0;
+    const errors = [];
 
     for (const msg of messages) {
+     try {
       // Check for duplicate via messageId
       const { data: existing } = await sup.from('communications').select('id').eq('message_id', msg.messageId).maybeSingle();
       if (existing) continue;
@@ -149,7 +151,12 @@ class MailPoller {
       if (matchedCaseId) insertData.case_id = matchedCaseId;
       if (matchedAgencyId) insertData.agency_id = matchedAgencyId;
 
-      await sup.from('communications').insert(insertData);
+      const { error: insertError } = await sup.from('communications').insert(insertData);
+      if (insertError) {
+        console.error(`[mailPoller] communications insert failed for "${msg.subject}":`, insertError.message);
+        errors.push({ subject: msg.subject, messageId: msg.messageId, stage: 'insert', error: insertError.message });
+        continue; // do not count a failed insert as a new message
+      }
       newCount++;
 
       // Create timeline event + notify assignees for matched emails
@@ -169,9 +176,14 @@ class MailPoller {
           await this.notifyCaseUsers(sup, matchedCaseId, msg.subject, msg.from);
         } catch (e) { console.error(`[mailPoller] notifyCaseUsers failed for case ${matchedCaseId}:`, e.message); }
       }
+     } catch (e) {
+       // One bad message must not abort the rest of the batch.
+       console.error(`[mailPoller] failed to process message "${msg.subject}":`, e.message);
+       errors.push({ subject: msg.subject, messageId: msg.messageId, stage: 'process', error: e.message });
+     }
     }
 
-    return newCount;
+    return { count: newCount, errors };
   }
 
   async notifyCaseUsers(sup, caseId, subject, from) {
@@ -195,15 +207,20 @@ class MailPoller {
     const sup = getSupabase();
     const { data: accounts } = await sup.from('email_accounts').select('*').eq('is_active', true);
     let total = 0;
+    const errors = [];
     for (const acct of accounts || []) {
       try {
         const messages = await this.pollAccount(acct);
-        const count = await this.processMessages(acct.id, messages);
+        const { count, errors: msgErrors } = await this.processMessages(acct.id, messages);
         if (count > 0) console.log(`IMAP: ${count} new messages from ${acct.email}`);
         total += count;
-      } catch (e) { console.error(`IMAP error for ${acct.email}:`, e.message); }
+        for (const e of msgErrors) errors.push({ account: acct.email, ...e });
+      } catch (e) {
+        console.error(`IMAP error for ${acct.email}:`, e.message);
+        errors.push({ account: acct.email, stage: 'connect', error: e.message });
+      }
     }
-    return total;
+    return { total, errors };
   }
 }
 

@@ -121,8 +121,8 @@ class EmailService {
 
     const mailPoller = require('./mailPoller');
     const messages = await mailPoller.pollAccount(account);
-    const created = await mailPoller.processMessages(accountId, messages, caseId);
-    return { emails_fetched: messages.length, communications_created: created };
+    const { count, errors } = await mailPoller.processMessages(accountId, messages, caseId);
+    return { emails_fetched: messages.length, communications_created: count, errors };
   }
 }
 
