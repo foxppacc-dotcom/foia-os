@@ -65,8 +65,15 @@ class MailPoller {
 
       return messages;
     } catch (err) {
+      // Previously swallowed here and returned [] -- meaning a connection
+      // drop or a timeout partway through fetching every message's full
+      // source (45 messages x full body, every single poll) looked
+      // identical to "genuinely no new mail" to every caller. Let it
+      // propagate so pollAll's per-account error collection (and any other
+      // caller's try/catch) actually sees what happened.
       console.error(`IMAP poll error for ${account.email}:`, err.message);
-      return [];
+      try { await client.logout(); } catch {}
+      throw err;
     }
   }
 
