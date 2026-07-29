@@ -139,6 +139,20 @@ router.get('/imap/connectivity/:accountId', requireAuth, async (req, res) => {
   } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
 });
 
+// GET /api/imap/folders/:accountId — INBOX vs Spam vs All Mail counts
+// (mailPoller only ever reads INBOX; this checks whether a message that
+// never showed up actually landed in Spam instead).
+router.get('/imap/folders/:accountId', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
+    if (!account) return res.status(404).json({ success: false, error: 'Account not found' });
+    const imapService = require('../services/imapService');
+    const result = await imapService.checkFolders(account);
+    res.json({ success: true, folders: result });
+  } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
+});
+
 // GET /api/imap/compare/:accountId — compare SMTP vs IMAP credentials securely
 router.get('/imap/compare/:accountId', requireAuth, async (req, res) => {
   try {

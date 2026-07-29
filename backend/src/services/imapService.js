@@ -224,6 +224,46 @@ class ImapService {
   }
 
   async pollAccount(account) { return 0; }
+
+  /**
+   * Check message counts in INBOX vs Spam vs All Mail -- mailPoller only
+   * ever looks at INBOX, so a message that landed in Spam would silently
+   * never be fetched.
+   */
+  async checkFolders(account) {
+    const imapPass = decrypt(account.imap_pass);
+    const client = new ImapFlow({
+      host: account.imap_host || 'imap.gmail.com',
+      port: account.imap_port || 993,
+      secure: true,
+      auth: { user: account.imap_user || account.email, pass: imapPass },
+      logger: false,
+    });
+    const result = {};
+    await client.connect();
+
+    for (const folderName of ['INBOX', '[Gmail]/Spam', '[Gmail]/All Mail']) {
+      try {
+        const lock = await client.getMailboxLock(folderName);
+        try {
+          const status = client.mailbox;
+          const recent = [];
+          if (status.exists > 0) {
+            const from = Math.max(1, status.exists - 4);
+            for await (const msg of client.fetch({ seq: `${from}:*` }, { envelope: true })) {
+              recent.push({ date: msg.envelope.date, subject: msg.envelope.subject, from: msg.envelope.from?.[0]?.address });
+            }
+          }
+          result[folderName] = { exists: status.exists, recent };
+        } finally { lock.release(); }
+      } catch (e) {
+        result[folderName] = { error: e.message };
+      }
+    }
+
+    await client.logout();
+    return result;
+  }
 }
 
 module.exports = new ImapService();
