@@ -9,12 +9,25 @@ const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'appli
 
 const ACCOUNT_SLA_RULES_KEY = 'foia_last_account_filter';
 
-function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, onSent }) {
-  const [to, setTo] = useState(replyTo?.sender || '');
+const COMPOSER_TITLES = { new: 'رسالة جديدة', reply: 'رد', replyAll: 'رد على الجميع', forward: 'إعادة توجيه' };
+
+function quoteOriginal(thread) {
+  if (!thread) return '';
+  const date = thread.created_at ? new Date(thread.created_at).toLocaleString('ar-SA') : '';
+  return `\n\n---------- رسالة معاد توجيهها ----------\nمن: ${thread.sender || ''}\nبتاريخ: ${date}\nالموضوع: ${thread.subject || ''}\n\n${thread.body || ''}`;
+}
+
+function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'new', onSent }) {
+  const isForward = mode === 'forward';
+  const [to, setTo] = useState(isForward ? '' : (replyTo?.sender || ''));
+  const [cc, setCc] = useState(mode === 'replyAll' ? (replyTo?.metadata?.cc || '') : '');
+  const [bcc, setBcc] = useState('');
   const [agencyId, setAgencyId] = useState(replyTo?.agency_id || '');
   const [accountId, setAccountId] = useState(replyTo?.email_account_id || replyTo?.assigned_email_account_id || accounts?.[0]?.id || '');
-  const [subject, setSubject] = useState(replyTo ? `Re: ${replyTo.subject}` : '');
-  const [body, setBody] = useState('');
+  const [subject, setSubject] = useState(
+    isForward ? `Fwd: ${replyTo?.subject || ''}` : replyTo ? `Re: ${replyTo.subject}` : ''
+  );
+  const [body, setBody] = useState(isForward ? quoteOriginal(replyTo).trim() : '');
   const [sending, setSending] = useState(false);
 
   const send = async () => {
@@ -22,7 +35,11 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, onSent })
     setSending(true);
     try {
       const r = await fetch(`${API}/cases/${caseId}/compose`, { method: 'POST', headers: hdrs(),
-        body: JSON.stringify({ to, subject, body, account_id: accountId || null, agency_id: agencyId || null, request_id: replyTo?.request_id, reply_to_id: replyTo?.id || null }) });
+        body: JSON.stringify({
+          to, cc: cc || undefined, bcc: bcc || undefined, subject, body,
+          account_id: accountId || null, agency_id: agencyId || null, request_id: replyTo?.request_id,
+          reply_to_id: isForward ? null : (replyTo?.id || null),
+        }) });
       const d = await r.json();
       if (d.success) { onSent?.(d); onClose?.(); }
     } catch(e) { console.error(e); }
@@ -32,7 +49,7 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, onSent })
   return (
     <div className="rounded-lg p-3" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-semibold" style={{ color: 'var(--ds-text-primary)' }}>رسالة جديدة</span>
+        <span className="text-sm font-semibold" style={{ color: 'var(--ds-text-primary)' }}>{COMPOSER_TITLES[mode] || COMPOSER_TITLES.new}</span>
         <button onClick={onClose} style={{ color: 'var(--ds-text-muted)' }}>✕</button>
       </div>
       <div className="space-y-2">
@@ -51,6 +68,12 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, onSent })
         </div>
         <input className="w-full px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
           placeholder="إلى..." value={to} onChange={e => setTo(e.target.value)} />
+        <div className="flex gap-2">
+          <input className="flex-1 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
+            placeholder="CC" value={cc} onChange={e => setCc(e.target.value)} />
+          <input className="flex-1 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
+            placeholder="BCC" value={bcc} onChange={e => setBcc(e.target.value)} />
+        </div>
         <input className="w-full px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
           placeholder="الموضوع..." value={subject} onChange={e => setSubject(e.target.value)} />
         <textarea className="w-full px-2 py-1.5 rounded text-xs min-h-[100px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
@@ -102,10 +125,13 @@ function ThreadCard({ thread, accounts, onReply }) {
 
       {/* Quick actions */}
       <div className="flex items-center gap-1.5 mt-2">
-        <button onClick={() => onReply(thread)} className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded" style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6' }}>
+        <button onClick={() => onReply(thread, 'reply')} className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded" style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6' }}>
           <Reply className="w-3 h-3" />رد
         </button>
-        <button className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>
+        <button onClick={() => onReply(thread, 'replyAll')} className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded" style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6' }}>
+          <Reply className="w-3 h-3" />رد للجميع
+        </button>
+        <button onClick={() => onReply(thread, 'forward')} className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>
           <Forward className="w-3 h-3" />إعادة توجيه
         </button>
         {thread.agency_name && (
@@ -124,6 +150,7 @@ export default function CommunicationCenter({ caseId }) {
   const [agencies, setAgencies] = useState([]);
   const [showComposer, setShowComposer] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
+  const [composerMode, setComposerMode] = useState('new');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('date');
@@ -145,7 +172,7 @@ export default function CommunicationCenter({ caseId }) {
     return list;
   }, [threads, search, filter, sortBy]);
 
-  const openComposer = (thread = null) => { setReplyTo(thread); setShowComposer(true); };
+  const openComposer = (thread = null, mode = 'new') => { setReplyTo(thread); setComposerMode(thread ? mode : 'new'); setShowComposer(true); };
 
   return (
     <div className="space-y-3">
@@ -175,7 +202,7 @@ export default function CommunicationCenter({ caseId }) {
 
       {/* Composer */}
       {showComposer && (
-        <EmailComposer caseId={caseId} onClose={() => { setShowComposer(false); setReplyTo(null); }} accounts={accounts} agencies={agencies} replyTo={replyTo}
+        <EmailComposer caseId={caseId} onClose={() => { setShowComposer(false); setReplyTo(null); }} accounts={accounts} agencies={agencies} replyTo={replyTo} mode={composerMode}
           onSent={() => fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []))} />
       )}
 
