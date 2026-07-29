@@ -36,6 +36,7 @@ class MailPoller {
             references: parsed.references || '',
             from: parsed.from?.value?.[0]?.address || '',
             to: parsed.to?.value?.[0]?.address || '',
+            cc: (parsed.cc?.value || []).map(v => v.address).join(', '),
             subject: parsed.subject || '(بدون موضوع)',
             text: parsed.text || parsed.html || '',
             html: parsed.html || '',
