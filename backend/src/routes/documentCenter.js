@@ -395,6 +395,24 @@ router.post('/imap/poll', requireAuth, async (req, res) => {
   } catch (ex) { res.json({ success: false, error: ex.message }); }
 });
 
+// TEMP DIAGNOSTIC — GET /api/imap/raw-fetch/:accountId
+// Calls pollAccount directly (no insert) and returns exactly what IMAP
+// fetch returned, to compare against what should be there.
+router.get('/imap/raw-fetch/:accountId', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+    const mailPoller = require('../services/mailPoller');
+    const messages = await mailPoller.pollAccount(account);
+    res.json({
+      success: true,
+      count: messages.length,
+      messages: messages.map(m => ({ messageId: m.messageId, subject: m.subject, from: m.from, date: m.date, uid: m.uid })),
+    });
+  } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
+});
+
 // GET /api/inbox/unread-count
 router.get('/inbox/unread-count', requireAuth, async (req, res) => {
   const sup = getSupabase();
