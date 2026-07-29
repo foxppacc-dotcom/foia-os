@@ -15,7 +15,7 @@ export default function Portals() {
   const fetchPortals = () => {
     api.get('/api/portals')
       .then(d => setPortals(Array.isArray(d) ? d : d.data || []))
-      .catch(() => {})
+      .catch(e => console.error('[Portals] fetch failed:', e.message))
       .finally(() => setLoading(false));
   };
 
