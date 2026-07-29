@@ -1,11 +1,11 @@
 import { getApiBase } from '../api';
 const API = getApiBase();
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Users, Shield, Building2, Mail, BarChart3, Settings, Search, RefreshCw, Plus, Pencil, Trash2, Check, X, User, Briefcase, AlertCircle, Clock } from 'lucide-react';
-import Button from '../../components/ui/Button';
-import Tabs from '../../components/ui/Tabs';
+import Button from '../components/ui/Button';
+import Tabs from '../components/ui/Tabs';
 
-const tok = () => localStorage.getItem('token');
+const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 
 const TABS = [
@@ -227,7 +227,7 @@ export default function OrganizationHub() {
             <div><span style={{ color: 'var(--ds-text-muted)' }}>اسم الشركة</span><div className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{org.company_name || '—'}</div></div>
             <div><span style={{ color: 'var(--ds-text-muted)' }}>المنطقة الزمنية</span><div className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{org.timezone || 'America/New_York'}</div></div>
             <div><span style={{ color: 'var(--ds-text-muted)' }}>اللغة</span><div className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{org.default_language === 'ar' ? 'العربية' : 'English'}</div></div>
-            <div><span style={{ color: 'var(--ds-text-muted)' }}'>ساعات العمل</span><div className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{org.business_hours?.start || '09:00'} - {org.business_hours?.end || '17:00'}</div></div>
+            <div><span style={{ color: 'var(--ds-text-muted)' }}>ساعات العمل</span><div className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{org.business_hours?.start || '09:00'} - {org.business_hours?.end || '17:00'}</div></div>
           </div>
         </div>
       )}
