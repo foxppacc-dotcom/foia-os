@@ -43,8 +43,8 @@ export default function Teams() {
       </div>
 
       {showForm && (
-        <div className="bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl p-5 animate-slideUp">
-          <h3 className="text-sm font-semibold text-[#D4A843] mb-3">فريق جديد</h3>
+        <div className="card-container rounded-2xl p-5 animate-slideUp">
+          <h3 className="text-sm font-semibold var(--accent) mb-3">فريق جديد</h3>
           <div className="flex gap-3">
             <input value={formName} onChange={e => setFormName(e.target.value)} placeholder="اسم الفريق" onKeyDown={e => e.key === 'Enter' && createTeam()} className="flex-1 px-4 py-2.5 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] text-sm" />
             <button onClick={createTeam} className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-[#D4A843] to-[#e4b84a] text-[#0A0A0F] transition-all">إنشاء</button>
@@ -54,11 +54,11 @@ export default function Teams() {
 
       <div className="grid grid-cols-3 gap-4">
         {teams.map(t => (
-          <div key={t.id} className="bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl p-5 hover:border-[#D4A84330] transition-all">
+          <div key={t.id} className="card-container rounded-2xl p-5 hover:border-[#D4A84330] transition-all">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#D4A843]/20 to-transparent flex items-center justify-center">
-                  <UsersIcon className="w-5 h-5 text-[#D4A843]" />
+                  <UsersIcon className="w-5 h-5 var(--accent)" />
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-white">{t.name}</h3>
@@ -70,7 +70,7 @@ export default function Teams() {
               </button>
             </div>
 
-            <button onClick={() => toggleMembers(t.id)} className="w-full text-xs text-gray-500 hover:text-white py-1.5 rounded-lg hover:bg-[#1a1a2e] transition-all">
+            <button onClick={() => toggleMembers(t.id)} className="w-full text-xs text-gray-500 hover:text-white py-1.5 rounded-lg hover:var(--bg-tertiary) transition-all">
               {expandedTeam === t.id ? 'إخفاء الأعضاء' : 'عرض الأعضاء'}
             </button>
 

@@ -244,30 +244,125 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 .animate-fadeIn  { animation: fadeIn 0.25s ease-out; }
 .animate-slideUp { animation: slideUp 0.3s ease-out; }
 .animate-scaleIn { animation: scaleIn 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
 
-/* Utility classes */
+/* DS Utility classes */
 .ds-fadeIn { animation: fadeIn 0.25s ease-out; }
 .ds-hover-lift:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
 }
+.ds-hover-glow:hover {
+  box-shadow: 0 0 20px rgba(212, 168, 67, 0.15);
+}
+.ds-transition { transition: all 0.2s ease; }
 .ds-transition-colors { transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease; }
 .ds-focus-ring:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 .ds-animate-spin { animation: spin 0.6s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.ds-animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
 
+/* Skeleton loader */
 .skeleton {
   background: linear-gradient(90deg, var(--bg-tertiary) 25%, var(--bg-elevated) 50%, var(--bg-tertiary) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.4s ease-in-out infinite;
+}
+
+/* Smooth scrolling for the app */
+html { scroll-behavior: smooth; }
+
+/* Selection highlight */
+::selection {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+
+/* === Shared enterprise layout utilities === */
+
+/* Page card container (replaces inline bg-[rgba(17,17,34,0.6)] ...) */
+.card-container {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+/* Input base */
+.input-base {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 12px;
+  transition: border-color 0.2s ease;
+}
+.input-base:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.input-base::placeholder {
+  color: var(--text-muted);
+}
+
+/* Select base */
+.select-base {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 12px;
+  transition: border-color 0.2s ease;
+  cursor: pointer;
+}
+.select-base:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Button primary (accent) */
+.btn-accent {
+  background: var(--accent);
+  color: var(--text-inverse);
+  border-radius: 12px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+.btn-accent:hover:not(:disabled) {
+  box-shadow: 0 4px 20px rgba(212, 168, 67, 0.3);
+}
+.btn-accent:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Button secondary */
+.btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-elevated);
+}
+
+/* Empty state container */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 16px;
+  text-align: center;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 16px;
 }

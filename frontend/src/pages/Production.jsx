@@ -124,7 +124,7 @@ export default function Production() {
           <button
             onClick={autoCheck}
             disabled={autoChecking}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] text-gray-300 hover:text-white hover:border-[#D4A843]/40 transition-all active:scale-[0.97] disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm card-container text-gray-300 hover:text-white hover:border-[#D4A843]/40 transition-all active:scale-[0.97] disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${autoChecking ? 'animate-spin' : ''}`} />
             فحص تلقائي
@@ -141,19 +141,19 @@ export default function Production() {
 
       {/* Create Form */}
       {showForm && (
-        <div className="bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl p-5 animate-slideUp">
-          <h2 className="text-sm font-semibold text-[#D4A843] mb-4">إضافة قضية إلى مونتاج</h2>
+        <div className="card-container rounded-2xl p-5 animate-slideUp">
+          <h2 className="text-sm font-semibold var(--accent) mb-4">إضافة قضية إلى مونتاج</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input
               value={form.case_id}
               onChange={e => setForm({...form, case_id: e.target.value})}
               placeholder="رقم القضية *"
-              className="w-full px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all"
+              className="w-full px-4 py-3 input-base"
             />
             <select
               value={form.assigned_to}
               onChange={e => setForm({...form, assigned_to: e.target.value})}
-              className="w-full px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white focus:outline-none focus:border-[#D4A843]"
+              className="w-full px-4 py-3 input-base"
             >
               <option value="">اختر مستخدم...</option>
               {users.map(u => (
@@ -163,7 +163,7 @@ export default function Production() {
             <select
               value={form.priority}
               onChange={e => setForm({...form, priority: e.target.value})}
-              className="w-full px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white focus:outline-none focus:border-[#D4A843]"
+              className="w-full px-4 py-3 input-base"
             >
               <option value="low">أولوية: منخفض</option>
               <option value="medium">أولوية: متوسط</option>
@@ -173,19 +173,19 @@ export default function Production() {
               value={form.notes}
               onChange={e => setForm({...form, notes: e.target.value})}
               placeholder="ملاحظات"
-              className="w-full px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all"
+              className="w-full px-4 py-3 input-base"
             />
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <button
               onClick={() => setShowForm(false)}
-              className="px-4 py-2 rounded-xl font-medium text-sm bg-transparent border border-[#1F1F2A] text-gray-300 hover:text-white hover:bg-[#1a1a2e] transition-all"
+              className="btn-secondary px-4 py-2 text-sm"
             >
               إلغاء
             </button>
             <button
               onClick={createItem}
-              className="px-5 py-2 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#D4A843] to-[#e4b84a] text-[#0A0A0F] hover:shadow-lg transition-all"
+              className="btn-accent px-5 py-2 text-sm"
             >
               إضافة
             </button>
@@ -201,8 +201,8 @@ export default function Production() {
             onClick={() => setStatusFilter(tab.key)}
             className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all ${
               statusFilter === tab.key
-                ? 'bg-[#D4A843]/10 text-[#D4A843] border border-[#D4A843]/20'
-                : 'bg-[rgba(17,17,34,0.4)] text-gray-400 border border-transparent hover:text-white hover:bg-[#1a1a2e]'
+                ? 'bg-[#D4A843]/10 var(--accent) border border-[#D4A843]/20'
+                : 'bg-[rgba(17,17,34,0.4)] text-gray-400 border border-transparent hover:text-white hover:var(--bg-tertiary)'
             }`}
           >
             {tab.label}
@@ -213,7 +213,7 @@ export default function Production() {
       {/* Cards Grid */}
       {filteredItems.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
-          <div className="w-16 h-16 rounded-full bg-[#1a1a2e] flex items-center justify-center mb-4">
+          <div className="w-16 h-16 rounded-full var(--bg-tertiary) flex items-center justify-center mb-4">
             <FolderOpen className="w-8 h-8 text-gray-600" />
           </div>
           <h3 className="text-base font-medium text-gray-400 mb-1">
@@ -222,7 +222,7 @@ export default function Production() {
           <p className="text-sm text-gray-600 mb-4">أضف قضية لبدء الإنتاج</p>
           <button
             onClick={() => setShowForm(true)}
-            className="px-5 py-2.5 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#D4A843] to-[#e4b84a] text-[#0A0A0F] transition-all"
+            className="btn-accent px-5 py-2.5 text-sm"
           >
             إضافة قضية
           </button>
@@ -235,7 +235,7 @@ export default function Production() {
             return (
               <div
                 key={item.id}
-                className="bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl p-5 hover:border-[#D4A843]/30 transition-all group"
+                className="card-container rounded-2xl p-5 hover:border-[#D4A843]/30 transition-all group"
               >
                 {/* Header: Title + Delete */}
                 <div className="flex items-start justify-between gap-3 mb-3">
@@ -287,7 +287,7 @@ export default function Production() {
                     href={item.drive_folder_link}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-xs text-[#D4A843] hover:text-[#e4b84a] mb-4 transition-colors"
+                    className="flex items-center gap-1.5 text-xs var(--accent) hover:text-[#e4b84a] mb-4 transition-colors"
                   >
                     <FolderOpen className="w-3 h-3" />
                     فتح مجلد Drive

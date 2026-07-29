@@ -70,7 +70,7 @@ export default function Portals() {
     <div className="space-y-6 animate-fadeIn">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-white">إدارة البوابات الإلكترونية</h1>
-        <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#D4A843] to-[#e4b84a] text-[#0A0A0F] hover:shadow-lg hover:shadow-[#D4A843]/30 active:scale-[0.97] transition-all">
+        <button onClick={() => setShowForm(true)} className="flex items-center gap-2 btn-accent px-4 py-2 text-sm">
           <Plus className="w-4 h-4" />
           إضافة بوابة
         </button>
@@ -84,24 +84,24 @@ export default function Portals() {
 
       {/* Add Form */}
       {showForm && (
-        <div className="bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl p-5 animate-slideUp">
-          <h2 className="text-sm font-semibold text-[#D4A843] mb-4">إضافة بوابة جديدة</h2>
+        <div className="card-container rounded-2xl p-5 animate-slideUp">
+          <h2 className="text-sm font-semibold var(--accent) mb-4">إضافة بوابة جديدة</h2>
           <div className="space-y-3">
             <div className="flex gap-3">
-              <input value={form.portal_name} onChange={e => setForm({...form, portal_name: e.target.value})} placeholder="اسم البوابة" className="flex-1 px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all" />
-              <input value={form.portal_url} onChange={e => setForm({...form, portal_url: e.target.value})} placeholder="رابط البوابة" className="flex-1 px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all" />
+              <input value={form.portal_name} onChange={e => setForm({...form, portal_name: e.target.value})} placeholder="اسم البوابة" className="flex-1 px-4 py-3 input-base" />
+              <input value={form.portal_url} onChange={e => setForm({...form, portal_url: e.target.value})} placeholder="رابط البوابة" className="flex-1 px-4 py-3 input-base" />
             </div>
             <div className="flex gap-3">
-              <input value={form.username} onChange={e => setForm({...form, username: e.target.value})} placeholder="اسم المستخدم" className="flex-1 px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all" />
-              <input value={form.registered_email} onChange={e => setForm({...form, registered_email: e.target.value})} placeholder="البريد الإلكتروني المسجل" className="flex-1 px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all" />
+              <input value={form.username} onChange={e => setForm({...form, username: e.target.value})} placeholder="اسم المستخدم" className="flex-1 px-4 py-3 input-base" />
+              <input value={form.registered_email} onChange={e => setForm({...form, registered_email: e.target.value})} placeholder="البريد الإلكتروني المسجل" className="flex-1 px-4 py-3 input-base" />
             </div>
             <div className="flex gap-3">
-              <input value={form.password} onChange={e => setForm({...form, password: e.target.value})} placeholder="كلمة المرور (مشفر)" type="password" className="flex-1 px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all" />
-              <input value={form.agency} onChange={e => setForm({...form, agency: e.target.value})} placeholder="الجهة" className="flex-1 px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all" />
+              <input value={form.password} onChange={e => setForm({...form, password: e.target.value})} placeholder="كلمة المرور (مشفر)" type="password" className="flex-1 px-4 py-3 input-base" />
+              <input value={form.agency} onChange={e => setForm({...form, agency: e.target.value})} placeholder="الجهة" className="flex-1 px-4 py-3 input-base" />
             </div>
             <div className="flex gap-2 justify-end">
-              <button onClick={() => setShowForm(false)} className="px-4 py-2 rounded-xl font-medium text-sm bg-transparent border border-[#1F1F2A] text-gray-300 hover:text-white hover:bg-[#1a1a2e] transition-all">إلغاء</button>
-              <button onClick={createPortal} className="px-5 py-2 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#D4A843] to-[#e4b84a] text-[#0A0A0F] hover:shadow-lg transition-all">إضافة</button>
+              <button onClick={() => setShowForm(false)} className="btn-secondary px-4 py-2 text-sm">إلغاء</button>
+              <button onClick={createPortal} className="btn-accent px-5 py-2 text-sm">إضافة</button>
             </div>
           </div>
         </div>
@@ -109,16 +109,16 @@ export default function Portals() {
 
       {/* Portals List */}
       {filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-center bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl">
+        <div className="flex flex-col items-center justify-center py-16 text-center card-container rounded-2xl">
           <Globe className="w-12 h-12 text-gray-600 mb-3" />
           <h3 className="text-base font-medium text-gray-400 mb-1">لا توجد بوابات</h3>
           <p className="text-sm text-gray-600 mb-4">لم يتم إضافة أي بوابات إلكترونية بعد</p>
-          <button onClick={() => setShowForm(true)} className="px-5 py-2.5 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#D4A843] to-[#e4b84a] text-[#0A0A0F] transition-all">إضافة بوابة</button>
+          <button onClick={() => setShowForm(true)} className="btn-accent px-5 py-2.5 text-sm">إضافة بوابة</button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filtered.map(p => (
-            <div key={p.id} className="bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl p-5 hover:border-[#D4A84330] transition-all duration-300">
+            <div key={p.id} className="card-container rounded-2xl p-5 hover:border-[#D4A84330] transition-all duration-300">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
@@ -130,13 +130,13 @@ export default function Portals() {
                   </div>
                   <div className="min-w-0">
                     <h3 className="text-sm font-semibold text-white truncate">{p.portal_name}</h3>
-                    <a href={p.portal_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#D4A843] hover:underline truncate block">
+                    <a href={p.portal_url} target="_blank" rel="noopener noreferrer" className="text-[11px] var(--accent) hover:underline truncate block">
                       {p.portal_url}
                     </a>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={() => decryptPassword(p.id, p.portal_name)} className="p-2 rounded-lg text-gray-500 hover:text-[#D4A843] hover:bg-[#D4A843]/10 transition-all" title="كشف الباسوورد">
+                  <button onClick={() => decryptPassword(p.id, p.portal_name)} className="p-2 rounded-lg text-gray-500 hover:var(--accent) hover:bg-[#D4A843]/10 transition-all" title="كشف الباسوورد">
                     <KeyRound className="w-4 h-4" />
                   </button>
                   <button onClick={() => deletePortal(p.id)} className="p-2 rounded-lg text-gray-600 hover:text-[#EF4444] hover:bg-[#EF4444]/10 transition-all">
@@ -188,7 +188,7 @@ export default function Portals() {
           <div className="bg-[#111122] border border-[#1F1F2A] rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl animate-slideUp" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-xl bg-[#D4A843]/10 border border-[#D4A843]/20 flex items-center justify-center">
-                <KeyRound className="w-5 h-5 text-[#D4A843]" />
+                <KeyRound className="w-5 h-5 var(--accent)" />
               </div>
               <div>
                 <h3 className="text-sm font-semibold text-white">كلمة المرور</h3>
@@ -196,7 +196,7 @@ export default function Portals() {
               </div>
             </div>
             <div className="bg-[#0A0A0F] rounded-xl p-4 border border-[#1F1F2A] mb-4">
-              <p className="text-lg font-mono text-[#D4A843] text-center tracking-wider break-all" dir="ltr">
+              <p className="text-lg font-mono var(--accent) text-center tracking-wider break-all" dir="ltr">
                 {passwordModal.password}
               </p>
             </div>
@@ -210,7 +210,7 @@ export default function Portals() {
               >
                 نسخ كلمة المرور
               </button>
-              <button onClick={() => setPasswordModal(null)} className="px-4 py-2 rounded-xl font-medium text-sm bg-transparent border border-[#1F1F2A] text-gray-300 hover:text-white hover:bg-[#1a1a2e] transition-all mr-2">
+              <button onClick={() => setPasswordModal(null)} className="btn-secondary px-4 py-2 text-sm mr-2">
                 إغلاق
               </button>
             </div>
