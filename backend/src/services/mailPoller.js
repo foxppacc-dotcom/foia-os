@@ -34,7 +34,7 @@ class MailPoller {
           messages.push({
             messageId: parsed.messageId || msg.envelope.messageId,
             inReplyTo: parsed.inReplyTo || '',
-            references: parsed.references || '',
+            references: Array.isArray(parsed.references) ? parsed.references.join(' ') : (parsed.references || ''),
             from: parsed.from?.value?.[0]?.address || '',
             to: parsed.to?.value?.[0]?.address || '',
             cc: (parsed.cc?.value || []).map(v => v.address).join(', '),
