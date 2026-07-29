@@ -39,34 +39,34 @@
 
 :root {
   /* ---- Light theme ---- */
-  --bg-primary:      #F7F7F9;
-  --bg-secondary:    #FFFFFF;
-  --bg-tertiary:     #F1F1F5;
-  --bg-elevated:     #EAEAF0;
-  --bg-overlay:      rgba(20, 20, 28, 0.45);
+  --bg-primary:          #F7F7F9;
+  --bg-secondary:        #FFFFFF;
+  --bg-tertiary:         #F1F1F5;
+  --bg-elevated:         #EAEAF0;
+  --bg-overlay:          rgba(20, 20, 28, 0.45);
 
-  --border:          #E4E4EA;
-  --border-default:  #E4E4EA;
-  --border-strong:   #D2D2DC;
+  --border:              #E4E4EA;
+  --border-default:      #E4E4EA;
+  --border-strong:       #D2D2DC;
 
-  --text-primary:    #14141C;
-  --text-secondary:  #55566B;
-  --text-muted:      #8B8D9F;
-  --text-inverse:    #14141C;
+  --text-primary:        #14141C;
+  --text-secondary:      #55566B;
+  --text-muted:          #8B8D9F;
+  --text-inverse:        #14141C;
 
-  --accent:          #D4A843;
-  --accent-hover:    #E4B84A;
-  --accent-active:   #C79A38;
-  --accent-subtle:   rgba(212, 168, 67, 0.12);
+  --accent:              #D4A843;
+  --accent-hover:        #E4B84A;
+  --accent-active:       #C79A38;
+  --accent-subtle:       rgba(212, 168, 67, 0.12);
 
-  --success:         #10B981;
-  --success-subtle:  rgba(16, 185, 129, 0.12);
-  --warning:         #F59E0B;
-  --warning-subtle:  rgba(245, 158, 11, 0.12);
-  --danger:          #EF4444;
-  --danger-subtle:   rgba(239, 68, 68, 0.12);
-  --info:            #3B82F6;
-  --info-subtle:     rgba(59, 130, 246, 0.12);
+  --success:             #10B981;
+  --success-subtle:      rgba(16, 185, 129, 0.12);
+  --warning:             #F59E0B;
+  --warning-subtle:      rgba(245, 158, 11, 0.12);
+  --danger:              #EF4444;
+  --danger-subtle:       rgba(239, 68, 68, 0.12);
+  --info:                #3B82F6;
+  --info-subtle:         rgba(59, 130, 246, 0.12);
 
   --shadow-sm: 0 1px 2px rgba(20, 20, 28, 0.06);
   --shadow-md: 0 4px 16px rgba(20, 20, 28, 0.08);
@@ -77,6 +77,47 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 20px;
+
+  /* ---- DS alias layer -- every --ds-* var maps to its base counterpart ---- */
+  --ds-bg-primary:      var(--bg-primary);
+  --ds-bg-secondary:    var(--bg-secondary);
+  --ds-bg-tertiary:     var(--bg-tertiary);
+  --ds-bg-elevated:     var(--bg-elevated);
+  --ds-bg-overlay:      var(--bg-overlay);
+  --ds-border:          var(--border);
+  --ds-border-default:  var(--border-default);
+  --ds-border-strong:   var(--border-strong);
+  --ds-text-primary:    var(--text-primary);
+  --ds-text-secondary:  var(--text-secondary);
+  --ds-text-muted:      var(--text-muted);
+  --ds-text-inverse:    var(--text-inverse);
+  --ds-accent:          var(--accent);
+  --ds-accent-hover:    var(--accent-hover);
+  --ds-accent-active:   var(--accent-active);
+  --ds-accent-subtle:   var(--accent-subtle);
+  --ds-accent-text:     var(--accent);
+  --ds-success:         var(--success);
+  --ds-success-subtle:  var(--success-subtle);
+  --ds-success-text:    var(--success);
+  --ds-warning:         var(--warning);
+  --ds-warning-subtle:  var(--warning-subtle);
+  --ds-warning-text:    var(--warning);
+  --ds-danger:          var(--danger);
+  --ds-danger-subtle:   var(--danger-subtle);
+  --ds-danger-text:     var(--danger);
+  --ds-info:            var(--info);
+  --ds-info-subtle:     var(--info-subtle);
+  --ds-info-text:       var(--info);
+  --ds-shadow-sm:       var(--shadow-sm);
+  --ds-shadow-md:       var(--shadow-md);
+  --ds-shadow-lg:       var(--shadow-lg);
+  --ds-focus-ring:      var(--focus-ring);
+  --ds-radius-sm:       var(--radius-sm);
+  --ds-radius-md:       var(--radius-md);
+  --ds-radius-lg:       var(--radius-lg);
+  --ds-radius-xl:       var(--radius-xl);
+  --ds-text-xs:         0.8125rem;
+  --ds-text-sm:         0.875rem;
 }
 
 .dark {
@@ -119,6 +160,47 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 20px;
+
+  /* ---- DS alias layer ---- */
+  --ds-bg-primary:      var(--bg-primary);
+  --ds-bg-secondary:    var(--bg-secondary);
+  --ds-bg-tertiary:     var(--bg-tertiary);
+  --ds-bg-elevated:     var(--bg-elevated);
+  --ds-bg-overlay:      var(--bg-overlay);
+  --ds-border:          var(--border);
+  --ds-border-default:  var(--border-default);
+  --ds-border-strong:   var(--border-strong);
+  --ds-text-primary:    var(--text-primary);
+  --ds-text-secondary:  var(--text-secondary);
+  --ds-text-muted:      var(--text-muted);
+  --ds-text-inverse:    var(--text-inverse);
+  --ds-accent:          var(--accent);
+  --ds-accent-hover:    var(--accent-hover);
+  --ds-accent-active:   var(--accent-active);
+  --ds-accent-subtle:   var(--accent-subtle);
+  --ds-accent-text:     var(--accent);
+  --ds-success:         var(--success);
+  --ds-success-subtle:  var(--success-subtle);
+  --ds-success-text:    var(--success);
+  --ds-warning:         var(--warning);
+  --ds-warning-subtle:  var(--warning-subtle);
+  --ds-warning-text:    var(--warning);
+  --ds-danger:          var(--danger);
+  --ds-danger-subtle:   var(--danger-subtle);
+  --ds-danger-text:     var(--danger);
+  --ds-info:            var(--info);
+  --ds-info-subtle:     var(--info-subtle);
+  --ds-info-text:       var(--info);
+  --ds-shadow-sm:       var(--shadow-sm);
+  --ds-shadow-md:       var(--shadow-md);
+  --ds-shadow-lg:       var(--shadow-lg);
+  --ds-focus-ring:      var(--focus-ring);
+  --ds-radius-sm:       var(--radius-sm);
+  --ds-radius-md:       var(--radius-md);
+  --ds-radius-lg:       var(--radius-lg);
+  --ds-radius-xl:       var(--radius-xl);
+  --ds-text-xs:         0.8125rem;
+  --ds-text-sm:         0.875rem;
 }
 
 body {
@@ -162,9 +244,27 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
 .animate-fadeIn  { animation: fadeIn 0.25s ease-out; }
 .animate-slideUp { animation: slideUp 0.3s ease-out; }
 .animate-scaleIn { animation: scaleIn 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Utility classes */
+.ds-fadeIn { animation: fadeIn 0.25s ease-out; }
+.ds-hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.ds-transition-colors { transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease; }
+.ds-focus-ring:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.ds-animate-spin { animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .skeleton {
   background: linear-gradient(90deg, var(--bg-tertiary) 25%, var(--bg-elevated) 50%, var(--bg-tertiary) 75%);

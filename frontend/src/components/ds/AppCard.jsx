@@ -1,11 +1,12 @@
 export default function AppCard({ title, actions, children, padding='md', hover, style, className='' }) {
   const paddingMap = { sm: 'p-3', md: 'p-4', lg: 'p-5', xl: 'p-6' };
   return (
-    <div className={`rounded-xl border ${hover ? 'ds-hover-lift cursor-pointer' : ''} ${className}`}
+    <div className={`rounded-xl border ${hover ? 'ds-hover-lift cursor-pointer' : ''} ${className} ds-fadeIn`}
       style={{
         background: 'var(--ds-bg-secondary)', borderColor: 'var(--ds-border)',
         padding: paddingMap[padding] || paddingMap.md,
         boxShadow: 'var(--ds-shadow-sm)',
+        transition: 'transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease',
         ...style,
       }}
     >

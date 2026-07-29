@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
-import { FolderOpen, LayoutDashboard, GitBranch, Building2, Sparkles, Users, Mail, Timer, Key, FileText, ChevronRight, ChevronLeft, Cloud, UserCog, ShieldCheck, Phone, MailPlus } from 'lucide-react';
+import { FolderOpen, LayoutDashboard, GitBranch, Building2, Sparkles, Users, Mail, Timer, Key, FileText, ChevronRight, ChevronLeft, Cloud, UserCog, ShieldCheck, Phone, MailPlus, AtSign } from 'lucide-react';
 
 const navGroups = [
   {
@@ -24,7 +24,7 @@ const navGroups = [
       { path: '/agencies', label: 'الجهات', icon: Building2, roles: ['admin', 'manager', 'member'] },
       { path: '/portals', label: 'بوابات', icon: Key, roles: ['admin', 'manager'] },
       { path: '/inbox', label: 'صندوق الوارد', icon: Mail, roles: ['admin', 'manager', 'member'] },
-      { path: '/email-accounts', label: 'إيميلات', icon: Key, roles: ['admin', 'manager', 'member'] },
+      { path: '/email-accounts', label: 'إيميلات', icon: AtSign, roles: ['admin', 'manager', 'member'] },
       { path: '/teams', label: 'الفرق', icon: Users, roles: ['admin'] },
       { path: '/users', label: 'الأعضاء', icon: UserCog, roles: ['admin', 'manager'] },
       { path: '/permissions', label: 'الصلاحيات', icon: ShieldCheck, roles: ['admin'] },
@@ -116,6 +116,20 @@ export default function Sidebar({ user }) {
                     color: isActive ? 'var(--text-inverse)' : 'var(--text-secondary)',
                     whiteSpace: 'nowrap',
                   })}
+                  onMouseEnter={e => {
+                    const active = e.currentTarget.getAttribute('aria-current');
+                    if (!active || active === 'false') {
+                      e.currentTarget.style.background = 'var(--bg-tertiary)';
+                      e.currentTarget.style.color = 'var(--text-primary)';
+                    }
+                  }}
+                  onMouseLeave={e => {
+                    const active = e.currentTarget.getAttribute('aria-current');
+                    if (!active || active === 'false') {
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.color = 'var(--text-secondary)';
+                    }
+                  }}
                   title={collapsed ? item.label : undefined}>
                   <item.icon className="w-[18px] h-[18px] shrink-0" />
                   {!collapsed && <span className="text-xs">{item.label}</span>}
