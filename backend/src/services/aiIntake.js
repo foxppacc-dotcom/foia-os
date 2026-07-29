@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { getDatabase } = require('../database');
+const { getSupabase } = require('../supabase');
 
 /**
  * AI Intake Service
@@ -175,16 +175,16 @@ function extractMetadata(text) {
 /**
  * Detect duplicate cases by comparing agency, case numbers, and names
  */
-function detectDuplicates(text, db) {
+async function detectDuplicates(text) {
   if (!text || text.length < 10) return [];
 
   const lower = text.toLowerCase();
   const results = [];
 
-  // Get all existing cases with their descriptions
-  const cases = db.prepare('SELECT id, title, description FROM cases ORDER BY created_at DESC LIMIT 50').all();
+  const sup = getSupabase();
+  const { data: cases } = await sup.from('cases').select('id, title, description').order('created_at', { ascending: false }).limit(50);
 
-  for (const c of cases) {
+  for (const c of cases || []) {
     if (!c.description) continue;
     const desc = c.description.toLowerCase();
     let score = 0;
@@ -235,8 +235,8 @@ function detectDuplicates(text, db) {
  * Process an uploaded document: extract text, extract metadata, update DB
  */
 async function processDocument(documentId) {
-  const db = getDatabase();
-  const doc = db.prepare('SELECT * FROM case_documents WHERE id = ?').get(documentId);
+  const sup = getSupabase();
+  const { data: doc } = await sup.from('case_documents').select('*').eq('id', documentId).maybeSingle();
   if (!doc) throw new Error('Document not found');
 
   const absolutePath = path.join(__dirname, '..', '..', doc.file_path);
@@ -247,18 +247,17 @@ async function processDocument(documentId) {
 
   // Extract text
   const text = await extractText(absolutePath);
-  
+
   // Extract metadata
   const metadata = extractMetadata(text);
-  
+
   // Update document in DB
-  db.prepare(`
-    UPDATE case_documents 
-    SET ocr_text = ?, ai_summary = ?
-    WHERE id = ?
-  `).run(text.substring(0, 50000), metadata.summary, documentId);
+  await sup.from('case_documents').update({
+    ocr_text: text.substring(0, 50000),
+    ai_summary: metadata.summary,
+  }).eq('id', documentId);
 
   return { text: text.substring(0, 1000), ...metadata };
 }
 
-module.exports = { extractText, extractMetadata, processDocument };
+module.exports = { extractText, extractMetadata, detectDuplicates, processDocument };

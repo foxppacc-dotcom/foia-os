@@ -3,8 +3,8 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { getDatabase } = require('../database');
-const { processDocument, extractText, extractMetadata } = require('../services/aiIntake');
+const { getSupabase } = require('../supabase');
+const { processDocument, extractText, extractMetadata, detectDuplicates } = require('../services/aiIntake');
 const { requireAuth } = require("../middleware/auth");
 router.use(requireAuth);
 
@@ -42,6 +42,7 @@ router.post('/intake/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
+    const { title } = req.body;
     const filePath = req.file.path;
     const originalName = req.file.originalname;
 
@@ -62,44 +63,40 @@ router.post('/intake/upload', upload.single('file'), async (req, res) => {
     const metadata = extractMetadata(text);
 
     // Step 2.5: Check for duplicates
-    const db = getDatabase();
-    const duplicates = detectDuplicates(text, db);
+    const duplicates = await detectDuplicates(text);
 
     // Step 3: Auto-create a draft case from the extracted data
+    const sup = getSupabase();
     const caseTitle = title || originalName.replace(/\.[^/.]+$/, '').substring(0, 100);
-    
-    const caseResult = db.prepare(`
-      INSERT INTO cases (uuid, title, description, status, priority, created_at, updated_at)
-      VALUES (?, ?, ?, 'open', 'medium', datetime('now'), datetime('now'))
-    `).run(
-      require('uuid').v4(),
-      title,
-      metadata.summary.substring(0, 1000)
-    );
 
-    const caseId = caseResult.lastInsertRowid;
+    const { data: created, error: caseErr } = await sup.from('cases').insert({
+      uuid: require('uuid').v4(),
+      title: caseTitle,
+      description: metadata.summary.substring(0, 1000),
+      status: 'open', priority: metadata.priority || 'medium',
+      created_by: req.user?.id,
+    }).select().single();
+    if (caseErr) throw caseErr;
+    const caseId = created.id;
 
     // Add a note about AI extraction
-    db.prepare(`
-      INSERT INTO case_comments (case_id, content, created_at)
-      VALUES (?, ?, datetime('now'))
-    `).run(caseId, `🤖 تم استخراج تلقائي من الملف: ${originalName}`);
+    await sup.from('activity_logs').insert({
+      user_id: req.user?.id, user_name: req.user?.name,
+      action_type: 'ai_intake', target_type: 'case', target_id: caseId,
+      target_title: `🤖 تم استخراج تلقائي من الملف: ${originalName}`,
+    }).catch(e => console.error('[intake] activity_logs insert failed:', e.message));
 
     // If agencies were detected, create requests
     for (const agency of metadata.agencies.slice(0, 5)) {
-      db.prepare(`
-        INSERT INTO requests (case_id, notes, status, sent_date)
-        VALUES (?, ?, 'pending', datetime('now'))
-      `).run(caseId, `جهة تم اكتشافها: ${agency}`);
+      await sup.from('requests').insert({
+        case_id: caseId, notes: `جهة تم اكتشافها: ${agency}`, status: 'pending', sent_date: new Date().toISOString().split('T')[0],
+      });
     }
 
-    // Save the OCR text and AI summary to the case_metadata
-    db.prepare(`
-      UPDATE cases SET description = ? WHERE id = ?
-    `).run(
-      `[AI Summary]\n${metadata.summary}\n\n[Detected Agencies]\n${metadata.agencies.join(', ')}\n\n[Detected Dates]\n${metadata.dates.join(', ')}\n\n[Case Numbers]\n${metadata.case_numbers.join(', ')}\n\n[Evidence]\n${metadata.evidence_mentions.join(', ')}`,
-      caseId
-    );
+    // Save the OCR text and AI summary to the case description
+    await sup.from('cases').update({
+      description: `[AI Summary]\n${metadata.summary}\n\n[Detected Agencies]\n${metadata.agencies.join(', ')}\n\n[Detected Dates]\n${metadata.dates.join(', ')}\n\n[Case Numbers]\n${metadata.case_numbers.join(', ')}\n\n[Evidence]\n${metadata.evidence_mentions.join(', ')}`,
+    }).eq('id', caseId);
 
     res.json({
       success: true,
@@ -138,21 +135,23 @@ router.post('/intake/text', async (req, res) => {
     }
 
     const metadata = extractMetadata(text);
-    const db = getDatabase();
+    const sup = getSupabase();
     const caseTitle = title || text.substring(0, 80).trim();
 
-    const caseResult = db.prepare(`
-      INSERT INTO cases (uuid, title, description, status, priority, created_at, updated_at)
-      VALUES (?, ?, ?, 'open', 'medium', datetime('now'), datetime('now'))
-    `).run(require('uuid').v4(), caseTitle, text.substring(0, 2000));
-
-    const caseId = caseResult.lastInsertRowid;
+    const { data: created, error: caseErr } = await sup.from('cases').insert({
+      uuid: require('uuid').v4(),
+      title: caseTitle,
+      description: text.substring(0, 2000),
+      status: 'open', priority: metadata.priority || 'medium',
+      created_by: req.user?.id,
+    }).select().single();
+    if (caseErr) throw caseErr;
+    const caseId = created.id;
 
     for (const agency of metadata.agencies.slice(0, 5)) {
-      db.prepare(`
-        INSERT INTO requests (case_id, notes, status, sent_date)
-        VALUES (?, ?, 'pending', datetime('now'))
-      `).run(caseId, `جهة: ${agency}`);
+      await sup.from('requests').insert({
+        case_id: caseId, notes: `جهة: ${agency}`, status: 'pending', sent_date: new Date().toISOString().split('T')[0],
+      });
     }
 
     res.json({
