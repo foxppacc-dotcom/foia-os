@@ -36,23 +36,33 @@ export default function AIIntake() {
     setFileLoading(false);
   };
 
+  const inputStyle = {
+    background: 'var(--bg-primary)',
+    border: '1px solid var(--border)',
+    color: 'var(--text-primary)',
+  };
+  const inputFocusStyle = { borderColor: 'var(--accent)' };
+
   return (
     <div className="space-y-6 animate-fadeIn">
       <div className="flex items-center gap-3">
-        <Sparkles className="w-6 h-6 text-[#D4A843]" />
-        <h1 className="text-xl font-bold text-white">AI Intake — استقبال ذكي</h1>
+        <Sparkles className="w-6 h-6" style={{ color: 'var(--accent)' }} />
+        <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>AI Intake — استقبال ذكي</h1>
       </div>
 
       {/* Input area */}
-      <div className="bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl p-6">
-        <h2 className="text-sm font-semibold text-[#D4A843] mb-4">إدخال نص أو لصق مستند</h2>
+      <div className="rounded-2xl p-6" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+        <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--accent)' }}>إدخال نص أو لصق مستند</h2>
         
         <div className="space-y-3">
           <input
             value={title}
             onChange={e => setTitle(e.target.value)}
             placeholder="عنوان القضية (اختياري)"
-            className="w-full px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all"
+            className="w-full px-4 py-3 rounded-xl transition-all"
+            style={inputStyle}
+            onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
+            onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}
           />
           
           <textarea
@@ -60,18 +70,22 @@ export default function AIIntake() {
             onChange={e => setText(e.target.value)}
             placeholder="الصق نص طلب FOIA أو وصف القضية هنا..."
             rows={8}
-            className="w-full px-4 py-3 rounded-xl bg-[#13131A] border border-[#1F1F2A] text-white placeholder-gray-500 focus:outline-none focus:border-[#D4A843] transition-all resize-y font-mono text-sm"
+            className="w-full px-4 py-3 rounded-xl transition-all resize-y font-mono text-sm"
+            style={{ ...inputStyle, minHeight: '160px' }}
+            onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
+            onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}
           />
 
           <div className="flex items-center justify-between">
-            <p className="text-xs text-gray-600">{text.length} حرف</p>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{text.length} حرف</p>
             <button
               onClick={handleSubmit}
               disabled={loading || !text.trim()}
-              className="flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#D4A843] to-[#e4b84a] text-[#0A0A0F] hover:shadow-lg hover:shadow-[#D4A843]/30 active:scale-[0.97] transition-all disabled:opacity-40"
+              className="flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm transition-all active:scale-[0.97] disabled:opacity-40"
+              style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
             >
               {loading ? (
-                <div className="w-4 h-4 border-2 border-[#0A0A0F] border-t-transparent rounded-full animate-spin" />
+                <div className="w-4 h-4 border-2 rounded-full animate-spin" style={{ borderColor: 'var(--text-inverse)', borderTopColor: 'transparent' }} />
               ) : (
                 <Sparkles className="w-4 h-4" />
               )}
@@ -81,105 +95,62 @@ export default function AIIntake() {
         </div>
       </div>
 
-      {/* File upload */}
-      <div className="bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl p-6">
-        <h2 className="text-sm font-semibold text-[#D4A843] mb-4">رفع ملف (PDF, DOCX, صور)</h2>
-        <label className="flex flex-col items-center justify-center py-8 rounded-xl border-2 border-dashed border-[#1F1F2A] hover:border-[#D4A843]/40 cursor-pointer transition-all">
-          {fileLoading ? (
-            <div className="w-8 h-8 border-2 border-[#D4A843] border-t-transparent rounded-full animate-spin" />
-          ) : (
-            <>
-              <FileUp className="w-8 h-8 text-gray-600 mb-2" />
-              <p className="text-sm text-gray-500">اختر ملف أو اسحبه هنا</p>
-              <p className="text-xs text-gray-600 mt-1">PDF, DOCX, JPG, PNG (حد أقصى 50MB)</p>
-            </>
-          )}
-          <input type="file" className="hidden" onChange={handleFileUpload} accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" disabled={fileLoading} />
-        </label>
-      </div>
-
       {/* Result */}
       {result && (
-        <div className="bg-[rgba(17,17,34,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.06)] rounded-2xl p-6 animate-slideUp">
+        <div className="rounded-2xl p-5 animate-slideUp" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--accent)' }}>النتيجة</h2>
           {result.error ? (
-            <div className="text-center py-6">
-              <p className="text-[#EF4444] text-sm">{result.error}</p>
-            </div>
+            <p className="text-xs" style={{ color: 'var(--danger)' }}>{result.error}</p>
           ) : (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
+            <div className="space-y-2">
+              {result.case_id && (
                 <div className="flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-[#10B981]" />
-                  <h3 className="text-sm font-semibold text-white">نتيجة المعالجة</h3>
+                  <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>تم إنشاء القضية</span>
+                  <button onClick={() => navigate(`/cases/${result.case_id}`)} 
+                    className="flex items-center gap-1 text-xs font-semibold hover:underline"
+                    style={{ color: 'var(--accent)' }}>
+                    #{result.case_id} <ArrowRight className="w-3 h-3" />
+                  </button>
                 </div>
-                <button
-                  onClick={() => navigate(`/cases/${result.case_id}`)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl font-medium text-xs bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/20 hover:bg-[#10B981]/20 transition-all"
-                >
-                  فتح القضية
-                  <ArrowRight className="w-3 h-3" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                {/* Agencies */}
-                <div className="p-4 rounded-xl bg-[#0A0A0F]">
-                  <p className="text-xs text-gray-500 mb-2">الجهات المكتشفة</p>
-                  {result.metadata?.agencies?.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {result.metadata.agencies.map((a, i) => (
-                        <span key={i} className="px-2 py-1 rounded-md text-[11px] bg-[#D4A843]/10 text-[#D4A843]">{a}</span>
-                      ))}
-                    </div>
-                  ) : <p className="text-sm text-gray-600">—</p>}
+              )}
+              {result.summary && (
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{result.summary}</p>
+              )}
+              {result.classification && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {Object.entries(result.classification).map(([key, val]) => (
+                    <span key={key} className="px-2 py-0.5 rounded text-[10px]" 
+                      style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>
+                      {key}: {String(val)}
+                    </span>
+                  ))}
                 </div>
-
-                {/* Dates */}
-                <div className="p-4 rounded-xl bg-[#0A0A0F]">
-                  <p className="text-xs text-gray-500 mb-2">التواريخ المكتشفة</p>
-                  {result.metadata?.dates?.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {result.metadata.dates.map((d, i) => (
-                        <span key={i} className="px-2 py-1 rounded-md text-[11px] bg-[#3B82F6]/10 text-[#3B82F6]">{d}</span>
-                      ))}
-                    </div>
-                  ) : <p className="text-sm text-gray-600">—</p>}
-                </div>
-
-                {/* Case Numbers */}
-                <div className="p-4 rounded-xl bg-[#0A0A0F]">
-                  <p className="text-xs text-gray-500 mb-2">أرقام القضايا</p>
-                  {result.metadata?.case_numbers?.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {result.metadata.case_numbers.map((c, i) => (
-                        <span key={i} className="px-2 py-1 rounded-md text-[11px] bg-[#8B5CF6]/10 text-[#8B5CF6]">{c}</span>
-                      ))}
-                    </div>
-                  ) : <p className="text-sm text-gray-600">—</p>}
-                </div>
-
-                {/* Evidence */}
-                <div className="p-4 rounded-xl bg-[#0A0A0F]">
-                  <p className="text-xs text-gray-500 mb-2">الأدلة المكتشفة</p>
-                  {result.metadata?.evidence?.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {result.metadata.evidence.map((e, i) => (
-                        <span key={i} className="px-2 py-1 rounded-md text-[11px] bg-[#10B981]/10 text-[#10B981]">{e}</span>
-                      ))}
-                    </div>
-                  ) : <p className="text-sm text-gray-600">—</p>}
-                </div>
-              </div>
-
-              {/* Summary */}
-              <div className="p-4 rounded-xl bg-[#0A0A0F]">
-                <p className="text-xs text-gray-500 mb-2">ملخص تلقائي</p>
-                <p className="text-sm text-white">{result.metadata?.summary || '—'}</p>
-              </div>
+              )}
             </div>
           )}
         </div>
       )}
+
+      {/* OR Divider */}
+      <div className="flex items-center gap-3">
+        <div className="flex-1" style={{ height: '1px', background: 'var(--border)' }} />
+        <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>أو</span>
+        <div className="flex-1" style={{ height: '1px', background: 'var(--border)' }} />
+      </div>
+
+      {/* File Upload */}
+      <div className="rounded-2xl p-6" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+        <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--accent)' }}>رفع مستند</h2>
+        <label className="flex flex-col items-center justify-center p-6 rounded-xl cursor-pointer transition-all hover:-translate-y-0.5"
+          style={{ background: 'var(--bg-primary)', border: '2px dashed var(--border)' }}>
+          <FileUp className="w-8 h-8 mb-2" style={{ color: 'var(--text-muted)' }} />
+          <p className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+            {fileLoading ? 'جاري الرفع...' : 'اضغط لرفع ملف'}
+          </p>
+          <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>PDF, DOCX, TXT — 10MB كحد أقصى</p>
+          <input type="file" onChange={handleFileUpload} accept=".pdf,.docx,.txt" className="hidden" disabled={fileLoading} />
+        </label>
+      </div>
     </div>
   );
 }
