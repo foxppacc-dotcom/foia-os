@@ -116,13 +116,24 @@ class MailPoller {
         }
       }
 
-      // 3. By Agency Email
+      // 3. By Agency Email -- the agency's own address, or any of its
+      // individual contacts' emails (agency_contacts), since replies
+      // legitimately come from a named person at the agency, not always
+      // the generic address on file.
       if (!matchedCaseId && msg.from) {
+        let agencyId = null;
         const { data: agency } = await sup.from('agencies').select('id').eq('email', msg.from).maybeSingle();
-        if (agency) {
+        if (agency) agencyId = agency.id;
+        if (!agencyId) {
+          try {
+            const { data: contact } = await sup.from('agency_contacts').select('agency_id').eq('email', msg.from).maybeSingle();
+            if (contact) agencyId = contact.agency_id;
+          } catch (e) { /* agency_contacts may not exist in every environment */ }
+        }
+        if (agencyId) {
           // Find the most recent case for this agency
-          const { data: recentReq } = await sup.from('requests').select('case_id').eq('agency_id', agency.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
-          if (recentReq) { matchedCaseId = recentReq.case_id; matchedAgencyId = agency.id; }
+          const { data: recentReq } = await sup.from('requests').select('case_id').eq('agency_id', agencyId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+          if (recentReq) { matchedCaseId = recentReq.case_id; matchedAgencyId = agencyId; }
         }
       }
 
@@ -132,6 +143,17 @@ class MailPoller {
         if (caseMatch) {
           const cid = parseInt(caseMatch[1] || caseMatch[2]);
           if (cid) { const { data: c } = await sup.from('cases').select('id').eq('id', cid).maybeSingle(); if (c) matchedCaseId = c.id; }
+        }
+      }
+
+      // 5. By case title appearing in the subject (skip short/generic
+      // titles -- too high a false-positive risk to match on those).
+      if (!matchedCaseId) {
+        const subjectLower = (msg.subject || '').toLowerCase();
+        if (subjectLower) {
+          const { data: openCases } = await sup.from('cases').select('id, title').in('status', ['open', 'in_progress']);
+          const match = (openCases || []).find(c => c.title && c.title.trim().length > 6 && subjectLower.includes(c.title.trim().toLowerCase()));
+          if (match) matchedCaseId = match.id;
         }
       }
 
