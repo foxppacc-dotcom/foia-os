@@ -10,23 +10,12 @@ const STATUS_STYLES = {
   closed: { bg: '#10B981', label: '🟢 مغلقة' },
 };
 
-const PIPELINE_LISTS = [
-  { id: 1, name: 'تم استلام السجلات', color: '#10B981' },
-  { id: 2, name: 'مطلوب دفع', color: '#F59E0B' },
-  { id: 3, name: 'مفيش سجلات متوفرة', color: '#6B7280' },
-  { id: 4, name: 'تم الرفض بموجب القانون', color: '#EF4444' },
-  { id: 5, name: 'القضية مفتوحة في المحكمة', color: '#8B5CF6' },
-  { id: 6, name: 'الوكالة لا تستخدم البودي كام', color: '#F97316' },
-  { id: 7, name: 'محتاج تأكيد مواطنة', color: '#EC4899' },
-];
-
 export default function Cases() {
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [agencies, setAgencies] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [classifying, setClassifying] = useState(null);
   const [form, setForm] = useState({
     title: '', description: '', priority: 'medium', client_name: '',
     selectedAgencies: []
@@ -94,27 +83,6 @@ export default function Cases() {
     } catch (e) {
       alert('❌ فشل الحذف: ' + e.message);
     }
-  };
-
-  // Classify a case: put all its requests into a pipeline list
-  const classifyCase = async (caseId, listId) => {
-    setClassifying(caseId);
-    try {
-      const c = await api.get(`/cases/${caseId}`);
-      const requests = c.requests || [];
-      if (requests.length === 0) {
-        alert('⚠️ هذه القضية ليس لها جهات مرسلة. أضف جهات أولاً.');
-        setClassifying(null);
-        return;
-      }
-      for (const r of requests) {
-        await api.put(`/requests/${r.id}/classification`, { classification_id: listId });
-      }
-      fetchCases();
-    } catch (e) {
-      alert('❌ فشل التصنيف: ' + e.message);
-    }
-    setClassifying(null);
   };
 
   const handleCasesUpload = async (e) => {
@@ -292,7 +260,6 @@ export default function Cases() {
                 <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📌 العنوان</th>
                 <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>🏛️ الجهات</th>
                 <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📊 الحالة</th>
-                <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>🎯 التصنيف</th>
                 <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>⭐ الأولوية</th>
                 <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📅 التاريخ</th>
                 <th className="px-4 py-3 text-center font-medium" style={{ color: 'var(--text-muted)' }}>⚙️</th>
@@ -327,21 +294,6 @@ export default function Cases() {
                       </span>
                     </td>
 
-                    {/* 🎯 Classification Dropdown */}
-                    <td className="px-4 py-3">
-                      <select
-                        onClick={e => e.stopPropagation()}
-                        value=""
-                        onChange={e => { if (e.target.value) classifyCase(c.id, parseInt(e.target.value)); }}
-                        className="px-2.5 py-2 rounded-lg border focus:outline-none cursor-pointer font-medium"
-                        style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
-                        <option value="">📋 تصنيف...</option>
-                        {PIPELINE_LISTS.map(pl => (
-                          <option key={pl.id} value={pl.id} style={{ color: pl.color }}>{pl.name}</option>
-                        ))}
-                      </select>
-                    </td>
-                    
                     <td className="px-4 py-3" onClick={() => navigate(`/cases/${c.id}`)}>
                       <span className={`px-2.5 py-1 rounded-md font-mono font-medium ${
                         c.priority === 'high' ? 'text-[#EF4444] bg-[#EF4444]/10' :
