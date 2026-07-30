@@ -30,7 +30,7 @@ router.post('/pipeline-lists', requireAuth, requireRole('admin'), async (req, re
 
   const { data: created, error } = await sup
     .from('pipeline_lists')
-    .insert({ list_number: maxNum + 1, name_ar, name_en, color: color || '#6B7280' })
+    .insert({ list_number: maxNum + 1, name_ar, name_en, color: color || '#6B7280', description, icon, sla_days, reminder_days, responsible_team_id })
     .select()
     .single();
 
