@@ -1,8 +1,9 @@
 import { api } from '../../../api';
 import { useState, useEffect, useMemo } from 'react';
-import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, Send, ChevronDown, ChevronUp, User, UserPlus, XCircle, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, Send, ChevronDown, ChevronUp, User, UserPlus, XCircle, RefreshCw, CheckCircle, AlertTriangle, Gavel, Search, CalendarClock } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import { useRequests } from '../../request/hooks/useRequests';
+import { classifyRequest } from '../../request/services/requestApi';
 import { getStatusBadge, filterUnusedAgencies, formatAgencyLocation } from '../../request/utils';
 import AppSection from '../../../components/ds/AppSection';
 import AppButton from '../../../components/ds/AppButton';
@@ -20,6 +21,20 @@ const AGENCY_TYPES = [
 ];
 
 const BLANK_AGENCY = { name_en: '', name_ar: '', state: '', city: '', type: '', email: '', phone: '', portal_url: '', website: '', tracking_portal_url: '' };
+
+const CLASS_OPTIONS = [
+  { value: 'arrest', label: 'جهة قبض', icon: Gavel },
+  { value: 'investigation', label: 'جهة تحقيق', icon: Search },
+  { value: 'both', label: 'قبض وتحقيق', icon: Building2 },
+];
+
+const DEADLINE_OPTIONS = [
+  { value: '3', label: '3 أيام' },
+  { value: '7', label: '7 أيام' },
+  { value: '14', label: '14 يوم' },
+  { value: '20', label: '20 يوم' },
+  { value: '30', label: '30 يوم' },
+];
 
 function parseAgencyContacts(notes) {
   if (!notes) return [];
@@ -44,6 +59,8 @@ export default function AgenciesTab() {
   const [showNewAgencyForm, setShowNewAgencyForm] = useState(false);
   const [newAgency, setNewAgency] = useState(BLANK_AGENCY);
   const [savingAgency, setSavingAgency] = useState(false);
+  const [showPortalForm, setShowPortalForm] = useState({});
+  const [portalForm, setPortalForm] = useState({});
 
   useEffect(() => {
     api.get('/email-accounts').then(d => setEmailAccounts(d.data || d.accounts || [])).catch(() => {});
@@ -94,6 +111,25 @@ export default function AgenciesTab() {
   const quickAction = async (reqId, status) => {
     try { await api.put(`/requests/${reqId}/status`, { status }); refetch?.(true); }
     catch (e) { alert('❌ ' + e.message); }
+  };
+
+  const setClassification = async (reqId, value) => {
+    try { await classifyRequest(id, reqId, value); refetch?.(true); }
+    catch (e) { alert('❌ ' + e.message); }
+  };
+
+  const logPortalSubmission = async (reqId, agencyId) => {
+    const form = portalForm[reqId] || {};
+    try {
+      await api.post(`/cases/${id}/portal-log`, {
+        agency_id: agencyId, request_id: reqId,
+        note: form.note || '', confirmation_number: form.confirmation_number || '',
+        expected_response_days: form.expected_response_days || '20',
+      });
+      setPortalForm(p => ({ ...p, [reqId]: {} }));
+      setShowPortalForm(p => ({ ...p, [reqId]: false }));
+      refetch?.(true);
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   return (
@@ -257,7 +293,9 @@ export default function AgenciesTab() {
                       {reqs.map(req => {
                         const rBadge = getStatusBadge(req.status);
                         const rWaitingDays = req.created_at ? Math.floor((Date.now() - new Date(req.created_at)) / (1000*60*60*24)) : 0;
-                        const isLate = rWaitingDays > (req.expected_response_days || 20);
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        const isLate = !!(req.expected_response_date && req.expected_response_date < todayStr && !req.response_date);
+                        const isPortalFormOpen = showPortalForm[req.id];
                         return (
                           <div key={req.id} className="p-2.5 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: isLate ? '3px solid #ef4444' : '3px solid transparent' }}>
                             <div className="flex items-center gap-2 mb-1.5">
@@ -268,7 +306,34 @@ export default function AgenciesTab() {
                               <AppBadge variant={rBadge.variant}>{rBadge.text}</AppBadge>
                               <span className="text-[9px] shrink-0" style={{ color: isLate ? '#ef4444' : 'var(--ds-text-muted)' }}>{rWaitingDays} يوم · {formatDateTime(req.created_at)}</span>
                             </div>
-                            <div className="flex items-center gap-1">
+
+                            {/* Classification */}
+                            <div className="flex items-center gap-1 mb-1.5">
+                              {CLASS_OPTIONS.map(opt => {
+                                const Icon = opt.icon;
+                                const active = req.agency_classification === opt.value;
+                                return (
+                                  <button key={opt.value} onClick={() => setClassification(req.id, active ? null : opt.value)}
+                                    className="flex items-center gap-1 text-[8px] px-1.5 py-0.5 rounded ds-transition-colors"
+                                    style={active ? { background: 'var(--ds-accent)', color: 'white' } : { background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>
+                                    <Icon className="w-2.5 h-2.5" />{opt.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            {isLate && (
+                              <div className="flex items-center gap-1 mb-1.5 text-[9px] px-2 py-1 rounded" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
+                                <AlertTriangle className="w-3 h-3" /> تخطّى الموعد المتوقع للرد ({req.expected_response_date})
+                              </div>
+                            )}
+                            {!isLate && req.expected_response_date && (
+                              <div className="flex items-center gap-1 mb-1.5 text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>
+                                <CalendarClock className="w-3 h-3" /> الموعد المتوقع للرد: {req.expected_response_date}
+                              </div>
+                            )}
+
+                            <div className="flex items-center gap-1 flex-wrap">
                               {req.status !== 'sent' && req.status !== 'closed' && (
                                 <button onClick={() => quickAction(req.id, 'sent')} className="flex items-center gap-1 text-[8px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6' }}>
                                   <Send className="w-2.5 h-2.5" />إرسال</button>
@@ -283,9 +348,30 @@ export default function AgenciesTab() {
                                     <CheckCircle className="w-2.5 h-2.5" />توثيق</button>
                                   <button onClick={() => quickAction(req.id, 'closed')} className="flex items-center gap-1 text-[8px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,99,102,0.1)', color: '#636366' }}>
                                     <XCircle className="w-2.5 h-2.5" />إغلاق</button>
+                                  <button onClick={() => setShowPortalForm(p => ({ ...p, [req.id]: !p[req.id] }))} className="flex items-center gap-1 text-[8px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#8b5cf6' }}>
+                                    <Globe className="w-2.5 h-2.5" />تسجيل تقديم عبر البوابة</button>
                                 </>
                               )}
                             </div>
+
+                            {isPortalFormOpen && (
+                              <div className="mt-1.5 p-2 rounded-lg space-y-1" style={{ background: 'var(--ds-bg-tertiary)', border: '1px dashed var(--ds-border)' }}>
+                                <div className="grid grid-cols-2 gap-1">
+                                  <select value={portalForm[req.id]?.expected_response_days || '20'} onChange={e => setPortalForm(p => ({ ...p, [req.id]: { ...p[req.id], expected_response_days: e.target.value } }))}
+                                    className="px-2 py-1 rounded text-[10px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
+                                    {DEADLINE_OPTIONS.map(o => <option key={o.value} value={o.value}>مهلة الرد: {o.label}</option>)}
+                                  </select>
+                                  <input placeholder="رقم تأكيد التقديم (اختياري)" value={portalForm[req.id]?.confirmation_number || ''} onChange={e => setPortalForm(p => ({ ...p, [req.id]: { ...p[req.id], confirmation_number: e.target.value } }))}
+                                    className="px-2 py-1 rounded text-[10px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+                                </div>
+                                <input placeholder="ملاحظة (اختياري)" value={portalForm[req.id]?.note || ''} onChange={e => setPortalForm(p => ({ ...p, [req.id]: { ...p[req.id], note: e.target.value } }))}
+                                  className="w-full px-2 py-1 rounded text-[10px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+                                <div className="flex gap-1 justify-end pt-0.5">
+                                  <AppButton size="sm" variant="secondary" onClick={() => setShowPortalForm(p => ({ ...p, [req.id]: false }))}>إلغاء</AppButton>
+                                  <AppButton size="sm" onClick={() => logPortalSubmission(req.id, agency?.id)}><CheckCircle className="w-3 h-3" />تسجيل</AppButton>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         );
                       })}

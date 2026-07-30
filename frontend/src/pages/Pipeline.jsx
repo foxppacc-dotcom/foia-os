@@ -12,13 +12,6 @@ const LIST_STYLES_BY_ID = {
   7: { bg: '#EC4899', label: '🆔 محتاج تأكيد مواطنة', emoji: '🆔' },
 };
 
-const PIPELINE_LISTS_BY_ID = [
-  { id: 1, name: 'تم استلام السجلات' }, { id: 2, name: 'مطلوب دفع' },
-  { id: 3, name: 'مفيش سجلات متوفرة' }, { id: 4, name: 'تم الرفض بموجب القانون' },
-  { id: 5, name: 'القضية مفتوحة في المحكمة' }, { id: 6, name: 'الوكالة لا تستخدم البودي كام' },
-  { id: 7, name: 'محتاج تأكيد مواطنة' },
-];
-
 export default function Pipeline() {
   const [lists, setLists] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -132,7 +125,7 @@ export default function Pipeline() {
       <div className="flex items-center justify-between mb-4 shrink-0">
         <div>
           <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>📋 خط الإنتاج</h1>
-          <p style={{ color: 'var(--text-muted)' }}>{totalCards} بطاقة</p>
+          <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>{totalCards} بطاقة</p>
         </div>
         <div className="flex items-center gap-2">
           {/* Sort Toggle */}
@@ -169,43 +162,42 @@ export default function Pipeline() {
               const items = col.requests || col.tasks || [];
               const st = LIST_STYLES_BY_ID[col.id] || { bg: '#6B7280', label: col.name_ar };
               return (
-                <div key={col.id} className="flex flex-col shrink-0 rounded-xl"
-                  style={{ minWidth: '280px', maxWidth: '340px', minHeight: '100%' }}
+                <div key={col.id} className="flex flex-col shrink-0 rounded-2xl overflow-hidden"
+                  style={{ minWidth: '280px', maxWidth: '340px', minHeight: '100%', boxShadow: 'var(--shadow-sm)' }}
                   onDragOver={handleDragOver} onDrop={e => handleDrop(e, col.id)}>
-                  <div className="px-4 py-3 rounded-t-xl border border-b-0 flex items-center justify-between"
+                  <div className="px-4 py-3 border border-b-0 flex items-center justify-between"
                     style={{ background: st.bg + '15', borderColor: st.bg + '30' }}>
                     <div className="flex items-center gap-2">
                       <div className="w-3 h-3 rounded-full" style={{ background: st.bg }} />
                       <h3 className="font-bold" style={{ color: 'var(--text-primary)' }}>{col.name_ar}</h3>
-                      <span className="px-2 py-0.5 rounded font-bold cursor-pointer hover:opacity-80"
+                      <span className="px-2 py-0.5 rounded font-bold cursor-pointer hover:opacity-80 transition-opacity"
                         style={{ background: st.bg + '20', color: st.bg }}
                         onClick={() => navigate(`/pipeline/lists/${col.id}`)}>{items.length}</span>
                     </div>
                   </div>
-                  <div className="flex-1 p-3 space-y-3 rounded-b-xl border overflow-y-auto"
-                    style={{ borderColor: st.bg + '30', background: 'rgba(17,17,34,0.3)', minHeight: '200px' }}>
+                  <div className="flex-1 p-3 space-y-2.5 border overflow-y-auto"
+                    style={{ borderColor: st.bg + '30', background: 'var(--bg-primary)', minHeight: '200px' }}>
                     {items.length === 0 ? (
-                      <div className="flex items-center justify-center py-12"><p style={{ color: 'var(--text-muted)' }}>📥 اسحب البطاقة هنا</p></div>
+                      <div className="flex items-center justify-center py-12 rounded-xl border-2 border-dashed" style={{ borderColor: 'var(--border)' }}>
+                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>📥 اسحب البطاقة هنا</p>
+                      </div>
                     ) : items.map((item, idx) => (
                       <div key={item.id} draggable
                         onDragStart={e => handleInternalDragStart(e, item.id, col.list_number, idx)}
                         onDragEnd={() => setDraggedItemInside(null)}
                         onClick={() => item.case_id && navigate(`/cases/${item.case_id}`)}
-                        className="rounded-xl border cursor-grab active:cursor-grabbing"
-                        style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', opacity: draggedItem === item.id || draggedItemInside?.requestId === item.id ? 0.4 : 1 }}
+                        className="rounded-2xl border cursor-grab active:cursor-grabbing transition-all duration-150 hover:-translate-y-0.5"
+                        style={{
+                          background: 'var(--bg-secondary)', borderColor: 'var(--border)',
+                          opacity: draggedItem === item.id || draggedItemInside?.requestId === item.id ? 0.4 : 1,
+                          boxShadow: 'var(--shadow-sm)',
+                        }}
                         onDragOver={e => { e.preventDefault(); }}
                         onDrop={e => handleInternalDrop(e, col, idx)}>
-                        <div className="px-4 pt-3 pb-2">
+                        <div className="px-4 py-3">
                           <span className="font-mono font-bold" style={{ color: st.bg, fontSize: '1rem' }}>#{item.case_id || item.id}</span>
                           <p className="font-medium leading-snug line-clamp-2 mt-1" style={{ color: 'var(--text-primary)' }}>{item.case_title || item.title || 'بدون عنوان'}</p>
-                        </div>
-                        <div className="px-4 py-2 border-t flex items-center gap-2" onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)' }}>
-                          <span className="text-xs shrink-0" style={{ color: 'var(--text-muted)' }}>⬇️</span>
-                          <select value={col.id} onChange={e => moveRequest(item.id, parseInt(e.target.value))}
-                            className="flex-1 px-2 py-1.5 rounded-lg border text-xs focus:outline-none cursor-pointer"
-                            style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
-                            {PIPELINE_LISTS_BY_ID.map(pl => <option key={pl.id} value={pl.id}>{pl.name}</option>)}
-                          </select>
+                          {item.agency_name_ar && <p className="text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>🏛️ {item.agency_name_ar}</p>}
                         </div>
                       </div>
                     ))}
@@ -225,25 +217,27 @@ export default function Pipeline() {
 
             return (
               <div key={col.id} onDragOver={handleDragOver} onDrop={e => handleDrop(e, col.id)}
-                className="rounded-xl border transition-all"
-                style={{ background: 'var(--bg-secondary)', borderColor: st.bg + '30' }}>
+                className="rounded-2xl border overflow-hidden transition-all"
+                style={{ background: 'var(--bg-secondary)', borderColor: st.bg + '30', boxShadow: 'var(--shadow-sm)' }}>
 
                 {/* List Header */}
-                <div className="flex items-center gap-3 px-4 py-3 rounded-t-xl transition-all cursor-pointer"
+                <div className="flex items-center gap-3 px-4 py-3 transition-colors cursor-pointer"
                   style={{ background: st.bg + '12' }}
                   onClick={() => toggleList(col.list_number)}>
                   <div className="w-3.5 h-3.5 rounded-full shrink-0" style={{ background: st.bg }} />
                   <h3 className="font-bold" style={{ color: 'var(--text-primary)' }}>{st.label}</h3>
-                  <span className="px-2.5 py-1 rounded-lg font-bold cursor-pointer hover:opacity-80"
+                  <span className="px-2.5 py-1 rounded-lg font-bold cursor-pointer hover:opacity-80 transition-opacity"
                     style={{ background: st.bg + '20', color: st.bg }}
                     onClick={(e) => { e.stopPropagation(); navigate(`/pipeline/lists/${col.list_number}`); }}>{items.length}</span>
-                  <span className="mr-auto" style={{ color: 'var(--text-muted)' }}>{isOpen ? '▲' : '▼'}</span>
+                  <span className="mr-auto transition-transform" style={{ color: 'var(--text-muted)', transform: isOpen ? 'rotate(0deg)' : 'rotate(180deg)' }}>▲</span>
                 </div>
 
                 {/* Cards Container — دايماً موجود لو open (بدون && شرط) */}
                 <div className={isOpen ? 'p-3 overflow-x-auto' : 'hidden'}>
                   {items.length === 0 ? (
-                    <div className="flex items-center justify-center py-8"><p style={{ color: 'var(--text-muted)' }}>📥 اسحب البطاقة هنا</p></div>
+                    <div className="flex items-center justify-center py-8 rounded-xl border-2 border-dashed" style={{ borderColor: 'var(--border)' }}>
+                      <p className="text-sm" style={{ color: 'var(--text-muted)' }}>📥 اسحب البطاقة هنا</p>
+                    </div>
                   ) : (
                     <div className="flex gap-3" style={{ minWidth: 'max-content' }}>
                       {items.map((item, idx) => (
@@ -251,32 +245,25 @@ export default function Pipeline() {
                           onDragStart={e => handleInternalDragStart(e, item.id, col.list_number, idx)}
                           onDragEnd={() => setDraggedItemInside(null)}
                           onClick={() => item.case_id && navigate(`/cases/${item.case_id}`)}
-                          className="w-64 rounded-xl border cursor-grab active:cursor-grabbing transition-all group shrink-0"
+                          className="w-72 rounded-2xl border cursor-grab active:cursor-grabbing transition-all duration-150 group shrink-0 hover:-translate-y-0.5"
                           style={{
                             background: 'var(--bg-secondary)',
                             borderColor: draggedItem === item.id || draggedItemInside?.requestId === item.id ? st.bg : 'var(--border)',
                             opacity: draggedItem === item.id || draggedItemInside?.requestId === item.id ? 0.4 : 1,
-                            boxShadow: (draggedItem === item.id || draggedItemInside?.requestId === item.id) ? `0 0 0 2px ${st.bg}40` : 'none'
+                            boxShadow: (draggedItem === item.id || draggedItemInside?.requestId === item.id) ? `0 0 0 2px ${st.bg}40` : 'var(--shadow-sm)'
                           }}
                           onDragOver={e => { e.preventDefault(); }}
                           onDrop={e => handleInternalDrop(e, col, idx)}>
-                          <div className="px-4 pt-3 pb-2">
+                          <div className="px-4 py-3.5">
                             <div className="flex items-center gap-2 mb-1.5">
                               <span className="font-mono font-bold" style={{ color: st.bg, fontSize: '1rem' }}>#{item.case_id || item.id}</span>
                               {item.priority === 'high' && <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: '#EF444420', color: '#EF4444' }}>عاجل</span>}
                             </div>
                             <p className="font-medium leading-snug line-clamp-2 mb-2" style={{ color: 'var(--text-primary)' }}>{item.case_title || item.title || 'بدون عنوان'}</p>
-                            {item.agency_name_ar && <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>🏛️ {item.agency_name_ar}</p>}
-                            {item.sent_date && <p className="text-xs" style={{ color: 'var(--text-muted)' }}>📅 {new Date(item.sent_date).toLocaleDateString('ar-EG')}</p>}
-                          </div>
-                          <div className="px-4 py-2 border-t flex items-center gap-2" onClick={e => e.stopPropagation()}
-                            style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)' }}>
-                            <span className="text-xs shrink-0" style={{ color: 'var(--text-muted)' }}>⬇️</span>
-                            <select value={col.id} onChange={e => moveRequest(item.id, parseInt(e.target.value))}
-                              className="flex-1 px-2 py-1.5 rounded-lg border text-xs focus:outline-none cursor-pointer"
-                              style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
-                              {PIPELINE_LISTS_BY_ID.map(pl => <option key={pl.id} value={pl.id}>{pl.name}</option>)}
-                            </select>
+                            <div className="flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
+                              {item.agency_name_ar && <span className="truncate">🏛️ {item.agency_name_ar}</span>}
+                              {item.sent_date && <span className="shrink-0">📅 {new Date(item.sent_date).toLocaleDateString('ar-EG')}</span>}
+                            </div>
                           </div>
                         </div>
                       ))}
