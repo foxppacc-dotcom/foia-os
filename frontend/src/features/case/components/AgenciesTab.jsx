@@ -1,6 +1,6 @@
 import { api } from '../../../api';
 import { useState, useEffect, useMemo } from 'react';
-import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, ChevronDown, ChevronUp, User, UserPlus, XCircle, CheckCircle, AlertTriangle, CalendarClock } from 'lucide-react';
+import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, ChevronDown, ChevronUp, User, UserPlus, XCircle, CheckCircle, AlertTriangle, CalendarClock, History } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import { useRequests } from '../../request/hooks/useRequests';
 import { classifyRequest } from '../../request/services/requestApi';
@@ -53,10 +53,19 @@ export default function AgenciesTab() {
   const [savingAgency, setSavingAgency] = useState(false);
   const [showPortalForm, setShowPortalForm] = useState({});
   const [portalForm, setPortalForm] = useState({});
+  const [commRecords, setCommRecords] = useState([]);
 
   useEffect(() => {
     api.get('/email-accounts').then(d => setEmailAccounts(d.data || d.accounts || [])).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    api.get(`/cases/${id}/threads`).then(d => setCommRecords(d.threads || [])).catch(() => {});
+  }, [id, requests]);
+
+  const getRequestLog = (reqId, agencyId) => (commRecords || [])
+    .filter(c => c.request_id === reqId || (!c.request_id && c.agency_id === agencyId))
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
 
   const grouped = useMemo(() => {
     const map = {};
@@ -284,6 +293,7 @@ export default function AgenciesTab() {
                         const todayStr = new Date().toISOString().split('T')[0];
                         const isLate = !!(req.expected_response_date && req.expected_response_date < todayStr && !req.response_date);
                         const isPortalFormOpen = showPortalForm[req.id];
+                        const reqLog = getRequestLog(req.id, agency?.id);
                         return (
                           <div key={req.id} className="p-3.5 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: isLate ? '3px solid #ef4444' : '3px solid transparent' }}>
                             <div className="flex items-center gap-2 mb-2">
@@ -343,6 +353,27 @@ export default function AgenciesTab() {
                                 <div className="flex gap-1.5 justify-end pt-0.5">
                                   <AppButton size="sm" variant="secondary" onClick={() => setShowPortalForm(p => ({ ...p, [req.id]: false }))}>إلغاء</AppButton>
                                   <AppButton size="sm" onClick={() => logPortalSubmission(req.id, agency?.id)}><CheckCircle className="w-3.5 h-3.5" />تسجيل</AppButton>
+                                </div>
+                              </div>
+                            )}
+
+                            {reqLog.length > 0 && (
+                              <div className="mt-2">
+                                <div className="text-xs font-medium mb-1 flex items-center gap-1.5" style={{ color: 'var(--ds-text-muted)' }}>
+                                  <History className="w-3.5 h-3.5" /> سجل المراسلات مع هذه الجهة ({reqLog.length})
+                                </div>
+                                <div className="space-y-1">
+                                  {reqLog.map(c => (
+                                    <div key={c.id} className="text-xs p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>
+                                          {c.type === 'portal' ? '🌐' : c.type === 'email' ? '📧' : '📄'} {c.subject || '—'}
+                                        </span>
+                                        <span className="shrink-0" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(c.created_at)}</span>
+                                      </div>
+                                      {c.body && <div className="mt-0.5" style={{ color: 'var(--ds-text-secondary)' }}>{c.body}</div>}
+                                    </div>
+                                  ))}
                                 </div>
                               </div>
                             )}
