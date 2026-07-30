@@ -16,7 +16,7 @@ router.get('/pipeline-lists', requireAuth, async (req, res) => {
 // POST /api/pipeline-lists — إضافة قائمة جديدة
 router.post('/pipeline-lists', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
-  const { name_ar, name_en, color } = req.body;
+  const { name_ar, name_en, color, description, icon, sla_days, reminder_days, responsible_team_id } = req.body;
   if (!name_ar || !name_en) return res.status(400).json({ error: 'name_ar و name_en مطلوبان' });
 
   // Get next list_number
@@ -89,16 +89,21 @@ router.put('/pipeline-lists/:id/reorder', requireAuth, requireRole('admin'), asy
   res.json({ success: true, data: lists || [] });
 });
 
-// PUT /api/pipeline-lists/:id — تحديث قائمة (اسم، لون)
+// PUT /api/pipeline-lists/:id — تحديث قائمة (اسم، لون، وصف، إعدادات)
 router.put('/pipeline-lists/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
-  const { name_ar, name_en, color } = req.body;
+  const { name_ar, name_en, color, description, icon, sla_days, reminder_days, responsible_team_id } = req.body;
 
   const updates = {};
   if (name_ar !== undefined) updates.name_ar = name_ar;
   if (name_en !== undefined) updates.name_en = name_en;
   if (color !== undefined) updates.color = color;
+  if (description !== undefined) updates.description = description;
+  if (icon !== undefined) updates.icon = icon;
+  if (sla_days !== undefined) updates.sla_days = sla_days;
+  if (reminder_days !== undefined) updates.reminder_days = reminder_days;
+  if (responsible_team_id !== undefined) updates.responsible_team_id = responsible_team_id;
 
   await sup.from('pipeline_lists').update(updates).eq('id', id);
 
