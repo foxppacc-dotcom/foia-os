@@ -1,13 +1,13 @@
 import { getApiBase } from '../../../api';
 const API = getApiBase();
 import { useState, useEffect, useMemo } from 'react';
-import { Search, Trash2, FileText, Image, Video, Music, Folder, Upload, Eye } from 'lucide-react';
+import { Search, Trash2, FileText, Image, Video, Music, Folder, Upload, Eye, CheckSquare, Square, X, Download, Pencil } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import UploadZone from '../../drive/components/UploadZone';
 import AppBadge from '../../../components/ds/AppBadge';
 import Button from '../../../components/ui/Button';
 
-const tok = () => localStorage.getItem('token');
+const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 
 const fileIcons = { image: Image, video: Video, audio: Music, pdf: FileText, document: FileText };
@@ -30,7 +30,7 @@ function shortenSize(bytes) {
 }
 
 export default function DocumentsTab() {
-  const { id, documents, removeDocument, setPreviewFile } = useCaseContext();
+  const { id, documents, removeDocument, setPreviewFile, refetch } = useCaseContext();
   const [categories, setCategories] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [catFilter, setCatFilter] = useState('all');
@@ -41,6 +41,32 @@ export default function DocumentsTab() {
   useEffect(() => {
     fetch(`${API}/documents/categories`, { headers: hdrs() }).then(r => r.json()).then(d => setCategories(d.categories || []));
   }, []);
+
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  const startRename = (doc) => { setRenamingId(doc.id); setRenameValue(doc.original_name || doc.file_name || ''); };
+
+  const commitRename = async (docId) => {
+    const newName = renameValue.trim();
+    setRenamingId(null);
+    if (!newName) return;
+    try {
+      const r = await fetch(`${API}/documents/${docId}`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ original_name: newName }) });
+      const d = await r.json();
+      if (d.success) refetch?.(true);
+      else alert('❌ ' + (d.error || 'فشلت إعادة التسمية'));
+    } catch (e) { alert('❌ ' + e.message); }
+  };
+
+  const downloadDocument = async (docId) => {
+    try {
+      const r = await fetch(`${API}/documents/${docId}/download`, { headers: hdrs() });
+      const d = await r.json();
+      if (d.url) window.open(d.url, '_blank', 'noopener,noreferrer');
+      else alert('❌ ' + (d.error || 'تعذر التحميل'));
+    } catch (e) { alert('❌ ' + e.message); }
+  };
 
   const filtered = useMemo(() => {
     let list = [...(documents || [])];
@@ -144,8 +170,15 @@ export default function DocumentsTab() {
                   </button>
                   <Icon className="w-4 h-4 shrink-0" style={{ color: fileColors[ft] || '#636366' }} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-[11px] font-medium truncate cursor-pointer" style={{ color: 'var(--ds-text-primary)' }}
-                      onClick={() => setPreviewFile?.(doc)}>{doc.file_name || doc.original_name || 'بدون اسم'}</div>
+                    {renamingId === doc.id ? (
+                      <input autoFocus className="w-full text-[11px] px-1 py-0.5 rounded" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-accent)', color: 'var(--ds-text-primary)' }}
+                        value={renameValue} onChange={e => setRenameValue(e.target.value)}
+                        onBlur={() => commitRename(doc.id)}
+                        onKeyDown={e => { if (e.key === 'Enter') commitRename(doc.id); if (e.key === 'Escape') setRenamingId(null); }} />
+                    ) : (
+                      <div className="text-[11px] font-medium truncate cursor-pointer" style={{ color: 'var(--ds-text-primary)' }}
+                        onClick={() => setPreviewFile?.(doc)}>{doc.original_name || doc.file_name || 'بدون اسم'}</div>
+                    )}
                   </div>
                   <span className="text-[9px] w-20 truncate" style={{ color: 'var(--ds-text-muted)' }}>{cat?.name_ar || cat?.name || '—'}</span>
                   <span className="text-[9px] w-16" style={{ color: 'var(--ds-text-muted)' }}>{size}</span>
@@ -157,8 +190,17 @@ export default function DocumentsTab() {
                   <span className="text-[9px] w-16" style={{ color: 'var(--ds-text-muted)' }}>
                     {doc.created_at ? new Date(doc.created_at).toLocaleDateString('ar-SA') : ''}
                   </span>
-                  <button className="p-1 rounded shrink-0" style={{ color: 'var(--ds-text-muted)' }} onClick={() => setPreviewFile?.(doc)}>
+                  <button className="p-1 rounded shrink-0" title="معاينة" style={{ color: 'var(--ds-text-muted)' }} onClick={() => setPreviewFile?.(doc)}>
                     <Eye className="w-3.5 h-3.5" />
+                  </button>
+                  <button className="p-1 rounded shrink-0" title="إعادة تسمية" style={{ color: 'var(--ds-text-muted)' }} onClick={() => startRename(doc)}>
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button className="p-1 rounded shrink-0" title="تحميل" style={{ color: 'var(--ds-text-muted)' }} onClick={() => downloadDocument(doc.id)}>
+                    <Download className="w-3.5 h-3.5" />
+                  </button>
+                  <button className="p-1 rounded shrink-0" title="حذف" style={{ color: '#ef4444' }} onClick={() => removeDocument?.(doc.id)}>
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               );

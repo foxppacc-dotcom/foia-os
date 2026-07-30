@@ -91,12 +91,43 @@ router.post('/documents/:id/verify', requireAuth, async (req, res) => {
   res.json({ success: true, document: data });
 });
 
-// PUT /api/documents/:id — update document metadata
+// PUT /api/documents/:id — update document metadata (rename, notes, category, etc.)
+// Whitelisted -- req.body used to be passed straight into .update() with no
+// field restriction, letting a caller silently reassign case_id, storage_key,
+// uploaded_by, or any other column on a request they control.
 router.put('/documents/:id', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data, error } = await sup.from('case_documents').update(req.body).eq('id', parseInt(req.params.id)).select().single();
+  const allowed = ['original_name', 'description', 'category_id', 'verification_status', 'tags', 'confidentiality'];
+  const updates = {};
+  for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields to update' });
+
+  const { data: before } = await sup.from('case_documents').select('case_id, original_name').eq('id', parseInt(req.params.id)).maybeSingle();
+  const { data, error } = await sup.from('case_documents').update(updates).eq('id', parseInt(req.params.id)).select().single();
   if (error) return res.status(400).json({ error: error.message });
+
+  if (before && updates.original_name && updates.original_name !== before.original_name) {
+    await sup.from('activity_logs').insert({
+      user_id: req.user?.id, user_name: req.user?.name,
+      action_type: 'document_renamed', target_type: 'case', target_id: before.case_id,
+      target_title: `✏️ ${before.original_name} → ${updates.original_name}`,
+    }).catch(e => console.error('[documents] rename activity log failed:', e.message));
+  }
+
   res.json({ success: true, document: data });
+});
+
+// GET /api/documents/:id/download — signed URL for download/preview
+router.get('/documents/:id/download', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const { data: doc } = await sup.from('case_documents').select('storage_key, file_path, original_name').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+  const key = doc.storage_key || doc.file_path;
+  if (!key || !key.includes('/')) return res.status(404).json({ error: 'No storage key on this document' });
+  const [bucket, ...pathParts] = key.split('/');
+  const url = await storage.getSignedUrl(bucket, pathParts.join('/'));
+  if (!url) return res.status(500).json({ error: 'Could not generate download URL' });
+  res.json({ success: true, url, filename: doc.original_name });
 });
 
 // DELETE /api/documents/:id — soft delete
