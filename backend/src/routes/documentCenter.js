@@ -31,7 +31,7 @@ router.put('/requests/:id/status', requireAuth, async (req, res) => {
   const { status } = req.body;
   if (!status) return res.status(400).json({ error: 'status required' });
   const update = { status };
-  if (status === 'sent' || status === 'reminder') update.sent_at = new Date().toISOString();
+  if (status === 'sent' || status === 'reminder') update.sent_date = new Date().toISOString();
   const { error } = await sup.from('requests').update(update).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });

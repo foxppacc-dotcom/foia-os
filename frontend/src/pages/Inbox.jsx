@@ -124,7 +124,7 @@ export default function InboxPage() {
                   <div className="text-xs font-medium mb-0.5" style={{ color: 'var(--ds-text-primary)' }}>{msg.subject}</div>
                   <div className="text-[10px] flex items-center gap-2" style={{ color: 'var(--ds-text-muted)' }}>
                     <span>إلى: {msg.recipient}</span>
-                    <span>{new Date(msg.created_at).toLocaleDateString('ar-SA')}</span>
+                    <span>{msg.created_at ? `${new Date(msg.created_at).toLocaleDateString('ar-SA')} ${new Date(msg.created_at).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
                     {msg.metadata?.attachments?.length > 0 && <span>📎 {msg.metadata.attachments.length}</span>}
                   </div>
                 </div>

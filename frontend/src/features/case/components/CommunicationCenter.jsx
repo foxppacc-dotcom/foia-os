@@ -9,6 +9,12 @@ const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 const authHdrs = () => ({ 'Authorization': `Bearer ${tok()}` });
 
+function formatDateTime(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return `${d.toLocaleDateString('ar-SA')} ${d.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
 function formatSize(bytes) {
   if (!bytes && bytes !== 0) return '';
   if (bytes < 1024) return bytes + ' B';
@@ -192,7 +198,7 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted }) {
         </div>
         <div className="text-right shrink-0">
           <div className="text-[10px]" style={{ color: daysWaiting > 14 ? '#ef4444' : daysWaiting > 7 ? '#eab308' : 'var(--ds-text-muted)' }}>{daysWaiting} يوم</div>
-          <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>{new Date(thread.created_at).toLocaleDateString('ar-SA')}</div>
+          <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(thread.created_at)}</div>
         </div>
       </div>
 
