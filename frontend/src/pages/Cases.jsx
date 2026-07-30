@@ -63,9 +63,9 @@ export default function Cases() {
       const newId = res.id;
       if (newId && form.selectedAgencies.length > 0) {
         const reqs = await api.get(`/cases/${newId}`);
-        for (const r of reqs.requests || []) {
-          await api.put(`/requests/${r.id}/classification`, { classification_id: 1 });
-        }
+        await Promise.all((reqs.requests || []).map(r =>
+          api.put(`/requests/${r.id}/classification`, { classification_id: 1 })
+        ));
       }
       setShowForm(false);
       setForm({ title: '', description: '', priority: 'medium', client_name: '', selectedAgencies: [] });
@@ -154,8 +154,8 @@ export default function Cases() {
 
       {/* Create Form */}
       {showForm && (
-        <div className="p-6 rounded-xl border animate-slideUp"
-          style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}>
+        <div className="p-6 rounded-2xl border animate-slideUp"
+          style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', boxShadow: 'var(--shadow-md)' }}>
           <h2 className="font-semibold mb-4" style={{ color: 'var(--accent)' }}>📝 قضية جديدة</h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -213,7 +213,7 @@ export default function Cases() {
                       {a.state && <p style={{ color: 'var(--text-muted)' }}>{a.state}</p>}
                     </div>
                     {form.selectedAgencies.includes(a.id) && (
-                      <span className="px-2 py-1 rounded" style={{ background: 'var(--accent)20', color: 'var(--accent)' }}>
+                      <span className="px-2 py-1 rounded" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>
                         ✅ مختار
                       </span>
                     )}
@@ -252,17 +252,17 @@ export default function Cases() {
           </div>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
+        <div className="overflow-x-auto rounded-2xl border" style={{ borderColor: 'var(--border)', boxShadow: 'var(--shadow-sm)' }}>
           <table className="w-full">
             <thead>
               <tr style={{ background: 'var(--bg-tertiary)' }}>
-                <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>#</th>
-                <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📌 العنوان</th>
-                <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>🏛️ الجهات</th>
-                <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📊 الحالة</th>
-                <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>⭐ الأولوية</th>
-                <th className="px-4 py-3 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📅 التاريخ</th>
-                <th className="px-4 py-3 text-center font-medium" style={{ color: 'var(--text-muted)' }}>⚙️</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>#</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📌 العنوان</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>🏛️ الجهات</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📊 الحالة</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>⭐ الأولوية</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📅 التاريخ</th>
+                <th className="px-4 py-3.5 text-center font-medium" style={{ color: 'var(--text-muted)' }}>⚙️</th>
               </tr>
             </thead>
             <tbody className="divide-y" style={{ borderColor: 'var(--border)' }}>
@@ -270,48 +270,50 @@ export default function Cases() {
                 const st = STATUS_STYLES[c.status] || { bg: '#6B7280', label: c.status };
                 return (
                   <tr key={c.id}
-                    className="cursor-pointer transition-all"
+                    className="cursor-pointer transition-colors"
                     style={{ borderColor: 'var(--border)' }}
                     onMouseOver={e => e.currentTarget.style.background = 'var(--bg-elevated)'}
                     onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
-                    
-                    <td className="px-4 py-3 font-mono font-bold" style={{ color: 'var(--accent)' }}>#{c.id}</td>
-                    
-                    <td className="px-4 py-3 font-medium" style={{ color: 'var(--text-primary)' }}
+
+                    <td className="px-4 py-3.5 font-mono font-bold" style={{ color: 'var(--accent)' }}>#{c.id}</td>
+
+                    <td className="px-4 py-3.5 font-medium" style={{ color: 'var(--text-primary)' }}
                       onClick={() => navigate(`/cases/${c.id}`)}>
                       {c.title}
                     </td>
-                    
-                    <td className="px-4 py-3" onClick={() => navigate(`/cases/${c.id}`)}>
-                      <span className="px-2.5 py-1 rounded font-medium" style={{ background: st.bg + '15', color: st.bg }}>
+
+                    <td className="px-4 py-3.5" onClick={() => navigate(`/cases/${c.id}`)}>
+                      <span className="px-2.5 py-1 rounded-lg font-medium" style={{ background: st.bg + '15', color: st.bg }}>
                         {c.request_count || 0} جهة
                       </span>
                     </td>
-                    
-                    <td className="px-4 py-3" onClick={() => navigate(`/cases/${c.id}`)}>
-                      <span className="px-2.5 py-1 rounded" style={{ background: st.bg + '15', color: st.bg }}>
+
+                    <td className="px-4 py-3.5" onClick={() => navigate(`/cases/${c.id}`)}>
+                      <span className="px-2.5 py-1 rounded-lg" style={{ background: st.bg + '15', color: st.bg }}>
                         {st.label}
                       </span>
                     </td>
 
-                    <td className="px-4 py-3" onClick={() => navigate(`/cases/${c.id}`)}>
-                      <span className={`px-2.5 py-1 rounded-md font-mono font-medium ${
+                    <td className="px-4 py-3.5" onClick={() => navigate(`/cases/${c.id}`)}>
+                      <span className={`px-2.5 py-1 rounded-lg font-mono font-medium ${
                         c.priority === 'high' ? 'text-[#EF4444] bg-[#EF4444]/10' :
                         c.priority === 'medium' ? 'text-[#F59E0B] bg-[#F59E0B]/10' : 'text-[#3B82F6] bg-[#3B82F6]/10'
                       }`}>
                         {c.priority === 'high' ? '🔴 عاجل' : c.priority === 'medium' ? '🟡 متوسط' : '🟢 منخفض'}
                       </span>
                     </td>
-                    
-                    <td className="px-4 py-3" style={{ color: 'var(--text-muted)' }}
+
+                    <td className="px-4 py-3.5" style={{ color: 'var(--text-muted)' }}
                       onClick={() => navigate(`/cases/${c.id}`)}>
                       {c.created_at ? new Date(c.created_at).toLocaleDateString('ar-EG') : '—'}
                     </td>
-                    
-                    <td className="px-4 py-3 text-center">
+
+                    <td className="px-4 py-3.5 text-center">
                       <button onClick={e => { e.stopPropagation(); handleDelete(c.id); }}
-                        className="px-3 py-1.5 rounded font-medium transition-all"
-                        style={{ background: '#EF444415', color: '#EF4444' }}>
+                        className="px-3 py-1.5 rounded-lg font-medium transition-colors"
+                        style={{ background: '#EF444415', color: '#EF4444' }}
+                        onMouseOver={e => e.currentTarget.style.background = '#EF444425'}
+                        onMouseOut={e => e.currentTarget.style.background = '#EF444415'}>
                         🗑️ حذف
                       </button>
                     </td>

@@ -77,31 +77,31 @@ export default memo(function CaseHeader() {
   };
 
   return (
-    <div className="rounded-xl p-4" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
-      {/* Top row: breadcrumb + actions */}
-      <div className="flex items-center justify-between mb-3">
+    <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', boxShadow: 'var(--shadow-sm)' }}>
+      {/* Utility bar: breadcrumb + actions — visually separated from the hero below */}
+      <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: '1px solid var(--ds-border)', background: 'var(--ds-bg-tertiary)' }}>
         <Link to="/cases" className="flex items-center gap-1 text-xs ds-transition-colors" style={{ color: 'var(--ds-text-muted)' }}
           onMouseEnter={e => e.currentTarget.style.color = 'var(--ds-text-primary)'}
           onMouseLeave={e => e.currentTarget.style.color = 'var(--ds-text-muted)'}>
           ← العودة للقضايا
         </Link>
         {/* Action buttons */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" title="تعيين فريق" onClick={() => setActiveTab?.('team')}><UserPlus className="w-3.5 h-3.5" /></Button>
           <Button variant="ghost" size="sm" title="رفع ملف" onClick={() => setActiveTab?.('documents')}><Upload className="w-3.5 h-3.5" /></Button>
           <Button variant="ghost" size="sm" title="توثيق" onClick={() => setActiveTab?.('checklist')}><Eye className="w-3.5 h-3.5" /></Button>
           <Button variant="ghost" size="sm" title="تجهيز الحزمة (مونتاج)" onClick={() => navigate(`/production?case_id=${caseId}`)}><Package className="w-3.5 h-3.5" /></Button>
           <Button variant="ghost" size="sm" title="نقل الملكية" onClick={() => setShowTransfer(!showTransfer)}><ArrowUpCircle className="w-3.5 h-3.5" /></Button>
-          <Button variant="ghost" size="sm" title="إغلاق القضية" onClick={handleClose} disabled={c.status === 'closed'}><XCircle className="w-3.5 h-3.5" style={{ color: '#ef4444' }} /></Button>
+          <Button variant="ghost" size="sm" title="إغلاق القضية" onClick={handleClose} disabled={c.status === 'closed'}><XCircle className="w-3.5 h-3.5" style={{ color: 'var(--ds-danger)' }} /></Button>
           {canDelete && (
-            <Button variant="ghost" size="sm" title="حذف القضية نهائيًا" onClick={handleDelete} disabled={deleting}><Trash2 className="w-3.5 h-3.5" style={{ color: '#ef4444' }} /></Button>
+            <Button variant="ghost" size="sm" title="حذف القضية نهائيًا" onClick={handleDelete} disabled={deleting}><Trash2 className="w-3.5 h-3.5" style={{ color: 'var(--ds-danger)' }} /></Button>
           )}
         </div>
       </div>
 
       {/* Transfer inline */}
       {showTransfer && (
-        <div className="flex items-center gap-2 mb-3 p-2 rounded-lg" style={{ background: 'var(--ds-bg-primary)', border: '1px dashed var(--ds-border)' }}>
+        <div className="flex items-center gap-2 mx-4 mt-3 p-2 rounded-lg" style={{ background: 'var(--ds-bg-primary)', border: '1px dashed var(--ds-border)' }}>
           <select className="flex-1 px-2 py-1 rounded text-xs" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
             value={transferTo} onChange={e => setTransferTo(e.target.value)}>
             <option value="">نقل إلى...</option>
@@ -114,39 +114,36 @@ export default memo(function CaseHeader() {
         </div>
       )}
 
-      {/* Case info + KPIs */}
-      <div className="flex flex-wrap items-start gap-4">
-        {/* Title + badges */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <h1 className="text-lg font-bold truncate" style={{ color: 'var(--ds-text-primary)' }}>{c.title}</h1>
-            <AppBadge variant={stageInfo.variant}>{stageInfo.label}</AppBadge>
-            <AppBadge variant={pBadge}>{c.priority === 'urgent' ? 'عاجل جدًا' : c.priority === 'high' ? 'عاجل' : c.priority === 'medium' ? 'متوسط' : 'عادي'}</AppBadge>
-          </div>
-          <div className="flex items-center gap-3 text-[11px]" style={{ color: 'var(--ds-text-muted)' }}>
-            <span>#{c.id}</span>
-            {c.owner_name && <span className="flex items-center gap-1"><Users className="w-3 h-3" />{c.owner_name}</span>}
-            <span className="flex items-center gap-1"><Building2 className="w-3 h-3" />{teamCount} أعضاء</span>
-            <span className="flex items-center gap-1"><FileText className="w-3 h-3" />{docCount} ملف</span>
-            <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(c.created_at).toLocaleDateString('ar-SA')}</span>
-          </div>
+      {/* Hero: title + badges + meta */}
+      <div className="px-5 pt-4 pb-3">
+        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+          <h1 className="text-xl font-bold truncate" style={{ color: 'var(--ds-text-primary)' }}>{c.title}</h1>
+          <AppBadge variant={stageInfo.variant}>{stageInfo.label}</AppBadge>
+          <AppBadge variant={pBadge}>{c.priority === 'urgent' ? 'عاجل جدًا' : c.priority === 'high' ? 'عاجل' : c.priority === 'medium' ? 'متوسط' : 'عادي'}</AppBadge>
         </div>
+        <div className="flex items-center gap-3 text-xs flex-wrap" style={{ color: 'var(--ds-text-muted)' }}>
+          <span>#{c.id}</span>
+          {c.owner_name && <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" />{c.owner_name}</span>}
+          <span className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" />{teamCount} أعضاء</span>
+          <span className="flex items-center gap-1"><FileText className="w-3.5 h-3.5" />{docCount} ملف</span>
+          <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" />{new Date(c.created_at).toLocaleDateString('ar-SA')}</span>
+        </div>
+      </div>
 
-        {/* KPI row */}
-        <div className="flex items-center gap-3 text-center">
-          {[
-            { label: 'السجلات', value: `${received}/${total}`, color: total > 0 && received === total ? '#22c55e' : '#eab308' },
-            { label: 'طلبات', value: pendingReqs, color: pendingReqs > 0 ? '#eab308' : '#22c55e' },
-            { label: 'توثيق', value: verificationsPending, color: verificationsPending > 0 ? '#8b5cf6' : '#22c55e' },
-            { label: 'مسدود', value: blockedIRs, color: blockedIRs > 0 ? '#ef4444' : '#22c55e' },
-            { label: 'متأخر الرد', value: overdueReqs, color: overdueReqs > 0 ? '#ef4444' : '#22c55e' },
-          ].map(k => (
-            <div key={k.label} className="min-w-[50px]">
-              <div className="text-lg font-bold" style={{ color: k.color }}>{k.value}</div>
-              <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>{k.label}</div>
-            </div>
-          ))}
-        </div>
+      {/* KPI row — its own visual layer, separated by a divider */}
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 px-5 py-3" style={{ borderTop: '1px solid var(--ds-border)', background: 'var(--ds-bg-tertiary)' }}>
+        {[
+          { label: 'السجلات', value: `${received}/${total}`, color: total > 0 && received === total ? 'var(--ds-success)' : 'var(--ds-warning)' },
+          { label: 'طلبات', value: pendingReqs, color: pendingReqs > 0 ? 'var(--ds-warning)' : 'var(--ds-success)' },
+          { label: 'توثيق', value: verificationsPending, color: verificationsPending > 0 ? '#8b5cf6' : 'var(--ds-success)' },
+          { label: 'مسدود', value: blockedIRs, color: blockedIRs > 0 ? 'var(--ds-danger)' : 'var(--ds-success)' },
+          { label: 'متأخر الرد', value: overdueReqs, color: overdueReqs > 0 ? 'var(--ds-danger)' : 'var(--ds-success)' },
+        ].map(k => (
+          <div key={k.label} className="text-center rounded-lg py-1.5" style={{ background: 'var(--ds-bg-secondary)' }}>
+            <div className="text-lg font-bold" style={{ color: k.color }}>{k.value}</div>
+            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>{k.label}</div>
+          </div>
+        ))}
       </div>
     </div>
   );

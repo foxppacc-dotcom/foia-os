@@ -53,13 +53,13 @@ router.get('/dashboard', async (req, res) => {
       cases: undefined
     }));
 
-    // Upcoming deadlines — cases with deadlines in the next 30 days
+    // Deadlines — includes overdue (deadline already passed) so the
+    // "متأخرة" stat below isn't always zero; ordered soonest/most-overdue first.
     const { data: upcomingDeadlines } = await sup
       .from('cases')
       .select(`id, uuid, title, deadline, status, priority, agencies!left(name_en), users!left(name)`)
       .not('deadline', 'is', null)
       .neq('status', 'closed')
-      .gte('deadline', new Date().toISOString().split('T')[0])
       .order('deadline', { ascending: true })
       .limit(10);
 
