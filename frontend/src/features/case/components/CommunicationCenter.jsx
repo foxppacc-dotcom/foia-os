@@ -1,4 +1,5 @@
 import { getApiBase } from '../../../api';
+import { useCaseContext } from '../context/CaseContext';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Send, Reply, Forward, Paperclip, Search, Clock, AlertCircle, Inbox, FileText, Building2, User, Mail, Tag, ChevronDown, ExternalLink, X, Download, Trash2 } from 'lucide-react';
 import Button from '../../../components/ui/Button';
@@ -26,11 +27,24 @@ function quoteOriginal(thread) {
 }
 
 function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'new', onSent }) {
+  const { requests } = useCaseContext();
   const isForward = mode === 'forward';
-  const [to, setTo] = useState(isForward ? '' : (replyTo?.sender || ''));
+  // Default to the case's own agency (from its requests) when composing fresh --
+  // the investigator shouldn't have to look up and re-select it every time.
+  const defaultAgencyId = !replyTo ? (requests || []).find(r => r.agency_id)?.agency_id || '' : '';
+  const [to, setTo] = useState(isForward ? '' : (replyTo?.sender || (agencies || []).find(a => a.id === defaultAgencyId)?.email || ''));
   const [cc, setCc] = useState(mode === 'replyAll' ? (replyTo?.metadata?.cc || '') : '');
   const [bcc, setBcc] = useState('');
-  const [agencyId, setAgencyId] = useState(replyTo?.agency_id || '');
+  const [agencyId, setAgencyId] = useState(replyTo?.agency_id || defaultAgencyId);
+
+  const handleAgencyChange = (newAgencyId) => {
+    setAgencyId(newAgencyId);
+    // Only auto-fill "to" if it's empty or still matches the previous agency's
+    // email -- never clobber an address the user deliberately typed in.
+    const prevAgencyEmail = (agencies || []).find(a => a.id === agencyId)?.email;
+    const newAgency = (agencies || []).find(a => a.id === newAgencyId);
+    if (newAgency?.email && (!to || to === prevAgencyEmail)) setTo(newAgency.email);
+  };
   const [accountId, setAccountId] = useState(replyTo?.email_account_id || replyTo?.assigned_email_account_id || accounts?.[0]?.id || '');
   const [subject, setSubject] = useState(
     isForward ? `Fwd: ${replyTo?.subject || ''}` : replyTo ? `Re: ${replyTo.subject}` : ''
@@ -39,6 +53,8 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
   const [sending, setSending] = useState(false);
   const [files, setFiles] = useState([]);
   const fileInputRef = useRef(null);
+  const [expectedDays, setExpectedDays] = useState(!isForward && !replyTo ? '14' : '');
+  const [customDays, setCustomDays] = useState('');
 
   const send = async () => {
     if (!to || !subject || !body) return;
@@ -54,6 +70,8 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
       if (agencyId) fd.append('agency_id', agencyId);
       if (replyTo?.request_id) fd.append('request_id', replyTo.request_id);
       if (!isForward && replyTo?.id) fd.append('reply_to_id', replyTo.id);
+      const daysValue = expectedDays === 'custom' ? customDays : expectedDays;
+      if (daysValue) fd.append('expected_response_days', daysValue);
       files.forEach(f => fd.append('attachments', f));
 
       const r = await fetch(`${API}/cases/${caseId}/compose`, { method: 'POST', headers: authHdrs(), body: fd });
@@ -73,7 +91,7 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
         {/* Agency + Account */}
         <div className="flex gap-2">
           <select className="flex-1 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
-            value={agencyId} onChange={e => setAgencyId(e.target.value)}>
+            value={agencyId} onChange={e => handleAgencyChange(e.target.value)}>
             <option value="">اختر الجهة</option>
             {(agencies || []).map(a => <option key={a.id} value={a.id}>{a.name_en || a.name || a.name_ar || ''}</option>)}
           </select>
@@ -93,6 +111,24 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
         </div>
         <input className="w-full px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
           placeholder="الموضوع..." value={subject} onChange={e => setSubject(e.target.value)} />
+        <div className="flex items-center gap-2">
+          <Clock className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--ds-text-muted)' }} />
+          <select className="flex-1 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
+            value={expectedDays} onChange={e => setExpectedDays(e.target.value)}>
+            <option value="">بدون موعد رد متوقع</option>
+            <option value="1">يوم واحد</option>
+            <option value="2">يومان</option>
+            <option value="3">3 أيام</option>
+            <option value="7">أسبوع (7 أيام)</option>
+            <option value="14">أسبوعان (14 يوم)</option>
+            <option value="30">شهر (30 يوم)</option>
+            <option value="custom">مخصص...</option>
+          </select>
+          {expectedDays === 'custom' && (
+            <input type="number" min="1" className="w-20 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
+              placeholder="أيام" value={customDays} onChange={e => setCustomDays(e.target.value)} />
+          )}
+        </div>
         <textarea className="w-full px-2 py-1.5 rounded text-xs min-h-[100px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
           placeholder="محتوى الرسالة..." value={body} onChange={e => setBody(e.target.value)} />
         {files.length > 0 && (

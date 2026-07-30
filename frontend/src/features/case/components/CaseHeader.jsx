@@ -45,6 +45,8 @@ export default memo(function CaseHeader() {
   const teamCount = team?.length || 0;
   const blockedIRs = checklist?.filter(i => i.evidence_stage === 'blocked' || i.status === 'blocked').length || 0;
   const verificationsPending = checklist?.filter(i => i.evidence_stage === 'received' || i.evidence_stage === 'evidence_received').length || 0;
+  const todayStr = new Date().toISOString().split('T')[0];
+  const overdueReqs = (requests || []).filter(r => r.expected_response_date && r.expected_response_date < todayStr && !r.response_date).length;
 
   const handleTransfer = async () => {
     if (!transferTo) return;
@@ -137,6 +139,7 @@ export default memo(function CaseHeader() {
             { label: 'طلبات', value: pendingReqs, color: pendingReqs > 0 ? '#eab308' : '#22c55e' },
             { label: 'توثيق', value: verificationsPending, color: verificationsPending > 0 ? '#8b5cf6' : '#22c55e' },
             { label: 'مسدود', value: blockedIRs, color: blockedIRs > 0 ? '#ef4444' : '#22c55e' },
+            { label: 'متأخر الرد', value: overdueReqs, color: overdueReqs > 0 ? '#ef4444' : '#22c55e' },
           ].map(k => (
             <div key={k.label} className="min-w-[50px]">
               <div className="text-lg font-bold" style={{ color: k.color }}>{k.value}</div>
