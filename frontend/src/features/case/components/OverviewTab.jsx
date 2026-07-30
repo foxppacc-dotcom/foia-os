@@ -79,7 +79,7 @@ export default function OverviewTab() {
                 const icoColor = isDone ? 'var(--ds-success)' : isNeg ? 'var(--ds-text-muted)' : 'var(--ds-warning)';
                 const statusText = statusLabels[item.status] || statusLabels[item.receipt_status] || '';
                 return (
-                  <div key={item.id} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
+                  <div key={item.id ?? item.record_type} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
                     <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: icoColor }} />
                     <span className="text-xs flex-1" style={{ color: 'var(--ds-text-primary)' }}>{meta?.label || item.record_type}</span>
                     {statusText && <span className="text-[10px]" style={{ color: icoColor }}>{statusText}</span>}
