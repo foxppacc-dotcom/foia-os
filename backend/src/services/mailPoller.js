@@ -151,13 +151,17 @@ class MailPoller {
           storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, storageKey });
 
           if (matchedCaseId) {
-            await sup.from('case_documents').insert({
+            // Supabase-js resolves {data, error} rather than throwing on a
+            // DB-level rejection -- must check `error` explicitly, a bare
+            // try/catch around the await would not have caught it.
+            const { error: docErr } = await sup.from('case_documents').insert({
               case_id: matchedCaseId,
               filename: att.filename, original_name: att.filename,
               mime_type: att.contentType, size: att.size,
               file_path: storageKey, storage_key: storageKey,
               file_type: guessFileType(att.filename),
-            }).catch(e => console.error(`[mailPoller] case_documents insert failed for "${att.filename}":`, e.message));
+            });
+            if (docErr) console.error(`[mailPoller] case_documents insert failed for "${att.filename}":`, docErr.message);
           }
         } catch (e) {
           console.error(`[mailPoller] attachment upload failed for "${att.filename}":`, e.message);

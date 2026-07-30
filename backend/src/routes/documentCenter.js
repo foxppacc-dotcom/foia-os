@@ -265,13 +265,14 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
       storedAttachments.push({ filename: file.originalname, size: file.size, mimeType: file.mimetype, storageKey });
       mailAttachments.push({ filename: file.originalname, content: file.buffer });
 
-      await sup.from('case_documents').insert({
+      const { error: docErr } = await sup.from('case_documents').insert({
         case_id: caseId,
         filename: file.originalname, original_name: file.originalname,
         mime_type: file.mimetype, size: file.size,
         file_path: storageKey, storage_key: storageKey,
         file_type: fileType, uploaded_by: req.user?.id,
-      }).catch(e => console.error(`[compose] case_documents insert failed for "${file.originalname}":`, e.message));
+      });
+      if (docErr) console.error(`[compose] case_documents insert failed for "${file.originalname}":`, docErr.message);
     }
 
     const emailService = require('../services/emailService');
