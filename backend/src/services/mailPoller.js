@@ -13,6 +13,29 @@ function guessFileType(filename) {
   return 'document';
 }
 
+// Extract an agency-assigned reference/tracking number from an email's
+// subject or body, e.g. "Reference Number: ABC-123", "Ref#: 456",
+// "رقم مرجعي: ABC123", "رقم التتبع: 456". Matters most when the agency
+// replies from a different address than the one on file -- the reference
+// number they quote back is often the only reliable link to the case.
+function extractReferenceNumber(text) {
+  if (!text) return null;
+  // Require either an explicit label keyword ("number"/"no") or at least one
+  // hard punctuation separator (: # .) -- never just the bare word on its
+  // own, or "a reference to X" would false-positive.
+  const patterns = [
+    /reference\s*(?:number|no)?\s*[:#\.]+\s*([A-Za-z0-9][A-Za-z0-9\-\/]{2,30})/i,
+    /\bref\.?\s*(?:number|no)?\s*[:#\.]+\s*([A-Za-z0-9][A-Za-z0-9\-\/]{2,30})/i,
+    /tracking\s*(?:number|no)?\s*[:#\.]+\s*([A-Za-z0-9][A-Za-z0-9\-\/]{2,30})/i,
+    /(?:رقم\s*(?:مرجعي|المرجع|التتبع|الطلب))\s*[:#\.]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{2,30})/,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m && m[1]) return m[1].trim();
+  }
+  return null;
+}
+
 class MailPoller {
   constructor() {
     this.clients = new Map();
@@ -100,6 +123,8 @@ class MailPoller {
       // Auto-matching
       let matchedCaseId = forceCaseId || null;
       let matchedAgencyId = null;
+      let matchedRequestId = null;
+      const extractedRefNumber = extractReferenceNumber(msg.subject) || extractReferenceNumber(msg.text);
 
       // 1. By Message-ID (already sent from this system)
       if (!matchedCaseId && msg.inReplyTo) {
@@ -132,12 +157,20 @@ class MailPoller {
         }
         if (agencyId) {
           // Find the most recent case for this agency
-          const { data: recentReq } = await sup.from('requests').select('case_id').eq('agency_id', agencyId).order('created_at', { ascending: false }).limit(1).maybeSingle();
-          if (recentReq) { matchedCaseId = recentReq.case_id; matchedAgencyId = agencyId; }
+          const { data: recentReq } = await sup.from('requests').select('id, case_id').eq('agency_id', agencyId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+          if (recentReq) { matchedCaseId = recentReq.case_id; matchedAgencyId = agencyId; matchedRequestId = recentReq.id; }
         }
       }
 
-      // 4. By case number in subject
+      // 4. By reference/tracking number the agency itself assigned and
+      // quoted back -- this is what still works when the agency replies
+      // from a completely different, previously-unknown address.
+      if (!matchedCaseId && extractedRefNumber) {
+        const { data: reqByRef } = await sup.from('requests').select('id, case_id, agency_id').eq('reference_number', extractedRefNumber).maybeSingle();
+        if (reqByRef) { matchedCaseId = reqByRef.case_id; matchedAgencyId = reqByRef.agency_id; matchedRequestId = reqByRef.id; }
+      }
+
+      // 5. By case number in subject
       if (!matchedCaseId) {
         const caseMatch = msg.subject.match(/#(\d+)|Case[:\s]*(\d+)/i) || msg.text?.match(/#(\d+)|Case[:\s]*(\d+)/i);
         if (caseMatch) {
@@ -146,7 +179,7 @@ class MailPoller {
         }
       }
 
-      // 5. By case title appearing in the subject (skip short/generic
+      // 6. By case title appearing in the subject (skip short/generic
       // titles -- too high a false-positive risk to match on those).
       if (!matchedCaseId) {
         const subjectLower = (msg.subject || '').toLowerCase();
@@ -154,6 +187,46 @@ class MailPoller {
           const { data: openCases } = await sup.from('cases').select('id, title').in('status', ['open', 'in_progress']);
           const match = (openCases || []).find(c => c.title && c.title.trim().length > 6 && subjectLower.includes(c.title.trim().toLowerCase()));
           if (match) matchedCaseId = match.id;
+        }
+      }
+
+      // 7. By the name of the agency actually linked to a case (via its
+      // requests) appearing in the subject or body -- covers the case
+      // where the agency's OWN name is quoted back even though the reply
+      // came from a completely different, unlisted address, so tier 3
+      // (agency email) never had a chance to fire.
+      if (!matchedCaseId) {
+        const haystack = `${msg.subject || ''} ${msg.text || ''}`.toLowerCase();
+        if (haystack.trim()) {
+          const { data: linkedAgencies } = await sup.from('requests')
+            .select('case_id, cases!inner(status), agencies!inner(id, name_ar, name_en)')
+            .in('cases.status', ['open', 'in_progress'])
+            .limit(500);
+          const match = (linkedAgencies || []).find(r => {
+            const names = [r.agencies?.name_ar, r.agencies?.name_en].filter(n => n && n.trim().length > 6);
+            return names.some(n => haystack.includes(n.trim().toLowerCase()));
+          });
+          if (match) { matchedCaseId = match.case_id; matchedAgencyId = match.agencies?.id || null; }
+        }
+      }
+
+      // If a case matched but we don't yet know the specific request (tiers
+      // 1/2/5/6 only resolve a case, not a request row), best-effort resolve
+      // one so a newly-seen reference number below has somewhere to attach.
+      if (matchedCaseId && !matchedRequestId) {
+        let reqQuery = sup.from('requests').select('id').eq('case_id', matchedCaseId);
+        if (matchedAgencyId) reqQuery = reqQuery.eq('agency_id', matchedAgencyId);
+        const { data: anyReq } = await reqQuery.order('created_at', { ascending: false }).limit(1).maybeSingle();
+        if (anyReq) matchedRequestId = anyReq.id;
+      }
+
+      // Learn the agency's reference number for next time, so a later reply
+      // from yet another unlisted address can still match via tier 4.
+      if (matchedRequestId && extractedRefNumber) {
+        const { data: reqRow } = await sup.from('requests').select('reference_number').eq('id', matchedRequestId).maybeSingle();
+        if (reqRow && !reqRow.reference_number) {
+          const { error: refSaveErr } = await sup.from('requests').update({ reference_number: extractedRefNumber }).eq('id', matchedRequestId);
+          if (refSaveErr) console.error('[mailPoller] reference_number save failed:', refSaveErr.message);
         }
       }
 
