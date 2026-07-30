@@ -4,6 +4,15 @@ const { getSupabase } = require('../supabase');
 const { decrypt } = require('./crypto');
 const storage = require('./storage');
 
+function guessFileType(filename) {
+  const dotIdx = (filename || '').lastIndexOf('.');
+  const ext = dotIdx >= 0 ? filename.slice(dotIdx).toLowerCase() : '';
+  if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext)) return 'image';
+  if (['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext)) return 'video';
+  if (['.mp3', '.wav', '.ogg', '.flac'].includes(ext)) return 'audio';
+  return 'document';
+}
+
 class MailPoller {
   constructor() {
     this.clients = new Map();
@@ -127,7 +136,9 @@ class MailPoller {
       }
 
       // Persist attachment content to Supabase Storage (was previously
-      // discarded after just counting them).
+      // discarded after just counting them), and -- when the email matched a
+      // case -- also register each one as a real Case Document so users
+      // find it in the Files tab, not only buried in the email thread.
       const storedAttachments = [];
       for (const att of msg.attachments) {
         if (!att.content) continue;
@@ -138,6 +149,16 @@ class MailPoller {
           const storagePath = `${subdir}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
           const storageKey = await storage.upload('case-documents', storagePath, buffer, att.contentType);
           storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, storageKey });
+
+          if (matchedCaseId) {
+            await sup.from('case_documents').insert({
+              case_id: matchedCaseId,
+              filename: att.filename, original_name: att.filename,
+              mime_type: att.contentType, size: att.size,
+              file_path: storageKey, storage_key: storageKey,
+              file_type: guessFileType(att.filename),
+            }).catch(e => console.error(`[mailPoller] case_documents insert failed for "${att.filename}":`, e.message));
+          }
         } catch (e) {
           console.error(`[mailPoller] attachment upload failed for "${att.filename}":`, e.message);
           storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, error: e.message });

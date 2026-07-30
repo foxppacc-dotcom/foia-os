@@ -249,15 +249,29 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
     }
 
     // Upload attachments to Supabase Storage AND attach them to the outgoing
-    // email itself (nodemailer accepts a raw Buffer for `content`).
+    // email itself (nodemailer accepts a raw Buffer for `content`). Also
+    // register each one as a real Case Document -- sent attachments should
+    // show up in the Files tab too, not only in the email thread.
     const storedAttachments = [];
     const mailAttachments = [];
     for (const file of req.files || []) {
-      const ext = file.originalname?.includes('.') ? file.originalname.slice(file.originalname.lastIndexOf('.')) : '';
+      const dotIdx = file.originalname?.lastIndexOf('.') ?? -1;
+      const ext = dotIdx >= 0 ? file.originalname.slice(dotIdx) : '';
+      const fileType = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext.toLowerCase()) ? 'image'
+        : ['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext.toLowerCase()) ? 'video'
+        : ['.mp3', '.wav', '.ogg', '.flac'].includes(ext.toLowerCase()) ? 'audio' : 'document';
       const storagePath = `case_${caseId}/email/${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
       const storageKey = await storage.upload('case-documents', storagePath, file.buffer, file.mimetype);
       storedAttachments.push({ filename: file.originalname, size: file.size, mimeType: file.mimetype, storageKey });
       mailAttachments.push({ filename: file.originalname, content: file.buffer });
+
+      await sup.from('case_documents').insert({
+        case_id: caseId,
+        filename: file.originalname, original_name: file.originalname,
+        mime_type: file.mimetype, size: file.size,
+        file_path: storageKey, storage_key: storageKey,
+        file_type: fileType, uploaded_by: req.user?.id,
+      }).catch(e => console.error(`[compose] case_documents insert failed for "${file.originalname}":`, e.message));
     }
 
     const emailService = require('../services/emailService');
