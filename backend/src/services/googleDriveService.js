@@ -14,10 +14,63 @@ const { getSupabase } = require('../supabase');
 class GoogleDriveService {
   constructor() {
     this.drive = null;
+    this.cachedRefreshToken = null;
   }
 
   get configured() {
     return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_DRIVE_ROOT_FOLDER);
+  }
+
+  newOAuthClient() {
+    const { google } = require('googleapis');
+    return new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+  }
+
+  // The refresh token is produced by the one-time OAuth consent flow
+  // (/api/gdrive/auth-url -> /api/gdrive/oauth-callback) and persisted in
+  // system_settings rather than requiring a Vercel env var + redeploy every
+  // time someone (re)connects an account.
+  async getStoredRefreshToken() {
+    if (process.env.GOOGLE_DRIVE_REFRESH_TOKEN) return process.env.GOOGLE_DRIVE_REFRESH_TOKEN;
+    const sup = getSupabase();
+    const { data } = await sup.from('system_settings').select('value').eq('key', 'gdrive_refresh_token').maybeSingle();
+    return data?.value || null;
+  }
+
+  async saveConnection(refreshToken, email) {
+    const sup = getSupabase();
+    const now = new Date().toISOString();
+    const rows = [
+      { key: 'gdrive_refresh_token', value: refreshToken },
+      { key: 'gdrive_connected_email', value: email || '' },
+      { key: 'gdrive_connected_at', value: now },
+    ];
+    for (const row of rows) {
+      const { data: exists } = await sup.from('system_settings').select('key').eq('key', row.key).maybeSingle();
+      if (exists) await sup.from('system_settings').update({ value: row.value, updated_at: now }).eq('key', row.key);
+      else await sup.from('system_settings').insert({ key: row.key, value: row.value, updated_at: now });
+    }
+    this.drive = null; // force re-init with the new token
+  }
+
+  async clearConnection() {
+    const sup = getSupabase();
+    await sup.from('system_settings').delete().in('key', ['gdrive_refresh_token', 'gdrive_connected_email', 'gdrive_connected_at']);
+    this.drive = null;
+  }
+
+  async isConnected() {
+    return !!(await this.getStoredRefreshToken());
+  }
+
+  async getConnectedEmail() {
+    const sup = getSupabase();
+    const { data } = await sup.from('system_settings').select('value').eq('key', 'gdrive_connected_email').maybeSingle();
+    return data?.value || null;
   }
 
   /**
@@ -29,17 +82,10 @@ class GoogleDriveService {
 
     try {
       const { google } = require('googleapis');
-      const auth = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI
-      );
-
-      if (process.env.GOOGLE_DRIVE_REFRESH_TOKEN) {
-        auth.setCredentials({ refresh_token: process.env.GOOGLE_DRIVE_REFRESH_TOKEN });
-      } else {
-        return null; // no token yet — needs the OAuth consent flow to be completed once
-      }
+      const auth = this.newOAuthClient();
+      const refreshToken = await this.getStoredRefreshToken();
+      if (!refreshToken) return null; // no token yet — needs the OAuth consent flow to be completed once
+      auth.setCredentials({ refresh_token: refreshToken });
 
       this.drive = google.drive({ version: 'v3', auth });
       return this.drive;

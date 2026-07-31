@@ -1,19 +1,37 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
-import { Plus, Search, Link, FolderOpen, FileText, Trash2 } from 'lucide-react';
+import { Plus, FolderOpen, FileText, Trash2, CloudCog, CheckCircle2, XCircle, Link2Off } from 'lucide-react';
 import AppButton from '../components/ds/AppButton';
 import AppCard from '../components/ds/AppCard';
-import AppInput from '../components/ds/AppInput';
 
 export default function CaseGDrive() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [status, setStatus] = useState({ configured: false, connected: false, email: null });
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [connectMsg, setConnectMsg] = useState(null);
   const [cases, setCases] = useState([]);
   const [selectedCaseId, setSelectedCaseId] = useState('');
   const [files, setFiles] = useState([]);
+  const [folder, setFolder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showLinkFile, setShowLinkFile] = useState(false);
   const [showLinkFolder, setShowLinkFolder] = useState(false);
   const [fileForm, setFileForm] = useState({ file_id: '', file_name: '', web_link: '' });
   const [folderForm, setFolderForm] = useState({ folder_id: '', folder_name: '' });
+
+  useEffect(() => {
+    const result = searchParams.get('gdrive');
+    if (result === 'success') setConnectMsg({ ok: true, text: '✅ تم ربط حساب جوجل درايف بنجاح' });
+    else if (result === 'error') setConnectMsg({ ok: false, text: '❌ فشل الربط: ' + (searchParams.get('msg') || 'خطأ غير معروف') });
+    if (result) { searchParams.delete('gdrive'); searchParams.delete('msg'); setSearchParams(searchParams, { replace: true }); }
+  }, []);
+
+  const fetchStatus = () => {
+    setStatusLoading(true);
+    api.get('/gdrive/status').then(setStatus).catch(() => {}).finally(() => setStatusLoading(false));
+  };
+  useEffect(() => { fetchStatus(); }, []);
 
   useEffect(() => {
     api.getCases().then(d => {
@@ -23,40 +41,57 @@ export default function CaseGDrive() {
   }, []);
 
   const fetchFiles = (caseId) => {
-    if (!caseId) { setFiles([]); return; }
-    api.get(`/api/gdrive/case/${caseId}`)
-      .then(d => setFiles(Array.isArray(d) ? d : d.data || []))
-      .catch(() => setFiles([]));
+    if (!caseId) { setFiles([]); setFolder(null); return; }
+    api.get(`/gdrive/case/${caseId}`)
+      .then(d => { setFiles(d.data || []); setFolder(d.folder || null); })
+      .catch(() => { setFiles([]); setFolder(null); });
   };
 
   useEffect(() => {
     if (selectedCaseId) fetchFiles(selectedCaseId);
-    else setFiles([]);
+    else { setFiles([]); setFolder(null); }
   }, [selectedCaseId]);
+
+  const connectDrive = async () => {
+    try {
+      const { url } = await api.get('/gdrive/auth-url');
+      window.location.href = url; // real browser navigation — OAuth consent can't happen via fetch
+    } catch (e) { setConnectMsg({ ok: false, text: '❌ ' + e.message }); }
+  };
+
+  const disconnectDrive = async () => {
+    if (!confirm('قطع الاتصال بحساب جوجل درايف الحالي؟')) return;
+    try { await api.post('/gdrive/disconnect', {}); fetchStatus(); } catch {}
+  };
 
   const linkFile = async () => {
     if (!fileForm.file_name.trim() || !fileForm.web_link.trim()) return;
     const payload = {
       case_id: parseInt(selectedCaseId),
-      file_id: fileForm.file_id || null,
+      file_id: fileForm.file_id || `manual-${Date.now()}`,
       file_name: fileForm.file_name,
       web_link: fileForm.web_link,
     };
-    try { const res = await api.post('/api/gdrive/link', payload); if (res.success) { setShowLinkFile(false); setFileForm({ file_id: '', file_name: '', web_link: '' }); fetchFiles(selectedCaseId); } } catch {}
+    try { const res = await api.post('/gdrive/link', payload); if (res.success) { setShowLinkFile(false); setFileForm({ file_id: '', file_name: '', web_link: '' }); fetchFiles(selectedCaseId); } } catch {}
   };
 
   const linkFolder = async () => {
     if (!folderForm.folder_id.trim() || !folderForm.folder_name.trim()) return;
     try {
-      const res = await api.post('/api/gdrive/folder', {
+      const res = await api.post('/gdrive/folder', {
         case_id: parseInt(selectedCaseId), folder_id: folderForm.folder_id, folder_name: folderForm.folder_name
       });
       if (res.success) { setShowLinkFolder(false); setFolderForm({ folder_id: '', folder_name: '' }); fetchFiles(selectedCaseId); }
     } catch {}
   };
 
-  const deleteItem = async (id, type) => {
-    try { await api.del(`/api/gdrive/${type}/${id}`); fetchFiles(selectedCaseId); } catch {}
+  const deleteFile = async (id) => {
+    try { await api.delete(`/gdrive/file/${id}`); fetchFiles(selectedCaseId); } catch {}
+  };
+
+  const unlinkFolder = async () => {
+    if (!confirm('إزالة ربط المجلد من هذه القضية؟')) return;
+    try { await api.delete(`/gdrive/folder/${selectedCaseId}`); fetchFiles(selectedCaseId); } catch {}
   };
 
   const inputStyle = {
@@ -70,6 +105,46 @@ export default function CaseGDrive() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>Google Drive</h1>
       </div>
+
+      {connectMsg && (
+        <div className="flex items-center gap-2 p-3 rounded-xl text-sm" style={{ background: connectMsg.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: connectMsg.ok ? 'var(--success)' : 'var(--danger)' }}>
+          {connectMsg.text}
+        </div>
+      )}
+
+      {/* Connection status */}
+      <AppCard>
+        {statusLoading ? (
+          <div className="skeleton h-8 rounded-lg" />
+        ) : !status.configured ? (
+          <div className="flex items-center gap-3">
+            <CloudCog className="w-5 h-5 shrink-0" style={{ color: 'var(--text-muted)' }} />
+            <div>
+              <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>لم يتم إعداد التكامل بعد</p>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>يحتاج المدير لإضافة GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI / GOOGLE_DRIVE_ROOT_FOLDER في متغيرات بيئة الخادم أولاً.</p>
+            </div>
+          </div>
+        ) : status.connected ? (
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="w-5 h-5 shrink-0" style={{ color: 'var(--success)' }} />
+              <div>
+                <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>متصل بحساب جوجل درايف</p>
+                {status.email && <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{status.email}</p>}
+              </div>
+            </div>
+            <AppButton size="sm" variant="secondary" icon={<Link2Off className="w-3.5 h-3.5" />} onClick={disconnectDrive}>قطع الاتصال</AppButton>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              <XCircle className="w-5 h-5 shrink-0" style={{ color: 'var(--warning)' }} />
+              <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>غير متصل بجوجل درايف</p>
+            </div>
+            <AppButton size="sm" icon={<CloudCog className="w-3.5 h-3.5" />} onClick={connectDrive}>ربط حساب جوجل درايف</AppButton>
+          </div>
+        )}
+      </AppCard>
 
       {loading ? (
         <div className="space-y-4">
@@ -92,12 +167,25 @@ export default function CaseGDrive() {
                 <AppButton size="sm" variant="secondary" icon={<Plus className="w-3.5 h-3.5" />} onClick={() => setShowLinkFile(true)}>
                   ربط ملف
                 </AppButton>
-                <AppButton size="sm" variant="secondary" icon={<FolderOpen className="w-3.5 h-3.5" />} onClick={() => setShowLinkFolder(true)}>
-                  ربط مجلد
-                </AppButton>
+                {!folder && (
+                  <AppButton size="sm" variant="secondary" icon={<FolderOpen className="w-3.5 h-3.5" />} onClick={() => setShowLinkFolder(true)}>
+                    ربط مجلد
+                  </AppButton>
+                )}
               </div>
             )}
           </div>
+
+          {selectedCaseId && folder && (
+            <div className="flex items-center justify-between p-3 rounded-xl text-sm" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+              <span className="flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+                <FolderOpen className="w-4 h-4" style={{ color: 'var(--accent)' }} /> مجلد مرتبط: {folder.folderId}
+              </span>
+              <button onClick={unlinkFolder} className="p-1.5 rounded-lg ds-transition-colors" style={{ color: 'var(--text-muted)' }}>
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Files List */}
           {selectedCaseId && (
@@ -109,16 +197,16 @@ export default function CaseGDrive() {
                       <div className="flex items-center gap-3 min-w-0">
                         <FileText className="w-4 h-4 shrink-0" style={{ color: 'var(--accent)' }} />
                         <div className="min-w-0">
-                          <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{f.file_name}</p>
-                          {f.web_link && (
-                            <a href={f.web_link} target="_blank" rel="noopener noreferrer" className="text-[10px] hover:underline"
+                          <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{f.original_name || f.filename}</p>
+                          {f.drive_url && (
+                            <a href={f.drive_url} target="_blank" rel="noopener noreferrer" className="text-[10px] hover:underline"
                               style={{ color: 'var(--accent)' }}>
                               فتح في Drive
                             </a>
                           )}
                         </div>
                       </div>
-                      <button onClick={() => deleteItem(f.id, f.folder_id ? 'folder' : 'file')}
+                      <button onClick={() => deleteFile(f.id)}
                         className="p-1.5 rounded-lg ds-transition-colors" style={{ color: 'var(--text-muted)' }}>
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
