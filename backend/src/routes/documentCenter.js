@@ -4,6 +4,8 @@ const { requireAuth } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const multer = require('multer');
 const storage = require('../services/storage');
+const caseFileStorage = require('../services/caseFileStorage');
+const gdrive = require('../services/googleDriveService');
 const composeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 // communications.metadata is a plain TEXT column (not jsonb) — must stringify/parse manually.
@@ -102,9 +104,13 @@ router.put('/documents/:id', requireAuth, async (req, res) => {
   for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields to update' });
 
-  const { data: before } = await sup.from('case_documents').select('case_id, original_name').eq('id', parseInt(req.params.id)).maybeSingle();
+  const { data: before } = await sup.from('case_documents').select('case_id, original_name, storage_provider, drive_file_id').eq('id', parseInt(req.params.id)).maybeSingle();
   const { data, error } = await sup.from('case_documents').update(updates).eq('id', parseInt(req.params.id)).select().single();
   if (error) return res.status(400).json({ error: error.message });
+
+  if (before?.storage_provider === 'google_drive' && before.drive_file_id && updates.original_name) {
+    await gdrive.renameFile(before.drive_file_id, updates.original_name).catch(e => console.error('[documents] Drive rename failed:', e.message));
+  }
 
   if (before && updates.original_name && updates.original_name !== before.original_name) {
     await sup.from('activity_logs').insert({
@@ -120,8 +126,14 @@ router.put('/documents/:id', requireAuth, async (req, res) => {
 // GET /api/documents/:id/download — signed URL for download/preview
 router.get('/documents/:id/download', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data: doc } = await sup.from('case_documents').select('storage_key, file_path, original_name').eq('id', parseInt(req.params.id)).maybeSingle();
+  const { data: doc } = await sup.from('case_documents').select('storage_key, file_path, original_name, storage_provider, drive_file_id').eq('id', parseInt(req.params.id)).maybeSingle();
   if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+  if (doc.storage_provider === 'google_drive' && doc.drive_file_id) {
+    const { downloadUrl, viewUrl } = await gdrive.getFileLinks(doc.drive_file_id);
+    return res.json({ success: true, url: downloadUrl || viewUrl || doc.file_path, filename: doc.original_name });
+  }
+
   const key = doc.storage_key || doc.file_path;
   if (!key || !key.includes('/')) return res.status(404).json({ error: 'No storage key on this document' });
   const [bucket, ...pathParts] = key.split('/');
@@ -279,7 +291,7 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
       }
     }
 
-    // Upload attachments to Supabase Storage AND attach them to the outgoing
+    // Upload attachments to Google Drive AND attach them to the outgoing
     // email itself (nodemailer accepts a raw Buffer for `content`). Also
     // register each one as a real Case Document -- sent attachments should
     // show up in the Files tab too, not only in the email thread.
@@ -291,19 +303,26 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
       const fileType = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext.toLowerCase()) ? 'image'
         : ['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext.toLowerCase()) ? 'video'
         : ['.mp3', '.wav', '.ogg', '.flac'].includes(ext.toLowerCase()) ? 'audio' : 'document';
-      const storagePath = `case_${caseId}/email/${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
-      const storageKey = await storage.upload('case-documents', storagePath, file.buffer, file.mimetype);
-      storedAttachments.push({ filename: file.originalname, size: file.size, mimeType: file.mimetype, storageKey });
       mailAttachments.push({ filename: file.originalname, content: file.buffer });
 
-      const { error: docErr } = await sup.from('case_documents').insert({
-        case_id: caseId,
-        filename: file.originalname, original_name: file.originalname,
-        mime_type: file.mimetype, size: file.size,
-        file_path: storageKey, storage_key: storageKey,
-        file_type: fileType, uploaded_by: req.user?.id,
-      });
-      if (docErr) console.error(`[compose] case_documents insert failed for "${file.originalname}":`, docErr.message);
+      try {
+        const driveFields = await caseFileStorage.saveCaseFile({
+          caseId, buffer: file.buffer, fileName: file.originalname, mimeType: file.mimetype, category: 'outgoing',
+        });
+        storedAttachments.push({ filename: file.originalname, size: file.size, mimeType: file.mimetype, driveFileId: driveFields.drive_file_id, viewUrl: driveFields.file_path });
+
+        const { error: docErr } = await sup.from('case_documents').insert({
+          case_id: caseId,
+          filename: file.originalname, original_name: file.originalname,
+          mime_type: file.mimetype, size: file.size,
+          file_type: fileType, uploaded_by: req.user?.id,
+          ...driveFields, url: driveFields.file_path,
+        });
+        if (docErr) console.error(`[compose] case_documents insert failed for "${file.originalname}":`, docErr.message);
+      } catch (uploadErr) {
+        console.error(`[compose] Drive upload failed for "${file.originalname}":`, uploadErr.message);
+        storedAttachments.push({ filename: file.originalname, size: file.size, mimeType: file.mimetype, uploadError: uploadErr.message });
+      }
     }
 
     const emailService = require('../services/emailService');
@@ -413,7 +432,12 @@ router.get('/communications/:id/attachments/:index/download', requireAuth, async
     const { data: comm } = await sup.from('communications').select('metadata').eq('id', parseInt(req.params.id)).maybeSingle();
     const attachments = parseMetadata(comm?.metadata).attachments || [];
     const att = attachments[parseInt(req.params.index)];
-    if (!att || !att.storageKey) return res.status(404).json({ error: 'Attachment not found' });
+    if (!att) return res.status(404).json({ error: 'Attachment not found' });
+    if (att.driveFileId) {
+      const { downloadUrl, viewUrl } = await gdrive.getFileLinks(att.driveFileId);
+      return res.json({ success: true, url: downloadUrl || viewUrl || att.viewUrl, filename: att.filename });
+    }
+    if (!att.storageKey) return res.status(404).json({ error: 'Attachment not found' });
     const [bucket, ...pathParts] = att.storageKey.split('/');
     const url = await storage.getSignedUrl(bucket, pathParts.join('/'));
     if (!url) return res.status(500).json({ error: 'Could not generate download URL' });
@@ -435,7 +459,8 @@ router.delete('/communications/:id/attachments/:index', requireAuth, async (req,
     const att = attachments[index];
     if (!att) return res.status(404).json({ error: 'Attachment not found' });
 
-    if (att.storageKey) await storage.deleteByKey(att.storageKey).catch(e => console.warn('Storage delete failed:', e.message));
+    if (att.driveFileId) await gdrive.deleteFile(att.driveFileId).catch(e => console.warn('Drive delete failed:', e.message));
+    else if (att.storageKey) await storage.deleteByKey(att.storageKey).catch(e => console.warn('Storage delete failed:', e.message));
 
     const updatedAttachments = attachments.filter((_, i) => i !== index);
     await sup.from('communications').update({ metadata: JSON.stringify({ ...meta, attachments: updatedAttachments }) }).eq('id', commId);

@@ -435,6 +435,8 @@ router.get('/cases/:id/documents', async (req, res) => {
 const multer = require('multer');
 const path = require('path');
 const storage = require('../services/storage');
+const caseFileStorage = require('../services/caseFileStorage');
+const gdrive = require('../services/googleDriveService');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -455,16 +457,20 @@ router.post('/cases/:id/documents', upload.single('file'), async (req, res) => {
     let mime_type = req.body?.mime_type || req.file?.mimetype || 'application/octet-stream';
     let size = req.body?.size || req.file?.size || 0;
 
-    // Upload file to Supabase Storage if a file was uploaded
-    let storage_key = null;
+    // Google Drive is the single permanent storage backend for new uploads —
+    // bytes go straight from the multer memory buffer to Drive, never to
+    // Supabase Storage or local/Vercel disk.
+    let driveFields = null;
     if (req.file) {
-      const bucket = 'case-documents';
-      const subdir = `case_${caseId}`;
+      if (!(await gdrive.isConnected())) {
+        return res.status(503).json({ error: 'حساب Google Drive غير متصل — لازم يتم ربطه من صفحة Google Drive قبل رفع أي ملف' });
+      }
       try {
-        const result = await storage.uploadFromRequest(req.file, bucket, subdir);
-        storage_key = result.storageKey;
+        driveFields = await caseFileStorage.saveCaseFile({
+          caseId, buffer: req.file.buffer, fileName: original_name, mimeType: mime_type, category: 'attachments',
+        });
       } catch (uploadErr) {
-        return res.status(500).json({ error: 'فشل رفع الملف: ' + uploadErr.message });
+        return res.status(500).json({ error: 'فشل رفع الملف إلى Google Drive: ' + uploadErr.message });
       }
     }
 
@@ -478,17 +484,13 @@ router.post('/cases/:id/documents', upload.single('file'), async (req, res) => {
 
     const insertData = {
       case_id: caseId, filename, original_name, mime_type, size,
-      uploaded_by: req.user.id
+      uploaded_by: req.user.id, file_type, description,
     };
-    if (storage_key) {
-      insertData.storage_key = storage_key;
-      insertData.file_path = `uploads/case_docs/${Date.now()}_${original_name}`;
-      // Get a signed URL for immediate preview
-      const signedUrl = await storage.getSignedUrl('case-documents', storage_key.split('/').slice(1).join('/')).catch(() => null);
-      if (signedUrl) insertData.url = signedUrl;
-      insertData.file_type = file_type;
+    if (driveFields) {
+      Object.assign(insertData, driveFields);
+      insertData.url = driveFields.file_path;
     } else {
-      // For JSON body submissions with file_path, keep backward compat
+      // JSON body submissions with a pre-existing file_path (no multipart file) — legacy compat.
       let file_path = req.body?.file_path || '';
       if (file_path && !file_path.startsWith('uploads/')) {
         const idx = file_path.indexOf('uploads');
@@ -496,29 +498,14 @@ router.post('/cases/:id/documents', upload.single('file'), async (req, res) => {
       }
       insertData.file_path = file_path || 'uploads/placeholder';
     }
-    // Try with file_type and description — if columns don't exist, retry without
-    insertData.file_type = file_type;
-    insertData.description = description;
+    // Try with the full column set — if a column doesn't exist yet, retry without it.
     let { data, error } = await sup.from('case_documents').insert(insertData).select().single();
-    if (error && (error.message.includes('file_type') || error.message.includes('description'))) {
-      const safeInsert = {
-        case_id: caseId, filename, original_name, mime_type, size,
-        uploaded_by: req.user.id
-      };
-      if (storage_key) {
-        safeInsert.storage_key = storage_key;
-        safeInsert.file_path = `uploads/case_docs/${Date.now()}_${original_name}`;
-      } else {
-        let file_path = req.body?.file_path || '';
-        if (file_path && !file_path.startsWith('uploads/')) {
-          const idx = file_path.indexOf('uploads');
-          if (idx >= 0) file_path = file_path.substring(idx).replace(/\\\\/g, '/');
-        }
-        safeInsert.file_path = file_path || 'uploads/placeholder';
-      }
-      const retry = await sup.from('case_documents').insert(safeInsert).select().single();
-      data = retry.data;
-      error = retry.error;
+    while (error && /column .* does not exist|Could not find the '(\w+)' column/.test(error.message)) {
+      const m = error.message.match(/'(\w+)' column|column "(\w+)"/);
+      const badCol = m && (m[1] || m[2]);
+      if (!badCol || !(badCol in insertData)) break;
+      delete insertData[badCol];
+      ({ data, error } = await sup.from('case_documents').insert(insertData).select().single());
     }
     if (error) throw error;
 
@@ -539,14 +526,16 @@ router.delete('/cases/:id/documents/:docId', async (req, res) => {
     const docId = parseInt(req.params.docId);
     const caseId = parseInt(req.params.id);
     
-    // Fetch document first to get storage_key
-    const { data: doc } = await sup.from('case_documents').select('storage_key, file_path').eq('id', docId).eq('case_id', caseId).maybeSingle();
-    
+    // Fetch document first to know where its bytes actually live
+    const { data: doc } = await sup.from('case_documents').select('storage_key, storage_provider, drive_file_id').eq('id', docId).eq('case_id', caseId).maybeSingle();
+
     // Delete from database
     await sup.from('case_documents').delete().eq('id', docId).eq('case_id', caseId);
-    
-    // Delete from Supabase Storage (if storage_key exists)
-    if (doc?.storage_key) {
+
+    // Delete the underlying bytes from wherever they're actually stored
+    if (doc?.storage_provider === 'google_drive' && doc?.drive_file_id) {
+      await gdrive.deleteFile(doc.drive_file_id).catch(e => console.warn('⚠️ Drive delete failed:', e.message));
+    } else if (doc?.storage_key) {
       await storage.deleteByKey(doc.storage_key).catch(e => console.warn('⚠️ Storage delete failed:', e.message));
     }
     

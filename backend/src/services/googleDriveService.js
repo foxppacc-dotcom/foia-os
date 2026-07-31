@@ -195,6 +195,82 @@ class GoogleDriveService {
     if (!data || !data.drive_folder_id) return null;
     return { folderId: data.drive_folder_id, status: data.drive_folder_status };
   }
+
+  /**
+   * Idempotent: reuse cases.drive_folder_id if a case folder already
+   * exists, otherwise create one. This is the entry point every real
+   * upload path calls before writing bytes.
+   */
+  async ensureCaseFolder(caseId) {
+    const existing = await this.getCaseDriveFolder(caseId);
+    if (existing?.folderId) return existing.folderId;
+    const created = await this.createCaseFolder(caseId);
+    if (!created.configured) throw new Error('Google Drive غير متصل');
+    return created.folderId;
+  }
+
+  /**
+   * Idempotent per-case subfolder (Incoming/Outgoing/Attachments/Reports),
+   * cached in folder_cache so repeat uploads don't re-list/re-create it.
+   */
+  async ensureSubfolder(caseId, subfolderKey) {
+    const sup = getSupabase();
+    const { data: cached } = await sup.from('folder_cache')
+      .select('drive_folder_id').eq('case_id', caseId).eq('folder_key', subfolderKey).maybeSingle();
+    if (cached?.drive_folder_id) return cached.drive_folder_id;
+
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    const parentId = await this.ensureCaseFolder(caseId);
+    const res = await drive.files.create({
+      requestBody: { name: subfolderKey, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
+      fields: 'id',
+    });
+    await sup.from('folder_cache').upsert(
+      { case_id: caseId, folder_key: subfolderKey, drive_folder_id: res.data.id },
+      { onConflict: 'case_id,folder_key' }
+    );
+    return res.data.id;
+  }
+
+  /**
+   * Upload real bytes to a Drive folder. Returns Drive's file metadata.
+   */
+  async uploadBytes(buffer, fileName, mimeType, folderId) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    const { Readable } = require('stream');
+    const res = await drive.files.create({
+      requestBody: { name: fileName, parents: [folderId] },
+      media: { mimeType: mimeType || 'application/octet-stream', body: Readable.from(buffer) },
+      fields: 'id, name, size, mimeType, webViewLink, webContentLink, md5Checksum',
+    });
+    return res.data;
+  }
+
+  /** Move a Drive file to trash (soft delete on Drive's side). */
+  async deleteFile(fileId) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    await drive.files.update({ fileId, requestBody: { trashed: true } });
+    return { success: true };
+  }
+
+  /** Fresh view/download links for a Drive file (webViewLink can go stale-looking but is stable; kept as a single fetch point for future signed-URL style needs). */
+  async getFileLinks(fileId) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    const res = await drive.files.get({ fileId, fields: 'webViewLink, webContentLink' });
+    return { viewUrl: res.data.webViewLink, downloadUrl: res.data.webContentLink };
+  }
+
+  /** Update a Drive file's display name (used when a document is renamed in FOIA OS). */
+  async renameFile(fileId, newName) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    await drive.files.update({ fileId, requestBody: { name: newName } });
+    return { success: true };
+  }
 }
 
 module.exports = new GoogleDriveService();

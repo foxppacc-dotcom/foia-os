@@ -3,6 +3,7 @@ const { simpleParser } = require('mailparser');
 const { getSupabase } = require('../supabase');
 const { decrypt } = require('./crypto');
 const storage = require('./storage');
+const caseFileStorage = require('./caseFileStorage');
 
 function guessFileType(filename) {
   const dotIdx = (filename || '').lastIndexOf('.');
@@ -230,34 +231,38 @@ class MailPoller {
         }
       }
 
-      // Persist attachment content to Supabase Storage (was previously
-      // discarded after just counting them), and -- when the email matched a
-      // case -- also register each one as a real Case Document so users
-      // find it in the Files tab, not only buried in the email thread.
+      // Persist attachment content to Google Drive (was previously uploaded
+      // to Supabase Storage), and -- when the email matched a case -- also
+      // register each one as a real Case Document so users find it in the
+      // Files tab, not only buried in the email thread. Unmatched emails
+      // have no case to file a Drive folder under, so their attachments
+      // stay unpersisted (metadata only) rather than accumulating as
+      // ownerless bytes in permanent storage.
       const storedAttachments = [];
       for (const att of msg.attachments) {
         if (!att.content) continue;
+        if (!matchedCaseId) {
+          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, unmatched: true });
+          continue;
+        }
         try {
           const buffer = Buffer.from(att.content, 'base64');
-          const subdir = matchedCaseId ? `case_${matchedCaseId}/email` : 'unmatched_email';
-          const ext = att.filename?.includes('.') ? att.filename.slice(att.filename.lastIndexOf('.')) : '';
-          const storagePath = `${subdir}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
-          const storageKey = await storage.upload('case-documents', storagePath, buffer, att.contentType);
-          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, storageKey });
+          const driveFields = await caseFileStorage.saveCaseFile({
+            caseId: matchedCaseId, buffer, fileName: att.filename, mimeType: att.contentType, category: 'incoming',
+          });
+          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, driveFileId: driveFields.drive_file_id, viewUrl: driveFields.file_path });
 
-          if (matchedCaseId) {
-            // Supabase-js resolves {data, error} rather than throwing on a
-            // DB-level rejection -- must check `error` explicitly, a bare
-            // try/catch around the await would not have caught it.
-            const { error: docErr } = await sup.from('case_documents').insert({
-              case_id: matchedCaseId,
-              filename: att.filename, original_name: att.filename,
-              mime_type: att.contentType, size: att.size,
-              file_path: storageKey, storage_key: storageKey,
-              file_type: guessFileType(att.filename),
-            });
-            if (docErr) console.error(`[mailPoller] case_documents insert failed for "${att.filename}":`, docErr.message);
-          }
+          // Supabase-js resolves {data, error} rather than throwing on a
+          // DB-level rejection -- must check `error` explicitly, a bare
+          // try/catch around the await would not have caught it.
+          const { error: docErr } = await sup.from('case_documents').insert({
+            case_id: matchedCaseId,
+            filename: att.filename, original_name: att.filename,
+            mime_type: att.contentType, size: att.size,
+            file_type: guessFileType(att.filename),
+            ...driveFields, url: driveFields.file_path,
+          });
+          if (docErr) console.error(`[mailPoller] case_documents insert failed for "${att.filename}":`, docErr.message);
         } catch (e) {
           console.error(`[mailPoller] attachment upload failed for "${att.filename}":`, e.message);
           storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, error: e.message });

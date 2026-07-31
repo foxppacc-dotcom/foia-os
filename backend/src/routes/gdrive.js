@@ -65,6 +65,43 @@ router.post('/gdrive/disconnect', requireAuth, requireRole('admin'), async (req,
   res.json({ success: true });
 });
 
+// POST /api/gdrive/migrate-legacy — one-time (idempotent, safe to re-run)
+// migration of case_documents rows still backed by Supabase Storage over to
+// Google Drive, now that Drive is the primary storage backend. Runs here
+// (not as a local script) because it needs the Vercel-only Drive env vars.
+router.post('/gdrive/migrate-legacy', requireAuth, requireRole('admin'), async (req, res) => {
+  const storage = require('../services/storage');
+  const caseFileStorage = require('../services/caseFileStorage');
+  if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
+
+  const { data: rows, error } = await getSupabase().from('case_documents')
+    .select('id, case_id, original_name, mime_type, storage_key')
+    .neq('storage_provider', 'google_drive')
+    .not('storage_key', 'is', null);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const results = [];
+  for (const row of rows || []) {
+    try {
+      const sup = getSupabase();
+      const [bucket, ...pathParts] = row.storage_key.split('/');
+      const { data: blob, error: dlErr } = await sup.storage.from(bucket).download(pathParts.join('/'));
+      if (dlErr) throw dlErr;
+      const buffer = Buffer.from(await blob.arrayBuffer());
+
+      const driveFields = await caseFileStorage.saveCaseFile({
+        caseId: row.case_id, buffer, fileName: row.original_name, mimeType: row.mime_type, category: 'attachments',
+      });
+      await sup.from('case_documents').update({ ...driveFields, url: driveFields.file_path }).eq('id', row.id);
+      await storage.deleteByKey(row.storage_key).catch(() => {});
+      results.push({ id: row.id, original_name: row.original_name, success: true });
+    } catch (e) {
+      results.push({ id: row.id, original_name: row.original_name, success: false, error: e.message });
+    }
+  }
+  res.json({ success: true, migrated: results.filter(r => r.success).length, failed: results.filter(r => !r.success).length, results });
+});
+
 // POST /api/gdrive/link — link a Drive file to a case
 router.post('/gdrive/link', requireAuth, async (req, res) => {
   try {
