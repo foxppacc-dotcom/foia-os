@@ -25,7 +25,7 @@ router.get('/gdrive/auth-url', requireAuth, requireRole('admin'), (req, res) => 
 
 // GET /api/gdrive/oauth-callback — Google redirects the browser here after consent
 router.get('/gdrive/oauth-callback', async (req, res) => {
-  const frontendBase = process.env.FRONTEND_URL || 'https://frontend-six-flax-84.vercel.app';
+  const frontendBase = process.env.FRONTEND_URL || 'https://frontend-five-nu-wgj97r88rl.vercel.app';
   try {
     const { code, error: oauthError } = req.query;
     if (oauthError) throw new Error(oauthError);
