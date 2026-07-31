@@ -1,14 +1,10 @@
-import { getApiBase } from '../../../api';
-const API = getApiBase();
+import { api } from '../../../api';
 import { useState, useEffect, useMemo } from 'react';
 import { Users, UserPlus, Trash2, Mail, Shield, Star, User, Briefcase, AlertCircle, ArrowUpCircle, X, Check } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import AppSection from '../../../components/ds/AppSection';
 import AppButton from '../../../components/ds/AppButton';
 import Button from '../../../components/ui/Button';
-
-const tok = () => localStorage.getItem('token');
-const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 
 const INVESTIGATION_ROLES = [
   { value: 'lead_investigator', label: 'محقق رئيسي' },
@@ -34,7 +30,7 @@ export default function TeamTab() {
   const [transferTo, setTransferTo] = useState('');
 
   useEffect(() => {
-    fetch(`${API}/users/workload`, { headers: hdrs() }).then(r => r.json()).then(d => setWorkload(d));
+    api.get('/users/workload').then(setWorkload).catch(() => {});
   }, []);
 
   const ownerId = c?.owner_id;
@@ -51,7 +47,7 @@ export default function TeamTab() {
 
   const handleTransfer = async () => {
     if (!transferTo) return;
-    await fetch(`${API}/cases/${caseId}/transfer`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ owner_id: parseInt(transferTo) }) });
+    await api.put(`/cases/${caseId}/transfer`, { owner_id: parseInt(transferTo) });
     setTransferTo('');
     window.location.reload();
   };
@@ -104,20 +100,23 @@ export default function TeamTab() {
         {/* Member cards */}
         {(team || []).map(tm => {
           const wl = getWorkload(tm.user_id);
-          const roleInfo = INVESTIGATION_ROLES.find(r => r.value === tm.role) || { label: tm.role, value: tm.role };
+          const roleInfo = INVESTIGATION_ROLES.find(r => r.value === tm.role) || { label: tm.custom_role_name || tm.role, value: tm.role };
           const color = ROLE_COLORS[tm.role] || '#636366';
+          const memberName = tm.users?.name || tm.user_name || tm.name || 'مستخدم محذوف';
+          const memberEmail = tm.users?.email || tm.email;
           return (
             <div key={tm.id || tm.user_id} className="rounded-lg p-3 ds-transition-colors" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: `3px solid ${color}` }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--ds-bg-tertiary)'}
               onMouseLeave={e => e.currentTarget.style.background = 'var(--ds-bg-secondary)'}>
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0" style={{ background: color, color: 'white' }}>{(tm.user_name || tm.name || '?')[0]}</div>
+                <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0" style={{ background: color, color: 'white' }}>{memberName[0]}</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-sm font-medium" style={{ color: 'var(--ds-text-primary)' }}>{tm.user_name || tm.name}</span>
+                    <span className="text-sm font-medium" style={{ color: 'var(--ds-text-primary)' }}>{memberName}</span>
                     <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: `${color}20`, color }}>{roleInfo.label}</span>
                   </div>
                   <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>
+                    {memberEmail && <span>{memberEmail}</span>}
                     {wl && <span>تحقيقات: {wl.active_investigations}</span>}
                     {wl && wl.pending_evidence > 0 && <span>توثيق: {wl.pending_evidence}</span>}
                     {wl && wl.stalled_investigations > 0 && <span style={{ color: '#ef4444' }}>متوقفة: {wl.stalled_investigations}</span>}
