@@ -177,22 +177,26 @@ async function generateChecklist(sup, caseId) {
 // Try to persist virtual checklist items to the real table
 async function persistChecklist(sup, caseId, items) {
   if (!items.length || !items[0]._virtual) return items;
-  try {
-    for (const item of items) {
-      delete item._virtual;
-      // Add default null for evidence_stage if not present
-      if (item.evidence_stage === undefined) item.evidence_stage = null;
-      try {
-        await sup.from('case_records_checklist').insert(item);
-      } catch (insertErr) {
-        console.warn('[persistChecklist] insert error:', insertErr.message);
-      }
+  // supabase-js query builders resolve {data, error} rather than throwing, so
+  // a bare `await ...insert(item)` here never populated `item.id` on the
+  // returned rows -- every virtual checklist item rendered with the same
+  // undefined id (React "duplicate key" warning in OverviewTab). Explicitly
+  // select the generated id back, with a per-item synthetic fallback so IDs
+  // stay unique even if the table/insert itself fails.
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    delete item._virtual;
+    if (item.evidence_stage === undefined) item.evidence_stage = null;
+    try {
+      const { data, error } = await sup.from('case_records_checklist').insert(item).select('id').single();
+      if (error) throw error;
+      item.id = data.id;
+    } catch (insertErr) {
+      console.warn('[persistChecklist] insert error:', insertErr.message);
+      item.id = -(i + 1);
     }
-    return items;
-  } catch (e) {
-    // Table doesn't exist — return virtual items with IDs
-    return items.map((item, i) => ({ ...item, id: -(i + 1), _virtual: true }));
   }
+  return items;
 }
 
 // GET /api/cases/:id/team

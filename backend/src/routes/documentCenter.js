@@ -31,7 +31,7 @@ router.put('/requests/:id/status', requireAuth, async (req, res) => {
   const { status } = req.body;
   if (!status) return res.status(400).json({ error: 'status required' });
   const update = { status };
-  if (status === 'sent' || status === 'reminder') update.sent_at = new Date().toISOString();
+  if (status === 'sent' || status === 'reminder') update.sent_date = new Date().toISOString();
   const { error } = await sup.from('requests').update(update).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
@@ -344,7 +344,8 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
         if (targetRequestId) {
           const days = parseInt(expected_response_days);
           const due = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-          await sup.from('requests').update({ expected_response_date: due, sent_date: new Date().toISOString().split('T')[0] }).eq('id', targetRequestId);
+          const { error: dlUpdateErr } = await sup.from('requests').update({ expected_response_date: due, sent_date: new Date().toISOString().split('T')[0] }).eq('id', targetRequestId);
+          if (dlUpdateErr) console.error('Deadline tracking update failed:', dlUpdateErr.message);
         }
       } catch (dlErr) { console.error('Deadline tracking update failed:', dlErr.message); }
     }
@@ -352,6 +353,56 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
     res.json({ success: true, messageId: info.messageId });
   } catch (ex) {
     res.json({ success: false, error: ex.message });
+  }
+});
+
+// POST /api/cases/:caseId/portal-log — log a correspondence event submitted
+// through the agency's own portal (no SMTP send, just a record + deadline),
+// mirrors the deadline-tracking block in /compose above.
+router.post('/cases/:caseId/portal-log', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const caseId = parseInt(req.params.caseId);
+    const { agency_id, request_id, note, expected_response_days, confirmation_number } = req.body;
+    if (!agency_id) return res.status(400).json({ error: 'agency_id مطلوب' });
+
+    const { data: agency } = await sup.from('agencies').select('name_ar, name_en, portal_url').eq('id', parseInt(agency_id)).maybeSingle();
+
+    let targetRequestId = request_id ? parseInt(request_id) : null;
+    if (!targetRequestId) {
+      const { data: req_ } = await sup.from('requests').select('id')
+        .eq('case_id', caseId).eq('agency_id', parseInt(agency_id))
+        .order('created_at', { ascending: false }).limit(1).maybeSingle();
+      targetRequestId = req_?.id || null;
+    }
+
+    const subject = confirmation_number ? `تقديم عبر البوابة — رقم التأكيد: ${confirmation_number}` : 'تقديم عبر البوابة';
+    await sup.from('communications').insert({
+      case_id: caseId, request_id: targetRequestId, agency_id: parseInt(agency_id),
+      type: 'portal', direction: 'outbound',
+      subject, body: note || '',
+      sender: req.user?.name || 'النظام', recipient: agency?.portal_url || agency?.name_en || '',
+      created_at: new Date().toISOString(),
+    });
+
+    try {
+      await sup.from('activity_logs').insert({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'portal_submission', target_type: 'case', target_id: caseId,
+        target_title: `🌐 ${subject}`,
+      });
+    } catch (tlErr) { console.error('Timeline insert error:', tlErr.message); }
+
+    if (expected_response_days && targetRequestId) {
+      const days = parseInt(expected_response_days);
+      const due = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const { error: dlUpdateErr } = await sup.from('requests').update({ expected_response_date: due, sent_date: new Date().toISOString().split('T')[0], channel_method: 'portal' }).eq('id', targetRequestId);
+      if (dlUpdateErr) console.error('Deadline tracking update failed:', dlUpdateErr.message);
+    }
+
+    res.json({ success: true });
+  } catch (ex) {
+    res.status(500).json({ error: ex.message });
   }
 });
 

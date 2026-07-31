@@ -59,13 +59,13 @@ export default function Dashboard() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
         {statCards.map(card => (
-          <div key={card.key} className="relative overflow-hidden rounded-2xl p-4 transition-all duration-300 group"
+          <div key={card.key} className="relative overflow-hidden rounded-2xl p-4 transition-all duration-200 hover:-translate-y-0.5 group"
             style={{
               background: 'linear-gradient(135deg, var(--bg-tertiary), var(--bg-secondary))',
               border: '1px solid var(--border-strong)',
-              boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+              boxShadow: 'var(--shadow-md)',
             }}>
             <div className="relative z-10">
               <div className="flex items-center justify-between mb-2">
@@ -80,12 +80,12 @@ export default function Dashboard() {
       </div>
 
       {/* Status Distribution + Pipeline Summary */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Status Distribution */}
         <div className="rounded-2xl p-5" style={{
           background: 'var(--bg-tertiary)',
           border: '1px solid var(--border-strong)',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+          boxShadow: 'var(--shadow-md)',
         }}>
           <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--accent)' }}>حالة القضايا</h2>
           <div className="space-y-3">
@@ -124,7 +124,7 @@ export default function Dashboard() {
         <div className="rounded-2xl p-5" style={{
           background: 'var(--bg-tertiary)',
           border: '1px solid var(--border-strong)',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+          boxShadow: 'var(--shadow-md)',
         }}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>توزيع خط الإنتاج</h2>
@@ -163,12 +163,12 @@ export default function Dashboard() {
       </div>
 
       {/* Recent Cases + Deadlines */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Recent Cases */}
         <div className="rounded-2xl p-5" style={{
           background: 'var(--bg-tertiary)',
           border: '1px solid var(--border-strong)',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+          boxShadow: 'var(--shadow-md)',
         }}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>أحدث القضايا</h2>
@@ -180,9 +180,11 @@ export default function Dashboard() {
           {data.recentCases?.length > 0 ? (
             <div className="space-y-2">
               {data.recentCases.slice(0, 5).map(c => (
-                <div key={c.id} onClick={() => navigate(`/cases/${c.id}`)} 
+                <div key={c.id} onClick={() => navigate(`/cases/${c.id}`)}
                   className="flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-colors"
-                  style={{ background: 'var(--bg-primary)' }}>
+                  style={{ background: 'var(--bg-primary)' }}
+                  onMouseOver={e => e.currentTarget.style.background = 'var(--bg-elevated)'}
+                  onMouseOut={e => e.currentTarget.style.background = 'var(--bg-primary)'}>
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span className="text-[9px] font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>#{c.id}</span>
                     <p className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>{c.title}</p>
@@ -212,7 +214,7 @@ export default function Dashboard() {
         <div className="rounded-2xl p-5" style={{
           background: 'var(--bg-tertiary)',
           border: '1px solid var(--border-strong)',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+          boxShadow: 'var(--shadow-md)',
         }}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>المواعيد النهائية القادمة</h2>
@@ -221,7 +223,10 @@ export default function Dashboard() {
           {data.upcomingDeadlines?.length > 0 ? (
             <div className="space-y-2">
               {data.upcomingDeadlines.slice(0, 5).map(d => (
-                <div key={d.id} className="flex items-center justify-between p-2.5 rounded-xl" style={{ background: 'var(--bg-primary)' }}>
+                <div key={d.id} onClick={() => navigate(`/cases/${d.id}`)}
+                  className="flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-colors" style={{ background: 'var(--bg-primary)' }}
+                  onMouseOver={e => e.currentTarget.style.background = 'var(--bg-elevated)'}
+                  onMouseOut={e => e.currentTarget.style.background = 'var(--bg-primary)'}>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{d.title}</p>
                     <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{d.deadline}</p>
@@ -256,9 +261,11 @@ export default function Dashboard() {
         {data.recentCommunications?.length > 0 ? (
           <div className="space-y-1">
             {data.recentCommunications.slice(0, 5).map(comm => (
-              <div key={comm.id} onClick={() => navigate(`/cases/${comm.case_id}`)} 
+              <div key={comm.id} onClick={() => navigate(`/cases/${comm.case_id}`)}
                 className="flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition-colors"
-                style={{ color: 'var(--text-secondary)' }}>
+                style={{ color: 'var(--text-secondary)', background: 'var(--bg-primary)' }}
+                onMouseOver={e => e.currentTarget.style.background = 'var(--bg-elevated)'}
+                onMouseOut={e => e.currentTarget.style.background = 'var(--bg-primary)'}>
                 <span className="text-xs">{comm.direction === 'outbound' ? '📤' : '📥'}</span>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{comm.subject || 'بدون موضوع'}</p>

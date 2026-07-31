@@ -19,7 +19,7 @@ router.get('/profile/:id', async (req, res) => {
     let notifications = [];
     try { const r = await sup.from('notifications').select('*').eq('user_id', id).order('created_at', { ascending: false }).limit(20); notifications = r.data || []; } catch(e) {}
     let unreadCount = { count: 0 };
-    try { unreadCount = await sup.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', id).eq('is_read', 0); } catch(e) {}
+    try { unreadCount = await sup.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', id).eq('is_read', false); } catch(e) {}
 
     const tasksCompleted = tasks?.filter(t => t.status === 'completed').length || 0;
     const tasksOnTime = tasks?.filter(t => t.status === 'completed' && (!t.due_date || new Date(t.completed_at) <= new Date(t.due_date))).length || 0;
@@ -60,7 +60,7 @@ router.get('/notifications', async (req, res) => {
     }
     if (error) throw error;
     let unreadCount = { count: 0 };
-    try { unreadCount = await sup.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', req.user.id).eq('is_read', 0); } catch(e) {}
+    try { unreadCount = await sup.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', req.user.id).eq('is_read', false); } catch(e) {}
     res.json({ data: data || [], unreadCount: unreadCount.count || 0 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -69,7 +69,7 @@ router.get('/notifications', async (req, res) => {
 router.put('/notifications/read-all', async (req, res) => {
   try {
     const sup = getSupabase();
-    try { await sup.from('notifications').update({ is_read: 1 }).eq('user_id', req.user.id).eq('is_read', 0); } catch(e) {}
+    try { await sup.from('notifications').update({ is_read: true }).eq('user_id', req.user.id).eq('is_read', false); } catch(e) {}
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -78,7 +78,7 @@ router.put('/notifications/read-all', async (req, res) => {
 router.put('/notifications/:id/read', async (req, res) => {
   try {
     const sup = getSupabase();
-    await sup.from('notifications').update({ is_read: 1 }).eq('id', parseInt(req.params.id)).eq('user_id', req.user.id);
+    await sup.from('notifications').update({ is_read: true }).eq('id', parseInt(req.params.id)).eq('user_id', req.user.id);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
