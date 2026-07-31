@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 
 // ═══════════════════════════════════════════════
@@ -32,7 +32,7 @@ router.get('/roles', requireAuth, async (req, res) => {
   res.json({ roles: data || [] });
 });
 
-router.post('/roles', requireAuth, async (req, res) => {
+router.post('/roles', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   const { name, label, permissions } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
@@ -40,11 +40,11 @@ router.post('/roles', requireAuth, async (req, res) => {
     name: name.toLowerCase().replace(/\s+/g, '_'), label: label || name,
     permissions: permissions || { view_investigation: true }, sort_order: 99
   }).select().single();
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: error.message.includes('duplicate key') ? 'يوجد دور بهذا الاسم بالفعل' : error.message });
   res.json({ success: true, role: data });
 });
 
-router.put('/roles/:id', requireAuth, async (req, res) => {
+router.put('/roles/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   const { label, permissions, name } = req.body;
   const updates = {};
@@ -53,18 +53,23 @@ router.put('/roles/:id', requireAuth, async (req, res) => {
   if (permissions !== undefined) updates.permissions = permissions;
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields' });
   const { data, error } = await sup.from('roles').update(updates).eq('id', parseInt(req.params.id)).select().single();
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: error.message.includes('duplicate key') ? 'يوجد دور بهذا الاسم بالفعل' : error.message });
   res.json({ success: true, role: data });
 });
 
-router.delete('/roles/:id', requireAuth, async (req, res) => {
+router.delete('/roles/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
+  const { data: role } = await sup.from('roles').select('name').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (role) {
+    const { count } = await sup.from('users').select('id', { count: 'exact', head: true }).eq('role', role.name);
+    if (count > 0) return res.status(409).json({ error: `لا يمكن حذف هذا الدور — ${count} مستخدم لا يزال مسندًا إليه` });
+  }
   const { error } = await sup.from('roles').delete().eq('id', parseInt(req.params.id));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true });
 });
 
-router.post('/roles/:id/duplicate', requireAuth, async (req, res) => {
+router.post('/roles/:id/duplicate', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   const { data: original } = await sup.from('roles').select('*').eq('id', parseInt(req.params.id)).single();
   if (!original) return res.status(404).json({ error: 'Role not found' });
@@ -85,7 +90,7 @@ router.get('/departments', requireAuth, async (req, res) => {
   res.json({ departments: data || [] });
 });
 
-router.post('/departments', requireAuth, async (req, res) => {
+router.post('/departments', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   const { name, description, manager_id } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
@@ -94,7 +99,7 @@ router.post('/departments', requireAuth, async (req, res) => {
   res.json({ success: true, department: data });
 });
 
-router.put('/departments/:id', requireAuth, async (req, res) => {
+router.put('/departments/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   const { name, description, manager_id, archived } = req.body;
   const updates = {};
@@ -107,7 +112,7 @@ router.put('/departments/:id', requireAuth, async (req, res) => {
   res.json({ success: true, department: data });
 });
 
-router.delete('/departments/:id', requireAuth, async (req, res) => {
+router.delete('/departments/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   const { error } = await sup.from('departments').delete().eq('id', parseInt(req.params.id));
   if (error) return res.status(500).json({ error: error.message });

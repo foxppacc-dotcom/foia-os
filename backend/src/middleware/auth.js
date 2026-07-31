@@ -38,4 +38,28 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { requireAuth, requireRole, generateToken, bcrypt };
+/**
+ * Granular permission gate backed by role_permissions (role x resource x
+ * action -> allowed), the same table the Permissions settings tab reads and
+ * writes. Admin always passes without a lookup. Any other role passes only
+ * if an admin has explicitly granted resource/action to their role from
+ * that tab -- this is what actually makes "reduce or grant permissions"
+ * mean something, instead of the old fixed requireRole('admin','manager')
+ * gates that no amount of settings-tab clicking could ever change.
+ */
+function requirePermission(resource, action) {
+  return async (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    if (req.user.role === 'admin') return next();
+    try {
+      const { getSupabase } = require('../supabase');
+      const sup = getSupabase();
+      const { data } = await sup.from('role_permissions')
+        .select('allowed').eq('role', req.user.role).eq('resource', resource).eq('action', action).maybeSingle();
+      if (data?.allowed) return next();
+    } catch (e) { /* table not migrated yet -- fail closed, same as no permission granted */ }
+    return res.status(403).json({ error: 'Forbidden — insufficient permissions' });
+  };
+}
+
+module.exports = { requireAuth, requireRole, requirePermission, generateToken, bcrypt };

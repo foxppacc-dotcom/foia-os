@@ -17,11 +17,23 @@ const RESOURCES = [
   { key: 'email_accounts', label: 'حسابات البريد', actions: ['manage'] },
 ];
 
-const ROLES = ['admin', 'manager', 'agent', 'editor', 'viewer'];
+// Fallback only for the rare case the roles table is empty/unreachable --
+// the real, editable role list lives in the `roles` table (teamManagement.js
+// /roles CRUD), not hardcoded here, so newly-added custom roles show up in
+// this matrix automatically.
+const FALLBACK_ROLES = ['admin', 'manager', 'agent', 'editor', 'viewer'];
+
+async function getRoleNames(sup) {
+  const { data } = await sup.from('roles').select('name').order('sort_order');
+  const names = (data || []).map(r => r.name).filter(n => n !== 'admin');
+  return names.length ? names : FALLBACK_ROLES.filter(r => r !== 'admin');
+}
 
 // GET /api/permissions/schema — resource/action catalog + role list (for rendering the matrix)
-router.get('/permissions/schema', requireAuth, (req, res) => {
-  res.json({ success: true, resources: RESOURCES, roles: ROLES });
+router.get('/permissions/schema', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const roles = await getRoleNames(sup);
+  res.json({ success: true, resources: RESOURCES, roles });
 });
 
 // GET /api/permissions — full matrix (all roles)
@@ -49,9 +61,10 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
 router.put('/permissions', requireAuth, requireRole('admin'), async (req, res) => {
   const { role, resource, action, allowed } = req.body;
   if (!role || !resource || !action) return res.status(400).json({ error: 'role, resource, action مطلوبة' });
-  if (!ROLES.includes(role)) return res.status(400).json({ error: `Invalid role. Must be: ${ROLES.join(', ')}` });
 
   const sup = getSupabase();
+  const roles = await getRoleNames(sup);
+  if (!roles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${roles.join(', ')}` });
   const { error } = await sup
     .from('role_permissions')
     .upsert({ role, resource, action, allowed: !!allowed }, { onConflict: 'role,resource,action' });

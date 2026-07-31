@@ -3,9 +3,12 @@ const router = express.Router();
 const { requireAuth, requireRole, bcrypt } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 
-// All routes require auth + admin role
+// All routes require auth; mutating routes additionally require admin
+// (applied per-route below) -- GETs stay open to any authenticated staff
+// member since other in-app pickers (pipeline list assignees, case team
+// assignment) need to read the roster without granting user-management
+// rights.
 router.use(requireAuth);
-router.use(requireRole('admin'));
 
 // GET /api/users — list all users
 router.get('/users', async (req, res) => {
@@ -24,15 +27,23 @@ router.get('/users', async (req, res) => {
   res.json({ success: true, data: mapped });
 });
 
+// Role names are managed dynamically via /roles (teamManagement.js) rather
+// than a fixed list here -- falls back to the legacy hardcoded set only if
+// the roles table is empty/unreachable, so user creation never hard-fails.
+async function getValidRoleNames(sup) {
+  const { data } = await sup.from('roles').select('name');
+  const names = (data || []).map(r => r.name);
+  return names.length ? names : ['admin', 'manager', 'member'];
+}
+
 // POST /api/users — create user
-router.post('/users', async (req, res) => {
+router.post('/users', requireRole('admin'), async (req, res) => {
   const { name, email, password, role, team_id } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, password required' });
 
-  const validRoles = ['admin', 'manager', 'member'];
-  if (role && !validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be: ${validRoles.join(', ')}` });
-
   const sup = getSupabase();
+  const validRoles = await getValidRoleNames(sup);
+  if (role && !validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
 
   const { data: existing } = await sup.from('users').select('id').eq('email', email).maybeSingle();
   if (existing) return res.status(409).json({ error: 'Email already exists' });
@@ -51,11 +62,16 @@ router.post('/users', async (req, res) => {
 
 // PUT /api/users/:id — update user
 router.put('/users/:id', async (req, res) => {
-  const { name, email, password, role, team_id } = req.body;
+  const { name, email, password, role, team_id, is_active } = req.body;
   const sup = getSupabase();
 
   const { data: user } = await sup.from('users').select('id').eq('id', parseInt(req.params.id)).single();
   if (!user) return res.status(404).json({ error: 'User not found' });
+
+  if (role) {
+    const validRoles = await getValidRoleNames(sup);
+    if (!validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
+  }
 
   const updates = {};
   if (name) updates.name = name;
@@ -63,12 +79,25 @@ router.put('/users/:id', async (req, res) => {
   if (password) updates.password_hash = bcrypt.hashSync(password, 10);
   if (role) updates.role = role;
   if (team_id !== undefined) updates.team_id = team_id || null;
+  if (is_active !== undefined) updates.is_active = !!is_active;
 
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields to update' });
 
   await sup.from('users').update(updates).eq('id', parseInt(req.params.id));
 
   res.json({ success: true, message: '✅ تم تحديث المستخدم' });
+});
+
+// POST /api/users/:id/reset-password — admin sets a new password directly
+router.post('/users/:id/reset-password', async (req, res) => {
+  const { password } = req.body;
+  if (!password || password.length < 6) return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 6 أحرف' });
+  const sup = getSupabase();
+  const { data: user } = await sup.from('users').select('id').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const hash = bcrypt.hashSync(password, 10);
+  await sup.from('users').update({ password_hash: hash }).eq('id', parseInt(req.params.id));
+  res.json({ success: true, message: '✅ تم إعادة تعيين كلمة المرور' });
 });
 
 // DELETE /api/users/:id

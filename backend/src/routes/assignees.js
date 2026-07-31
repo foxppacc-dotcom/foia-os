@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { logActivity } = require('../services/activityLogger');
 
@@ -137,7 +137,7 @@ router.get('/pipeline/lists/:id/assignees', requireAuth, async (req, res) => {
   res.json({ success: true, data: mapped });
 });
 
-router.post('/pipeline/lists/:id/assignees', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.post('/pipeline/lists/:id/assignees', requireAuth, requirePermission('pipeline', 'edit'), async (req, res) => {
   const sup = getSupabase();
   const listId = parseInt(req.params.id);
   const { user_ids } = req.body;

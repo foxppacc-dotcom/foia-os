@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { Users } from 'lucide-react';
 
 const LIST_STYLES_BY_ID = {
   1: { bg: '#10B981', label: '✅ تم استلام السجلات', emoji: '✅' },
@@ -11,6 +13,79 @@ const LIST_STYLES_BY_ID = {
   6: { bg: '#F97316', label: '📷 الوكالة لا تستخدم البودي كام', emoji: '📷' },
   7: { bg: '#EC4899', label: '🆔 محتاج تأكيد مواطنة', emoji: '🆔' },
 };
+
+// Avatars + a checkbox popover for who's responsible for this list -- the
+// list_assignees API already existed and worked, but the only UI for it
+// was buried in Settings' "إدارة قوائم الإنتاج" tab (hover-only) or
+// read-only in ListDetail.jsx; this puts it directly on the board itself.
+// The popover renders through a portal into document.body rather than as a
+// CSS-absolute child, because every list card/column wrapper uses
+// overflow-hidden (for its rounded corners) -- an absolutely-positioned
+// child would get silently clipped by that ancestor, or hidden behind the
+// next column, instead of floating above the whole board.
+function ListAssignees({ listId, listColor, assignees, allUsers, isOpen, onToggle, onSave }) {
+  const btnRef = useRef(null);
+  const popoverRef = useRef(null);
+  const [coords, setCoords] = useState(null);
+
+  useEffect(() => {
+    if (!isOpen || !btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    setCoords({ top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX });
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onClickOutside = (e) => {
+      if (btnRef.current?.contains(e.target) || popoverRef.current?.contains(e.target)) return;
+      onToggle(null);
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [isOpen]);
+
+  const assignedIds = new Set((assignees || []).map(a => a.user_id));
+  const toggleUser = (userId) => {
+    const next = assignedIds.has(userId) ? [...assignedIds].filter(id => id !== userId) : [...assignedIds, userId];
+    onSave(listId, next);
+  };
+
+  return (
+    <div onClick={e => e.stopPropagation()}>
+      <button ref={btnRef} onClick={() => onToggle(isOpen ? null : listId)}
+        className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
+        style={{ background: listColor + '15', color: listColor }} title="المسؤولون عن هذه القائمة">
+        <Users className="w-3 h-3" />
+        {assignees?.length > 0 ? (
+          <span className="flex -space-x-1.5" style={{ direction: 'ltr' }}>
+            {assignees.slice(0, 3).map(a => (
+              <span key={a.user_id} className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold border"
+                style={{ background: listColor, color: 'white', borderColor: 'var(--bg-secondary)' }} title={a.name}>{a.name?.[0] || '?'}</span>
+            ))}
+            {assignees.length > 3 && <span className="text-[9px]">+{assignees.length - 3}</span>}
+          </span>
+        ) : <span className="text-[10px]">إسناد</span>}
+      </button>
+      {isOpen && coords && createPortal(
+        <div ref={popoverRef} onClick={e => e.stopPropagation()}
+          className="fixed z-50 w-56 rounded-xl border p-2 space-y-1 max-h-64 overflow-y-auto"
+          style={{ top: coords.top, left: coords.left, background: 'var(--bg-secondary)', borderColor: 'var(--border)', boxShadow: 'var(--shadow-lg)' }}>
+          <p className="text-[10px] px-1 pb-1" style={{ color: 'var(--text-muted)' }}>المسؤولون عن هذه القائمة</p>
+          {(allUsers || []).length === 0 ? (
+            <p className="text-xs px-1" style={{ color: 'var(--text-muted)' }}>لا يوجد أعضاء</p>
+          ) : allUsers.map(u => (
+            <label key={u.id} className="flex items-center gap-2 px-1.5 py-1 rounded-lg cursor-pointer text-xs" style={{ color: 'var(--text-primary)' }}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-tertiary)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+              <input type="checkbox" checked={assignedIds.has(u.id)} onChange={() => toggleUser(u.id)} className="w-3.5 h-3.5" />
+              {u.name}
+            </label>
+          ))}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
 
 export default function Pipeline() {
   const [lists, setLists] = useState([]);
@@ -26,7 +101,30 @@ export default function Pipeline() {
   });
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('foia_pipeline_view') || 'rows');
   const [sortBy, setSortBy] = useState(() => localStorage.getItem('foia_pipeline_sort') || 'newest');
+  const [assigneesByList, setAssigneesByList] = useState({});
+  const [allUsers, setAllUsers] = useState([]);
+  const [openAssignFor, setOpenAssignFor] = useState(null);
   const navigate = useNavigate();
+
+  const fetchAssignees = (listIds) => {
+    Promise.all(listIds.map(id => api.get(`/pipeline/lists/${id}/assignees`).then(d => [id, d.data || []]).catch(() => [id, []])))
+      .then(entries => setAssigneesByList(Object.fromEntries(entries)));
+  };
+
+  useEffect(() => {
+    api.get('/users').then(d => setAllUsers(d.data || [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (lists.length) fetchAssignees(lists.map(l => l.id));
+  }, [lists]);
+
+  const saveAssignees = async (listId, userIds) => {
+    try {
+      const d = await api.post(`/pipeline/lists/${listId}/assignees`, { user_ids: userIds });
+      setAssigneesByList(prev => ({ ...prev, [listId]: d.data || [] }));
+    } catch {}
+  };
 
   const saveOpenLists = (newSet) => {
     setOpenLists(newSet);
@@ -174,6 +272,8 @@ export default function Pipeline() {
                         style={{ background: st.bg + '20', color: st.bg }}
                         onClick={() => navigate(`/pipeline/lists/${col.id}`)}>{items.length}</span>
                     </div>
+                    <ListAssignees listId={col.id} listColor={st.bg} assignees={assigneesByList[col.id]} allUsers={allUsers}
+                      isOpen={openAssignFor === col.id} onToggle={setOpenAssignFor} onSave={saveAssignees} />
                   </div>
                   <div className="flex-1 p-3 space-y-2.5 border overflow-y-auto"
                     style={{ borderColor: st.bg + '30', background: 'var(--bg-primary)', minHeight: '200px' }}>
@@ -229,6 +329,8 @@ export default function Pipeline() {
                   <span className="px-2.5 py-1 rounded-lg font-bold cursor-pointer hover:opacity-80 transition-opacity"
                     style={{ background: st.bg + '20', color: st.bg }}
                     onClick={(e) => { e.stopPropagation(); navigate(`/pipeline/lists/${col.list_number}`); }}>{items.length}</span>
+                  <ListAssignees listId={col.id} listColor={st.bg} assignees={assigneesByList[col.id]} allUsers={allUsers}
+                    isOpen={openAssignFor === col.id} onToggle={setOpenAssignFor} onSave={saveAssignees} />
                   <span className="mr-auto transition-transform" style={{ color: 'var(--text-muted)', transform: isOpen ? 'rotate(0deg)' : 'rotate(180deg)' }}>▲</span>
                 </div>
 

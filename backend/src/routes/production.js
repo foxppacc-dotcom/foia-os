@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 
 // ============ PRODUCTION / MONTAGE QUEUE ============
@@ -47,7 +47,7 @@ router.get('/production', requireAuth, async (req, res) => {
 });
 
 // POST /api/production/add — add case to production queue
-router.post('/production/add', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.post('/production/add', requireAuth, requirePermission('production', 'edit'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { case_id, assigned_to, priority, notes } = req.body;
@@ -86,7 +86,7 @@ router.post('/production/add', requireAuth, requireRole('admin', 'manager'), asy
 });
 
 // PUT /api/production/:id — update status / assignment
-router.put('/production/:id', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.put('/production/:id', requireAuth, requirePermission('production', 'edit'), async (req, res) => {
   try {
     const sup = getSupabase();
     const id = parseInt(req.params.id);

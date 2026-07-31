@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const XLSX = require('xlsx');
 const path = require('path');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const gdrive = require('../services/googleDriveService');
 
@@ -146,7 +146,7 @@ router.get('/agencies/:id', requireAuth, async (req, res) => {
 });
 
 // POST /api/agencies — إضافة جهة يدوية
-router.post('/agencies', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.post('/agencies', requireAuth, requirePermission('agencies', 'create'), async (req, res) => {
   const sup = getSupabase();
   const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, reply_to, default_email_account_id, website, tracking_portal_url } = req.body;
   if (!name_en) return res.status(400).json({ error: 'name_en (English name) مطلوب' });
@@ -180,7 +180,7 @@ router.post('/agencies', requireAuth, requireRole('admin', 'manager'), async (re
 });
 
 // PUT /api/agencies/:id — تحديث بيانات الجهة (بما فيها التفعيل/التعطيل وإعدادات الإرسال)
-router.put('/agencies/:id', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
 
@@ -233,7 +233,7 @@ router.delete('/agencies/:id', requireAuth, requireRole('admin'), async (req, re
 // ===== BULK ACTIONS =====
 
 // POST /api/agencies/bulk/status — تفعيل/تعطيل جماعي
-router.post('/agencies/bulk/status', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.post('/agencies/bulk/status', requireAuth, requirePermission('agencies', 'edit'), async (req, res) => {
   const { ids, is_active } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids مطلوبة' });
   const sup = getSupabase();
@@ -255,7 +255,7 @@ router.post('/agencies/bulk/delete', requireAuth, requireRole('admin'), async (r
 // ===== CONTACTS =====
 
 // POST /api/agencies/:id/contacts — add contact (stored in agencies.notes JSON)
-router.post('/agencies/:id/contacts', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.post('/agencies/:id/contacts', requireAuth, requirePermission('agencies', 'edit'), async (req, res) => {
   const sup = getSupabase();
   const agency_id = parseInt(req.params.id);
   const { name, title, phone, email, notes, extension, department, preferred_contact } = req.body;
@@ -287,7 +287,7 @@ router.post('/agencies/:id/contacts', requireAuth, requireRole('admin', 'manager
 });
 
 // PUT /api/agencies/:id/contacts/:contactId — update contact
-router.put('/agencies/:id/contacts/:contactId', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.put('/agencies/:id/contacts/:contactId', requireAuth, requirePermission('agencies', 'edit'), async (req, res) => {
   const sup = getSupabase();
   const agency_id = parseInt(req.params.id);
   const contactId = parseInt(req.params.contactId);
@@ -319,7 +319,7 @@ router.put('/agencies/:id/contacts/:contactId', requireAuth, requireRole('admin'
 });
 
 // DELETE /api/agencies/:id/contacts/:contactId — delete contact
-router.delete('/agencies/:id/contacts/:contactId', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.delete('/agencies/:id/contacts/:contactId', requireAuth, requirePermission('agencies', 'edit'), async (req, res) => {
   const sup = getSupabase();
   const agency_id = parseInt(req.params.id);
   const contactId = parseInt(req.params.contactId);
@@ -337,7 +337,7 @@ router.delete('/agencies/:id/contacts/:contactId', requireAuth, requireRole('adm
 
 // ===== EMAILS (deprecated — use agencies.email field directly)
 // POST /api/agencies/:id/emails — update primary email on agency
-router.post('/agencies/:id/emails', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.post('/agencies/:id/emails', requireAuth, requirePermission('agencies', 'edit'), async (req, res) => {
   const sup = getSupabase();
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'البريد الإلكتروني مطلوب' });
@@ -347,7 +347,7 @@ router.post('/agencies/:id/emails', requireAuth, requireRole('admin', 'manager')
 });
 
 // PUT /api/agencies/:id/emails/:emailId — update primary email
-router.put('/agencies/:id/emails/:emailId', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.put('/agencies/:id/emails/:emailId', requireAuth, requirePermission('agencies', 'edit'), async (req, res) => {
   const sup = getSupabase();
   const { email } = req.body;
   const updates = {};
@@ -358,7 +358,7 @@ router.put('/agencies/:id/emails/:emailId', requireAuth, requireRole('admin', 'm
 });
 
 // DELETE /api/agencies/:id/emails/:emailId — no-op (emails stored on agency)
-router.delete('/agencies/:id/emails/:emailId', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+router.delete('/agencies/:id/emails/:emailId', requireAuth, requirePermission('agencies', 'edit'), async (req, res) => {
   res.json({ success: true, note: 'Use agencies.email field' });
 });
 

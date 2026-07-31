@@ -153,7 +153,7 @@ function App() {
             {canAccess('communications') && <Route path="/phone-logs" element={<PhoneLogs />} />}
             {canAccess('communications') && <Route path="/mail-logs" element={<MailLogs />} />}
             {canAccess('users') && <Route path="/users" element={<Users />} />}
-            {user.role === 'admin' && <Route path="/permissions" element={<TeamPermissions />} />}
+            {canAccess('users') && <Route path="/permissions" element={<TeamPermissions />} />}
           </Routes></Suspense>
           </ErrorBoundary>
         </main>

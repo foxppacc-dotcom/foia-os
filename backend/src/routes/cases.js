@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth, requireRole, requirePermission } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { logActivity } = require('../services/activityLogger');
@@ -308,7 +308,7 @@ router.put('/cases/:id', async (req, res) => {
 });
 
 // DELETE /api/cases/:id
-router.delete('/cases/:id', requireRole('admin', 'manager'), async (req, res) => {
+router.delete('/cases/:id', requirePermission('cases', 'delete'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
 
