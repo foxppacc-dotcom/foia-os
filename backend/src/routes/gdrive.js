@@ -23,8 +23,15 @@ router.get('/gdrive/auth-url', requireAuth, requireRole('admin'), (req, res) => 
   res.json({ url });
 });
 
-// GET /api/gdrive/oauth-callback — Google redirects the browser here after consent
-router.get('/gdrive/oauth-callback', async (req, res) => {
+// GET /api/gdrive/oauth-callback — Google redirects the browser here after consent.
+// Mounted directly on `app` in index.js, BEFORE the per-feature routers (not
+// registered as a router.get(...) here) — several of those routers
+// (cases.js, communications.js, etc.) call `router.use(requireAuth)` with no
+// path, which — since every router is mounted at the same '/api' prefix —
+// intercepts ANY /api/* request that reaches it first, even paths that
+// router doesn't itself define. Google's redirect can never carry our Bearer
+// token, so this route must resolve before it hits one of those routers.
+async function oauthCallbackHandler(req, res) {
   const frontendBase = process.env.FRONTEND_URL || 'https://frontend-five-nu-wgj97r88rl.vercel.app';
   try {
     const { code, error: oauthError } = req.query;
@@ -49,7 +56,8 @@ router.get('/gdrive/oauth-callback', async (req, res) => {
   } catch (err) {
     res.redirect(`${frontendBase}/gdrive?gdrive=error&msg=${encodeURIComponent(err.message)}`);
   }
-});
+}
+router.get('/gdrive/oauth-callback', oauthCallbackHandler);
 
 // POST /api/gdrive/disconnect — remove the stored connection (admin only)
 router.post('/gdrive/disconnect', requireAuth, requireRole('admin'), async (req, res) => {
@@ -149,3 +157,4 @@ router.delete('/gdrive/folder/:caseId', requireAuth, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.oauthCallbackHandler = oauthCallbackHandler;
