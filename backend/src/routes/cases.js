@@ -428,15 +428,13 @@ router.put('/requests/:id/classification', async (req, res) => {
 const multer2 = require('multer');
 const XLSX2 = require('xlsx');
 const path2 = require('path');
-const fs2 = require('fs');
-const UPLOADS_DIR2 = path2.join(__dirname, '..', '..', 'uploads', 'cases_bulk');
-if (!fs2.existsSync(UPLOADS_DIR2)) { try { fs2.mkdirSync(UPLOADS_DIR2, { recursive: true }); } catch (e) { /* Vercel read-only — uploads go to Supabase */ } }
 
+// xlsx can parse straight from the in-memory buffer (XLSX.read, not
+// XLSX.readFile) -- no disk write needed at all, so this sidesteps Vercel's
+// read-only filesystem entirely instead of silently failing to persist
+// anything under the deployed bundle's uploads/ dir like it used to.
 const uploadCases = multer2({
-  storage: multer2.diskStorage({
-    destination: (req, file, cb) => cb(null, UPLOADS_DIR2),
-    filename: (req, file, cb) => cb(null, 'cases_import_' + Date.now() + path2.extname(file.originalname))
-  }),
+  storage: multer2.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = path2.extname(file.originalname).toLowerCase();
@@ -450,7 +448,7 @@ router.post('/cases/upload', requireAuth, uploadCases.single('file'), async (req
   try {
     if (!req.file) return res.status(400).json({ error: 'لم يتم رفع ملف' });
 
-    const workbook = XLSX2.readFile(req.file.path);
+    const workbook = XLSX2.read(req.file.buffer, { type: 'buffer' });
     const data = XLSX2.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: '' });
 
     if (data.length === 0) return res.json({ success: true, imported: 0, message: 'الملف فارغ' });
@@ -561,8 +559,14 @@ router.post('/cases/upload', requireAuth, uploadCases.single('file'), async (req
       imported++;
     }
 
-    // Clean temp file
-    try { fs2.unlinkSync(req.file.path); } catch {}
+    // Archive the import file itself to Drive for record-keeping (non-blocking)
+    try {
+      const gdrive = require('../services/googleDriveService');
+      const folderId = await gdrive.ensureSystemFolder('Imports');
+      await gdrive.uploadBytes(req.file.buffer, req.file.originalname, req.file.mimetype, folderId);
+    } catch (uploadErr) {
+      console.warn('Case import file Drive archive warning:', uploadErr.message);
+    }
 
     res.json({
       success: true,

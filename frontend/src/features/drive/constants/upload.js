@@ -39,8 +39,17 @@ export const UPLOAD_STATUS_COLORS = {
 
 /** Max retries per chunk */
 export const MAX_CHUNK_RETRIES = 3;
-/** Chunk size in bytes (5MB) */
+/** Chunk size in bytes (5MB) — sent directly to Google Drive's resumable session, not our backend */
 export const CHUNK_SIZE = 5 * 1024 * 1024;
+/**
+ * Files above this size skip the simple single-request upload to our own
+ * backend and go straight to Drive via a resumable session instead. Vercel's
+ * Node.js serverless functions hard-cap request bodies at ~4.5MB (platform
+ * limit, not configurable) — confirmed empirically: a 4.0MB upload succeeds,
+ * a 4.4MB upload 413s with FUNCTION_PAYLOAD_TOO_LARGE. 3MB leaves headroom
+ * for multipart/form-data overhead on top of the raw file bytes.
+ */
+export const SIMPLE_UPLOAD_MAX_SIZE = 3 * 1024 * 1024;
 /** Max queue items */
 export const MAX_QUEUE_SIZE = 50;
 /** Concurrent uploads */

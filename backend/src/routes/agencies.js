@@ -5,7 +5,7 @@ const XLSX = require('xlsx');
 const path = require('path');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
-const storage = require('../services/storage');
+const gdrive = require('../services/googleDriveService');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -73,11 +73,12 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
       imported++;
     }
 
-    // Upload to Supabase Storage for record-keeping (non-blocking)
+    // Archive the import file itself to Drive for record-keeping (non-blocking)
     try {
-      await storage.uploadFromRequest(req.file, 'agency-files', 'imports');
+      const folderId = await gdrive.ensureSystemFolder('Imports');
+      await gdrive.uploadBytes(req.file.buffer, req.file.originalname, req.file.mimetype, folderId);
     } catch (uploadErr) {
-      console.warn('Agency file storage upload warning:', uploadErr.message);
+      console.warn('Agency file Drive archive warning:', uploadErr.message);
     }
 
     res.json({

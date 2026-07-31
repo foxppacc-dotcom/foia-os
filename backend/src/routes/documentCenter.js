@@ -528,6 +528,41 @@ router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
+// DELETE /api/communications/:id — delete a single email (inbound or
+// outbound), from the Inbox or the case's Communications tab. Also trashes
+// any Drive-stored attachments so deleting the message doesn't leave
+// orphaned files behind.
+router.delete('/communications/:id', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const commId = parseInt(req.params.id);
+    const { data: comm } = await sup.from('communications').select('metadata, subject').eq('id', commId).maybeSingle();
+    if (!comm) return res.status(404).json({ error: 'Message not found' });
+
+    const meta = parseMetadata(comm.metadata);
+    for (const att of meta.attachments || []) {
+      if (att.driveFileId) {
+        await gdrive.deleteFile(att.driveFileId).catch(e => console.warn('[communications] Drive attachment delete failed:', e.message));
+      }
+    }
+
+    const { error } = await sup.from('communications').delete().eq('id', commId);
+    if (error) throw error;
+
+    try {
+      await sup.from('activity_logs').insert({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'communication_deleted', target_type: 'communication', target_id: commId,
+        target_title: `🗑️ ${comm.subject || 'رسالة بدون عنوان'}`,
+      });
+    } catch (e) { console.error('[communications] delete activity log failed:', e.message); }
+
+    res.json({ success: true });
+  } catch (ex) {
+    res.status(500).json({ error: ex.message });
+  }
+});
+
 // POST /api/imap/poll — Trigger IMAP polling
 router.post('/imap/poll', requireAuth, async (req, res) => {
   try {

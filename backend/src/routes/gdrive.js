@@ -52,6 +52,16 @@ async function oauthCallbackHandler(req, res) {
     } catch { /* email is cosmetic only */ }
 
     await gdrive.saveConnection(tokens.refresh_token, email);
+
+    // One-time setup: make the root folder "anyone with the link can view"
+    // so files/subfolders created inside it (every case folder, always
+    // nested under this root) inherit viewable access automatically instead
+    // of being private to only the connected Google account. Non-fatal --
+    // the connection itself should still succeed even if this fails.
+    if (process.env.GOOGLE_DRIVE_ROOT_FOLDER) {
+      gdrive.shareAnyoneWithLink(process.env.GOOGLE_DRIVE_ROOT_FOLDER).catch(e => console.error('[gdrive] root folder sharing failed:', e.message));
+    }
+
     res.redirect(`${frontendBase}/gdrive?gdrive=success`);
   } catch (err) {
     res.redirect(`${frontendBase}/gdrive?gdrive=error&msg=${encodeURIComponent(err.message)}`);
@@ -63,6 +73,23 @@ router.get('/gdrive/oauth-callback', oauthCallbackHandler);
 router.post('/gdrive/disconnect', requireAuth, requireRole('admin'), async (req, res) => {
   await gdrive.clearConnection();
   res.json({ success: true });
+});
+
+// POST /api/gdrive/share-root — one-time (idempotent) setup: makes the root
+// Drive folder "anyone with the link can view" so every case folder nested
+// under it inherits viewable access, instead of being private to only the
+// connected Google account. Runs automatically on a fresh OAuth connect;
+// this exists to fix it for a connection made before that existed, and is
+// safe to re-run any time.
+router.post('/gdrive/share-root', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    if (!process.env.GOOGLE_DRIVE_ROOT_FOLDER) return res.status(503).json({ error: 'GOOGLE_DRIVE_ROOT_FOLDER غير معد' });
+    const already = await gdrive.isSharedWithAnyone(process.env.GOOGLE_DRIVE_ROOT_FOLDER);
+    if (!already) await gdrive.shareAnyoneWithLink(process.env.GOOGLE_DRIVE_ROOT_FOLDER);
+    res.json({ success: true, alreadyShared: already });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/gdrive/migrate-legacy — one-time (idempotent, safe to re-run)
@@ -100,6 +127,63 @@ router.post('/gdrive/migrate-legacy', requireAuth, requireRole('admin'), async (
     }
   }
   res.json({ success: true, migrated: results.filter(r => r.success).length, failed: results.filter(r => !r.success).length, results });
+});
+
+const CATEGORY_SUBFOLDER = { attachments: 'Attachments', incoming: 'Incoming', outgoing: 'Outgoing' };
+
+// POST /api/gdrive/upload-session — open a Drive resumable-upload session for
+// a large file. The browser then PUTs the bytes directly to the returned
+// sessionUrl (in chunks) -- this route only ever handles a small JSON body,
+// so it isn't subject to Vercel's ~4.5MB serverless request-body limit that
+// the regular /cases/:id/documents upload route runs into on bigger files.
+router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
+  try {
+    const { case_id, file_name, mime_type, size, category } = req.body;
+    if (!case_id || !file_name) return res.status(400).json({ error: 'case_id, file_name مطلوبون' });
+    if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
+
+    const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[category] || 'Attachments');
+    const sessionUrl = await gdrive.createResumableSession(file_name, mime_type, folderId, size);
+    res.json({ success: true, sessionUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/gdrive/finalize — register a file the browser already uploaded
+// directly to Drive (via the session above) as a real case_documents row.
+// Metadata is re-fetched from Drive itself rather than trusted from the
+// client, so a tampered request can't forge size/mimeType/ownership.
+router.post('/gdrive/finalize', requireAuth, async (req, res) => {
+  try {
+    const { case_id, drive_file_id, original_name, file_type, description } = req.body;
+    if (!case_id || !drive_file_id) return res.status(400).json({ error: 'case_id, drive_file_id مطلوبون' });
+
+    const meta = await gdrive.getFileMetadata(drive_file_id);
+    const sup = getSupabase();
+    const insertData = {
+      case_id: parseInt(case_id),
+      filename: meta.name, original_name: original_name || meta.name,
+      mime_type: meta.mimeType, size: parseInt(meta.size) || 0,
+      file_type: file_type || 'document', description: description || '',
+      uploaded_by: req.user.id,
+      drive_file_id: meta.id, storage_provider: 'google_drive',
+      file_path: meta.webViewLink, url: meta.webViewLink,
+      file_hash: meta.md5Checksum || null,
+    };
+    let { data, error } = await sup.from('case_documents').insert(insertData).select().single();
+    while (error && /column .* does not exist|Could not find the '(\w+)' column/.test(error.message)) {
+      const m = error.message.match(/'(\w+)' column|column "(\w+)"/);
+      const badCol = m && (m[1] || m[2]);
+      if (!badCol || !(badCol in insertData)) break;
+      delete insertData[badCol];
+      ({ data, error } = await sup.from('case_documents').insert(insertData).select().single());
+    }
+    if (error) throw error;
+    res.status(201).json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/gdrive/link — link a Drive file to a case
@@ -148,12 +232,17 @@ router.post('/gdrive/folder', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/gdrive/case/:caseId/create-folder — create a per-case Drive folder (requires real credentials)
+// POST /api/gdrive/case/:caseId/create-folder — idempotent: reuses the
+// case's existing Drive folder (cases.drive_folder_id) instead of always
+// creating a new one. Calling this twice used to silently orphan the first
+// folder (and everything uploaded into it) by overwriting the DB reference
+// with a brand new empty folder.
 router.post('/gdrive/case/:caseId/create-folder', requireAuth, async (req, res) => {
   try {
     if (!gdrive.configured) return res.status(503).json({ error: 'Google Drive is not configured yet — set GOOGLE_CLIENT_ID/SECRET/DRIVE_ROOT_FOLDER' });
-    const result = await gdrive.createCaseFolder(parseInt(req.params.caseId));
-    res.json({ success: true, ...result });
+    const caseId = parseInt(req.params.caseId);
+    const folderId = await gdrive.ensureCaseFolder(caseId);
+    res.json({ success: true, configured: true, folderId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

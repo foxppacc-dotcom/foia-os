@@ -2,17 +2,22 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const { getSupabase } = require('../supabase');
 const { processDocument, extractText, extractMetadata, detectDuplicates } = require('../services/aiIntake');
+const caseFileStorage = require('../services/caseFileStorage');
 const { requireAuth } = require("../middleware/auth");
 router.use(requireAuth);
 
-// Configure multer for AI intake uploads
-const INTAKE_DIR = path.join(__dirname, '..', '..', 'uploads', 'intake');
-if (!fs.existsSync(INTAKE_DIR)) {
-  try { fs.mkdirSync(INTAKE_DIR, { recursive: true }); } catch (e) { /* Vercel read-only */ }
-}
+// The OCR step shells out to a Python script that needs a real file path on
+// disk (extractText -> execSync), so this can't just switch to
+// multer.memoryStorage() and read a buffer. /tmp is the one directory
+// Vercel's serverless filesystem actually allows writes to (ephemeral,
+// wiped between invocations) -- the previous destination
+// (backend/uploads/intake, under the read-only deployed bundle) silently
+// failed every write attempt.
+const INTAKE_DIR = os.tmpdir();
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, INTAKE_DIR),
@@ -99,6 +104,26 @@ router.post('/intake/upload', upload.single('file'), async (req, res) => {
     await sup.from('cases').update({
       description: `[AI Summary]\n${metadata.summary}\n\n[Detected Agencies]\n${metadata.agencies.join(', ')}\n\n[Detected Dates]\n${metadata.dates.join(', ')}\n\n[Case Numbers]\n${metadata.case_numbers.join(', ')}\n\n[Evidence]\n${metadata.evidence_mentions.join(', ')}`,
     }).eq('id', caseId);
+
+    // Archive the originally-uploaded document itself as a real case
+    // document (it's the source evidence the case was built from) — same
+    // Drive storage path every other upload uses, not left behind in /tmp.
+    try {
+      const buffer = fs.readFileSync(filePath);
+      const driveFields = await caseFileStorage.saveCaseFile({
+        caseId, buffer, fileName: originalName, mimeType: req.file.mimetype, category: 'attachments',
+      });
+      await sup.from('case_documents').insert({
+        case_id: caseId, filename: originalName, original_name: originalName,
+        mime_type: req.file.mimetype, size: req.file.size,
+        file_type: 'document', uploaded_by: req.user?.id,
+        ...driveFields, url: driveFields.file_path,
+      });
+    } catch (archiveErr) {
+      console.error('[intake] failed to archive source document to Drive:', archiveErr.message);
+    } finally {
+      fs.unlink(filePath, () => {});
+    }
 
     res.json({
       success: true,

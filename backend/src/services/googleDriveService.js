@@ -135,6 +135,28 @@ class GoogleDriveService {
   }
 
   /**
+   * Idempotent top-level folder directly under the root, for content that
+   * isn't tied to any one case (e.g. archived agency/case bulk-import
+   * Excel files). Not cached in folder_cache (that table is keyed by
+   * case_id) since this is a rare, low-frequency operation.
+   */
+  async ensureSystemFolder(name) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    const rootId = process.env.GOOGLE_DRIVE_ROOT_FOLDER;
+    const res = await drive.files.list({
+      q: `'${rootId}' in parents and name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields: 'files(id)',
+    });
+    if (res.data.files?.length) return res.data.files[0].id;
+    const created = await drive.files.create({
+      requestBody: { name, mimeType: 'application/vnd.google-apps.folder', parents: [rootId] },
+      fields: 'id',
+    });
+    return created.data.id;
+  }
+
+  /**
    * Link an already-uploaded Drive file's metadata to a case (as a case_documents row).
    */
   async linkToCase(caseId, driveFileId, fileName, webViewLink, mimeType, fileSize) {
@@ -270,6 +292,72 @@ class GoogleDriveService {
     if (!drive) throw new Error('Google Drive غير متصل');
     await drive.files.update({ fileId, requestBody: { name: newName } });
     return { success: true };
+  }
+
+  /** A short-lived access token, exchanged from the stored refresh token. Only ever used server-side. */
+  async getAccessToken() {
+    const auth = this.newOAuthClient();
+    const refreshToken = await this.getStoredRefreshToken();
+    if (!refreshToken) throw new Error('Google Drive غير متصل');
+    auth.setCredentials({ refresh_token: refreshToken });
+    const { token } = await auth.getAccessToken();
+    if (!token) throw new Error('تعذر الحصول على access token من جوجل');
+    return token;
+  }
+
+  /**
+   * Open a Drive resumable-upload session. The browser then PUTs raw bytes
+   * directly to the returned URL in chunks -- bypassing our own backend (and
+   * Vercel's hard ~4.5MB serverless request-body limit) entirely. The
+   * session URL is itself the credential for those PUTs; our OAuth token
+   * never reaches the client.
+   */
+  async createResumableSession(fileName, mimeType, folderId, fileSize) {
+    const accessToken = await this.getAccessToken();
+    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': mimeType || 'application/octet-stream',
+        ...(fileSize ? { 'X-Upload-Content-Length': String(fileSize) } : {}),
+      },
+      body: JSON.stringify({ name: fileName, parents: [folderId] }),
+    });
+    if (!res.ok) throw new Error(`فشل بدء جلسة الرفع: ${res.status} ${await res.text()}`);
+    const sessionUrl = res.headers.get('location');
+    if (!sessionUrl) throw new Error('لم يتم استلام رابط جلسة الرفع من جوجل');
+    return sessionUrl;
+  }
+
+  /** Authoritative Drive metadata for a file -- never trust client-supplied size/mimeType when finalizing an upload. */
+  async getFileMetadata(fileId) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    const res = await drive.files.get({ fileId, fields: 'id, name, size, mimeType, webViewLink, webContentLink, md5Checksum' });
+    return res.data;
+  }
+
+  /**
+   * "Anyone with the link can view" -- the secure-enough default this app
+   * relies on everywhere (matches the old Supabase signed-URL behavior:
+   * whoever holds the link can open it, nothing indexable/public beyond
+   * that). Files/folders created inside an already-shared folder inherit
+   * the same access automatically, so this only ever needs to run once on
+   * the root folder, not per case or per file.
+   */
+  async shareAnyoneWithLink(fileId) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    await drive.permissions.create({ fileId, requestBody: { type: 'anyone', role: 'reader' } });
+    return { success: true };
+  }
+
+  async isSharedWithAnyone(fileId) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    const res = await drive.permissions.list({ fileId, fields: 'permissions(type, role)' });
+    return (res.data.permissions || []).some(p => p.type === 'anyone');
   }
 }
 

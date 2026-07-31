@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, getApiBase } from '../api';
-import { Mail, Search, Inbox, Archive, Link2, Eye, ChevronDown, RefreshCw, Loader2, ExternalLink } from 'lucide-react';
+import { Mail, Search, Inbox, Archive, Link2, Eye, ChevronDown, RefreshCw, Loader2, ExternalLink, Trash2 } from 'lucide-react';
 import AppSection from '../components/ds/AppSection';
 import AppButton from '../components/ds/AppButton';
 import AppBadge from '../components/ds/AppBadge';
@@ -63,6 +63,13 @@ export default function InboxPage() {
   const handleArchive = async (id) => {
     await fetch(`${BASE}/inbox/${id}/archive`, { method: 'PUT', headers: hdrs() });
     fetchInbox();
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('حذف هذه الرسالة نهائيًا؟')) return;
+    await fetch(`${BASE}/communications/${id}`, { method: 'DELETE', headers: hdrs() });
+    fetchInbox();
+    fetchUnread();
   };
 
   const statusCounts = [
@@ -138,6 +145,10 @@ export default function InboxPage() {
                   <button onClick={e => { e.stopPropagation(); handleArchive(msg.id); }}
                     className="p-1 rounded" title="أرشفة" style={{ color: 'var(--ds-text-muted)' }}>
                     <Archive className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={e => { e.stopPropagation(); handleDelete(msg.id); }}
+                    className="p-1 rounded" title="حذف" style={{ color: '#ef4444' }}>
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>

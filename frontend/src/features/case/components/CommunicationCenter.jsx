@@ -162,7 +162,7 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
   );
 }
 
-function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted }) {
+function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted }) {
   const acct = (accounts || []).find(a => a.id === thread.email_account_id);
   const daysWaiting = thread.created_at ? Math.floor((Date.now() - new Date(thread.created_at)) / (1000*60*60*24)) : 0;
   const attachments = thread.metadata?.attachments || [];
@@ -176,6 +176,13 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted }) {
   const remove = async (index) => {
     await fetch(`${API}/communications/${thread.id}/attachments/${index}`, { method: 'DELETE', headers: authHdrs() });
     onAttachmentDeleted?.();
+  };
+
+  const deleteMessage = async (e) => {
+    e.stopPropagation();
+    if (!confirm('حذف هذه الرسالة نهائيًا؟')) return;
+    await fetch(`${API}/communications/${thread.id}`, { method: 'DELETE', headers: authHdrs() });
+    onDeleted?.();
   };
 
   return (
@@ -196,9 +203,12 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted }) {
             {acct && <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{acct.email}</span>}
           </div>
         </div>
-        <div className="text-right shrink-0">
-          <div className="text-[10px]" style={{ color: daysWaiting > 14 ? '#ef4444' : daysWaiting > 7 ? '#eab308' : 'var(--ds-text-muted)' }}>{daysWaiting} يوم</div>
-          <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(thread.created_at)}</div>
+        <div className="text-right shrink-0 flex items-start gap-1.5">
+          <div>
+            <div className="text-[10px]" style={{ color: daysWaiting > 14 ? '#ef4444' : daysWaiting > 7 ? '#eab308' : 'var(--ds-text-muted)' }}>{daysWaiting} يوم</div>
+            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(thread.created_at)}</div>
+          </div>
+          <button onClick={deleteMessage} title="حذف الرسالة" style={{ color: '#ef4444' }}><Trash2 className="w-3.5 h-3.5" /></button>
         </div>
       </div>
 
@@ -312,7 +322,8 @@ export default function CommunicationCenter({ caseId }) {
           <>
             <div className="text-[10px] font-medium px-1 mb-1" style={{ color: 'var(--ds-text-muted)' }}>{filtered.length} محادثة</div>
             {filtered.map(t => <ThreadCard key={t.id} thread={t} accounts={accounts} onReply={openComposer}
-              onAttachmentDeleted={() => fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []))} />)}
+              onAttachmentDeleted={() => fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []))}
+              onDeleted={() => setThreads(prev => prev.filter(x => x.id !== t.id))} />)}
           </>
         )}
       </div>
