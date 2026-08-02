@@ -229,7 +229,15 @@ router.post('/gdrive/finalize', requireAuth, async (req, res) => {
     // This makes "upload finished but response lost" fully self-healing.
     if (!drive_file_id) {
       const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[req.body.category] || 'Attachments');
-      const existing = await gdrive.findExistingFile(folderId, original_name, req.body.size);
+      // Google Drive has eventual-consistency indexing: right after the last
+      // resumable chunk lands (308), the file may not be visible to queries
+      // for a couple of seconds. Retry the lookup a few times before giving
+      // up — otherwise the client re-uploads the WHOLE file needlessly.
+      let existing = null;
+      for (let attempt = 0; attempt < 3 && !existing; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
+        existing = await gdrive.findExistingFile(folderId, original_name, req.body.size);
+      }
       if (!existing) {
         return res.status(404).json({ error: 'تعذر العثور على الملف المرفوع على Google Drive — حاول مرة أخرى' });
       }

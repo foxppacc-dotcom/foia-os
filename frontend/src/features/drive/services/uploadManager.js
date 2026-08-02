@@ -160,9 +160,13 @@ class UploadManager {
 
      // If a previous attempt already produced a Drive file (upload finished,
      // finalize failed), skip straight to finalize — do NOT re-upload.
-     let driveFile = item.driveFile || null;
+     // A __driveDone marker means the last chunk answered 308 (bytes ARE in
+     // Drive) but finalize hadn't succeeded yet — also skip re-uploading and
+     // go straight to finalize (backend resolves the file by name+size).
+     const driveDone = !!(item.driveFile && item.driveFile.__driveDone);
+     let driveFile = driveDone ? null : (item.driveFile || null);
 
-     if (!driveFile) {
+     if (!driveFile && !driveDone) {
        const sessionRes = await fetch(`${API}/gdrive/upload-session`, {
          method: 'POST',
          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -198,7 +202,10 @@ class UploadManager {
            this._notify();
          }
          driveFile = await this._uploadChunksToSession(item, file, sessionUrl, startOffset);
-         item.driveFile = driveFile;
+         // The final chunk can answer 308 "resume incomplete" instead of the
+         // file metadata — the bytes ARE in Drive. Mark the item so a later
+         // retry (finalize failure) skips re-uploading and only re-finalizes.
+         item.driveFile = driveFile || { __driveDone: true };
        }
      }
 
