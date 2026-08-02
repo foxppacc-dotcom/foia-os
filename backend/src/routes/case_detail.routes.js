@@ -457,6 +457,22 @@ router.post('/cases/:id/documents', upload.single('file'), async (req, res) => {
     let mime_type = req.body?.mime_type || req.file?.mimetype || 'application/octet-stream';
     let size = req.body?.size || req.file?.size || 0;
 
+    // ---- Idempotency guard (prevents duplicate Drive uploads) ----
+    // The client may retry after a network error that happened AFTER the
+    // file actually reached Google Drive (bytes sent, response lost). A
+    // naive retry would then upload a second copy to Drive. If an identical
+    // file (same case + original_name + size) already exists, return the
+    // existing row instead — no new bytes, no duplicate storage.
+    const { data: existingDoc } = await sup.from('case_documents')
+      .select('id, original_name, drive_file_id, file_path, url')
+      .eq('case_id', caseId)
+      .eq('original_name', original_name)
+      .eq('size', size)
+      .maybeSingle();
+    if (existingDoc) {
+      return res.status(200).json({ success: true, data: existingDoc, duplicate: true });
+    }
+
     // Google Drive is the single permanent storage backend for new uploads —
     // bytes go straight from the multer memory buffer to Drive, never to
     // Supabase Storage or local/Vercel disk.

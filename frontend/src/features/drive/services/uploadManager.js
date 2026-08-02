@@ -142,90 +142,101 @@ class UploadManager {
   }
 
   /**
-   * Large file upload: opens a Google Drive resumable-upload session via our
-   * backend (small JSON request, well under Vercel's body-size limit), then
-   * PUTs the file straight to Drive in chunks directly from the browser —
-   * our backend never touches the bytes, so there's no platform size ceiling
-   * beyond Drive's own (5TB). Finishes by registering the result as a real
-   * case_documents row (metadata only) via /gdrive/finalize.
-   */
-  async _chunkedUpload(item) {
-    const file = item.file;
-    const token = localStorage.getItem('foia_token');
+   /** Large file upload: opens a Google Drive resumable-upload session via our
+    *  backend (small JSON request, well under Vercel's body-size limit), then
+    *  PUTs the file straight to Drive in chunks directly from the browser —
+    *  our backend never touches the bytes, so there's no platform size ceiling
+    *  beyond Drive's own (5TB). Finishes by registering the result as a real
+    *  case_documents row (metadata only) via /gdrive/finalize.
+    *
+    *  Duplicate-safe: if the chunks already landed in Drive but the finalize
+    *  (or its response) failed, a retry reuses the SAME drive_file_id and only
+    *  re-runs finalize — it never re-uploads bytes or creates a second Drive
+    *  file (the backend finalize route is idempotent by drive_file_id).
+    */
+   async _chunkedUpload(item) {
+     const file = item.file;
+     const token = localStorage.getItem('foia_token');
 
-    const sessionRes = await fetch(`${API}/gdrive/upload-session`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({
-        case_id: item.caseId,
-        file_name: item.metadata.originalName || file.name,
-        mime_type: file.type || 'application/octet-stream',
-        size: file.size,
-        category: item.metadata.category || 'attachments',
-      }),
-    });
-    if (!sessionRes.ok) throw new Error((await sessionRes.json().catch(() => ({}))).error || 'تعذر بدء جلسة الرفع');
-    const { sessionUrl } = await sessionRes.json();
+     // If a previous attempt already produced a Drive file (upload finished,
+     // finalize failed), skip straight to finalize — do NOT re-upload.
+     let driveFile = item.driveFile || null;
 
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    let driveFile = null;
+     if (!driveFile) {
+       const sessionRes = await fetch(`${API}/gdrive/upload-session`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+         body: JSON.stringify({
+           case_id: item.caseId,
+           file_name: item.metadata.originalName || file.name,
+           mime_type: file.type || 'application/octet-stream',
+           size: file.size,
+           category: item.metadata.category || 'attachments',
+         }),
+       });
+       if (!sessionRes.ok) throw new Error((await sessionRes.json().catch(() => ({}))).error || 'تعذر بدء جلسة الرفع');
+       const { sessionUrl } = await sessionRes.json();
 
-    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-      if (item.status === UPLOAD_STATUS.CANCELED || item.status === UPLOAD_STATUS.PAUSED) {
-        if (item.status === UPLOAD_STATUS.PAUSED) {
-          // Wait until resumed
-          await new Promise(resolve => {
-            const check = setInterval(() => {
-              if (item.status === UPLOAD_STATUS.UPLOADING || item.status === UPLOAD_STATUS.CANCELED) {
-                clearInterval(check);
-                resolve();
-              }
-            }, 500);
-          });
-          if (item.status === UPLOAD_STATUS.CANCELED) throw new DOMException('Canceled', 'AbortError');
-        } else throw new DOMException('Canceled', 'AbortError');
-      }
+       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-      const start = chunkIndex * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-      let chunkRetries = 0;
+       for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+         if (item.status === UPLOAD_STATUS.CANCELED || item.status === UPLOAD_STATUS.PAUSED) {
+           if (item.status === UPLOAD_STATUS.PAUSED) {
+             // Wait until resumed
+             await new Promise(resolve => {
+               const check = setInterval(() => {
+                 if (item.status === UPLOAD_STATUS.UPLOADING || item.status === UPLOAD_STATUS.CANCELED) {
+                   clearInterval(check);
+                   resolve();
+                 }
+               }, 500);
+             });
+             if (item.status === UPLOAD_STATUS.CANCELED) throw new DOMException('Canceled', 'AbortError');
+           } else throw new DOMException('Canceled', 'AbortError');
+         }
 
-      while (chunkRetries <= MAX_CHUNK_RETRIES) {
-        try {
-          const result = await this._putChunkToDrive(sessionUrl, chunk, start, end, file.size, item);
-          item.uploadedBytes = end;
-          item.progress = Math.round((end / item.totalBytes) * 100);
-          this._updateSpeed(item, end);
-          this._notify();
-          if (result) driveFile = result; // the final chunk's response is the created Drive file
-          break;
-        } catch (err) {
-          chunkRetries++;
-          if (chunkRetries > MAX_CHUNK_RETRIES) throw err;
-          item.status = UPLOAD_STATUS.RETRYING;
-          this._notify();
-          await new Promise(r => setTimeout(r, RETRY_DELAY_MS * chunkRetries));
-          item.status = UPLOAD_STATUS.UPLOADING;
-          this._notify();
-        }
-      }
-    }
+         const start = chunkIndex * CHUNK_SIZE;
+         const end = Math.min(start + CHUNK_SIZE, file.size);
+         const chunk = file.slice(start, end);
+         let chunkRetries = 0;
 
-    if (!driveFile) throw new Error('انتهى الرفع بدون رد نهائي من Google Drive');
+         while (chunkRetries <= MAX_CHUNK_RETRIES) {
+           try {
+             const result = await this._putChunkToDrive(sessionUrl, chunk, start, end, file.size, item);
+             item.uploadedBytes = end;
+             item.progress = Math.round((end / item.totalBytes) * 100);
+             this._updateSpeed(item, end);
+             this._notify();
+             if (result) driveFile = result; // the final chunk's response is the created Drive file
+             break;
+           } catch (err) {
+             chunkRetries++;
+             if (chunkRetries > MAX_CHUNK_RETRIES) throw err;
+             item.status = UPLOAD_STATUS.RETRYING;
+             this._notify();
+             await new Promise(r => setTimeout(r, RETRY_DELAY_MS * chunkRetries));
+             item.status = UPLOAD_STATUS.UPLOADING;
+             this._notify();
+           }
+         }
+       }
+       item.driveFile = driveFile;
+     }
 
-    const finalizeRes = await fetch(`${API}/gdrive/finalize`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({
-        case_id: item.caseId, drive_file_id: driveFile.id,
-        original_name: item.metadata.originalName || file.name,
-        file_type: item.metadata.fileType || 'document',
-        description: item.metadata.description || '',
-      }),
-    });
-    if (!finalizeRes.ok) throw new Error((await finalizeRes.json().catch(() => ({}))).error || 'تعذر تسجيل الملف بعد الرفع');
-  }
+     if (!driveFile) throw new Error('انتهى الرفع بدون رد نهائي من Google Drive');
+
+     const finalizeRes = await fetch(`${API}/gdrive/finalize`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+       body: JSON.stringify({
+         case_id: item.caseId, drive_file_id: driveFile.id,
+         original_name: item.metadata.originalName || file.name,
+         file_type: item.metadata.fileType || 'document',
+         description: item.metadata.description || '',
+       }),
+     });
+     if (!finalizeRes.ok) throw new Error((await finalizeRes.json().catch(() => ({}))).error || 'تعذر تسجيل الملف بعد الرفع');
+   }
 
   /** PUT one chunk directly to Google Drive's resumable session URL (never touches our backend). */
   _putChunkToDrive(sessionUrl, chunk, start, end, totalSize, item) {

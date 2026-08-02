@@ -357,8 +357,14 @@ class GoogleDriveService {
    * Share an EXISTING Drive file "anyone with the link" with a configurable
    * role (reader | commenter | writer), then return the live shareable link.
    * Reuses the file already stored in Drive — no re-upload, no duplicate copy.
-   * Setting a new permission is idempotent on Google's side (same type+role
-   * overwrites), and an already-shared file keeps working.
+   *
+   * Most files live inside the shared root folder ("FOIA OS"), which is
+   * already shared "anyone with the link". Drive then REJECTS adding a direct
+   * permission on a child whose inherited access is equal-or-higher
+   * ("Cannot modify a permission on an item to be less than the inherited
+   * access from a direct or indirect parent"). In that case the link already
+   * works through inheritance — we simply return it. Files outside the root
+   * get a real direct permission.
    */
   async shareFileWithLink(fileId, role = 'reader') {
     const drive = await this.initRealDrive();
@@ -366,21 +372,27 @@ class GoogleDriveService {
     const valid = ['reader', 'commenter', 'writer'];
     if (!valid.includes(role)) role = 'reader';
 
-    // Upsert the "anyone with link" permission at the requested role.
-    const { data: existingPerms } = await drive.permissions.list({
-      fileId, fields: 'permissions(id, type, role)',
-    });
-    const anyone = (existingPerms?.permissions || []).find(p => p.type === 'anyone');
-    if (anyone) {
-      if (anyone.role !== role) {
-        await drive.permissions.update({ fileId, permissionId: anyone.id, requestBody: { role } });
+    try {
+      // Upsert the "anyone with link" permission at the requested role.
+      const { data: existingPerms } = await drive.permissions.list({
+        fileId, fields: 'permissions(id, type, role)',
+      });
+      const anyone = (existingPerms?.permissions || []).find(p => p.type === 'anyone');
+      if (anyone) {
+        if (anyone.role !== role) {
+          await drive.permissions.update({ fileId, permissionId: anyone.id, requestBody: { role } });
+        }
+      } else {
+        await drive.permissions.create({ fileId, requestBody: { type: 'anyone', role } });
       }
-    } else {
-      await drive.permissions.create({ fileId, requestBody: { type: 'anyone', role } });
+    } catch (err) {
+      // Inherited access from the shared parent already grants the link —
+      // that is not a failure, the file is already shareable.
+      if (!/less than the inherited access/i.test(err.message)) throw err;
     }
 
     const { data: meta } = await drive.files.get({ fileId, fields: 'webViewLink, id, name' });
-    return { success: true, shareUrl: meta.webViewLink, fileId: meta.id, name: meta.name, role };
+    return { success: true, shareUrl: meta.webViewLink, fileId: meta.id, name: meta.name, role, inherited: true };
   }
 
   async isSharedWithAnyone(fileId) {

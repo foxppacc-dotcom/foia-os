@@ -157,10 +157,21 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
 router.post('/gdrive/finalize', requireAuth, async (req, res) => {
   try {
     const { case_id, drive_file_id, original_name, file_type, description } = req.body;
-    if (!case_id || !drive_file_id) return res.status(400).json({ error: 'case_id, drive_file_id مطلوبون' });
+    if (!case_id || !drive_file_id) return res.status(400).json({ error: 'case_id, drive_file_id مطلوبان' });
 
     const meta = await gdrive.getFileMetadata(drive_file_id);
     const sup = getSupabase();
+
+    // Idempotency guard: the browser may retry finalize after a lost
+    // response even though the chunks already landed in Drive. If a row
+    // already references this exact Drive file, return it instead of
+    // creating a duplicate case_documents row.
+    const { data: existingByDrive } = await sup.from('case_documents')
+      .select('id').eq('case_id', parseInt(case_id)).eq('drive_file_id', meta.id).maybeSingle();
+    if (existingByDrive) {
+      return res.status(200).json({ success: true, data: { ...existingByDrive, duplicate: true } });
+    }
+
     const insertData = {
       case_id: parseInt(case_id),
       filename: meta.name, original_name: original_name || meta.name,

@@ -22,7 +22,14 @@ function detectFileType(filename = '') {
   return 'document';
 }
 
-/** Human-readable size: 512 B / 12 KB / 2.4 MB / 1.8 GB */
+/** Human-readable size: 512 B / 12 KB / 2.4 MB / 1.8 GB.
+ *  DB column is `size` (case_documents), so accept both `size` and the
+ *  legacy `file_size` alias for safety. */
+function getSize(doc) {
+  const v = doc?.size ?? doc?.file_size ?? null;
+  return v;
+}
+
 function shortenSize(bytes) {
   if (!bytes || isNaN(bytes)) return '—';
   const n = Number(bytes);
@@ -44,13 +51,12 @@ function detectSource(doc) {
   return 'manual';
 }
 
-/** Meaningful status — "قيد الانتظار" must never show after a successful upload. */
+/** Meaningful status — only real states; never "قيد الانتظار"/"قيد المراجعة". */
 function statusInfo(doc) {
   if (doc?.verification_status === 'verified') return { label: 'موثّق', variant: 'success' };
   if (doc?.verification_status === 'rejected') return { label: 'مرفوض', variant: 'danger' };
-  if (doc?.verification_status === 'pending') return { label: 'قيد المراجعة', variant: 'warning' };
-  // Upload succeeded (has a storage home) → completed, never "قيد الانتظار".
-  if (doc?.drive_file_id || doc?.storage_key || doc?.file_path) return { label: 'مكتمل', variant: 'neutral' };
+  // Upload succeeded (has a storage home) → completed. No indeterminate
+  // "pending" labels — a stored file is a completed file.
   return { label: 'مكتمل', variant: 'neutral' };
 }
 
@@ -131,7 +137,7 @@ export default function DocumentsTab() {
     if (search) list = list.filter(d => (d.file_name || d.original_name || '').toLowerCase().includes(search.toLowerCase()));
     list.sort((a, b) => {
       if (sortBy === 'name') return (a.file_name || '').localeCompare(b.file_name || '');
-      if (sortBy === 'size') return (b.file_size || 0) - (a.file_size || 0);
+      if (sortBy === 'size') return (getSize(b) || 0) - (getSize(a) || 0);
       return new Date(b.created_at || 0) - new Date(a.created_at || 0);
     });
     return list;
@@ -220,7 +226,7 @@ export default function DocumentsTab() {
               const ft = detectFileType(doc.file_name || doc.original_name);
               const Icon = fileIcons[ft] || FileText;
               const cat = categories.find(c => c.id === doc.category_id);
-              const size = shortenSize(doc.file_size);
+              const size = shortenSize(getSize(doc));
               const source = detectSource(doc);
               const st = statusInfo(doc);
               const isSharing = sharingId === doc.id;
