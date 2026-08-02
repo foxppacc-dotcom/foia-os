@@ -353,6 +353,36 @@ class GoogleDriveService {
     return { success: true };
   }
 
+  /**
+   * Share an EXISTING Drive file "anyone with the link" with a configurable
+   * role (reader | commenter | writer), then return the live shareable link.
+   * Reuses the file already stored in Drive — no re-upload, no duplicate copy.
+   * Setting a new permission is idempotent on Google's side (same type+role
+   * overwrites), and an already-shared file keeps working.
+   */
+  async shareFileWithLink(fileId, role = 'reader') {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    const valid = ['reader', 'commenter', 'writer'];
+    if (!valid.includes(role)) role = 'reader';
+
+    // Upsert the "anyone with link" permission at the requested role.
+    const { data: existingPerms } = await drive.permissions.list({
+      fileId, fields: 'permissions(id, type, role)',
+    });
+    const anyone = (existingPerms?.permissions || []).find(p => p.type === 'anyone');
+    if (anyone) {
+      if (anyone.role !== role) {
+        await drive.permissions.update({ fileId, permissionId: anyone.id, requestBody: { role } });
+      }
+    } else {
+      await drive.permissions.create({ fileId, requestBody: { type: 'anyone', role } });
+    }
+
+    const { data: meta } = await drive.files.get({ fileId, fields: 'webViewLink, id, name' });
+    return { success: true, shareUrl: meta.webViewLink, fileId: meta.id, name: meta.name, role };
+  }
+
   async isSharedWithAnyone(fileId) {
     const drive = await this.initRealDrive();
     if (!drive) throw new Error('Google Drive غير متصل');

@@ -260,6 +260,7 @@ class MailPoller {
             filename: att.filename, original_name: att.filename,
             mime_type: att.contentType, size: att.size,
             file_type: guessFileType(att.filename),
+            source: 'email',
             ...driveFields, url: driveFields.file_path,
           });
           if (docErr) console.error(`[mailPoller] case_documents insert failed for "${att.filename}":`, docErr.message);

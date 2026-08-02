@@ -186,6 +186,32 @@ router.post('/gdrive/finalize', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/gdrive/share-file — share an EXISTING Drive-backed case document
+// "anyone with the link" at a chosen role (reader/commenter/writer). Reuses the
+// file already in Drive — no copy, no re-upload. Works for any case_documents
+// row that has a drive_file_id (uploaded manually or received via email).
+router.post('/gdrive/share-file', requireAuth, async (req, res) => {
+  try {
+    const { document_id, role } = req.body;
+    if (!document_id) return res.status(400).json({ error: 'document_id مطلوب' });
+    if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
+
+    const sup = getSupabase();
+    const { data: doc } = await sup.from('case_documents')
+      .select('id, drive_file_id, original_name, storage_provider')
+      .eq('id', parseInt(document_id)).maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'مستند غير موجود' });
+    if (doc.storage_provider !== 'google_drive' || !doc.drive_file_id) {
+      return res.status(400).json({ error: 'هذا المستند غير مخزن على Google Drive — المشاركة متاحة للملفات المخزنة على Drive فقط' });
+    }
+
+    const result = await gdrive.shareFileWithLink(doc.drive_file_id, role);
+    res.json({ success: true, ...result, document_id: doc.id, original_name: doc.original_name });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/gdrive/link — link a Drive file to a case
 router.post('/gdrive/link', requireAuth, async (req, res) => {
   try {

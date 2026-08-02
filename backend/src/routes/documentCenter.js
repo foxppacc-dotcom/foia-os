@@ -316,6 +316,7 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
           filename: file.originalname, original_name: file.originalname,
           mime_type: file.mimetype, size: file.size,
           file_type: fileType, uploaded_by: req.user?.id,
+          source: 'email',
           ...driveFields, url: driveFields.file_path,
         });
         if (docErr) console.error(`[compose] case_documents insert failed for "${file.originalname}":`, docErr.message);
