@@ -124,9 +124,13 @@ class UploadManager {
     return new Promise((resolve, reject) => {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
-          item.uploadedBytes = e.loaded;
-          item.progress = Math.round((e.loaded / e.total) * 100);
-          this._updateSpeed(item, e.loaded);
+          // e.total includes multipart/form-data overhead (boundaries + text
+          // fields), so it is LARGER than the real file. Measure against the
+          // true file size so the bar never overshoots (>100% or uploaded
+          // bytes > total bytes shown in the UI).
+          item.uploadedBytes = Math.min(e.loaded, item.totalBytes);
+          item.progress = Math.round((item.uploadedBytes / item.totalBytes) * 100);
+          this._updateSpeed(item, item.uploadedBytes);
           this._notify();
         }
       };
@@ -196,7 +200,7 @@ class UploadManager {
          // us Google already accepted the first N bytes of a previous attempt.
          // Start from that byte — never re-upload the accepted prefix.
          const startOffset = sessionData.resume_offset || 0;
-         if (startOffset > 0) {
+         if (startOffset > item.uploadedBytes) {
            item.uploadedBytes = startOffset;
            item.progress = Math.round((startOffset / item.totalBytes) * 100);
            this._notify();
@@ -276,8 +280,10 @@ class UploadManager {
       while (chunkRetries <= MAX_CHUNK_RETRIES) {
         try {
           const result = await this._putChunkToDrive(sessionUrl, chunk, start, end, file.size, item);
-          item.uploadedBytes = end;
-          item.progress = Math.round((end / item.totalBytes) * 100);
+          // Ratchet only upward — a chunk retry or a fresh attempt must never
+          // drag the bar back (e.g. 100% → 50% → 100% → …).
+          item.uploadedBytes = Math.max(item.uploadedBytes, Math.min(end, item.totalBytes));
+          item.progress = Math.round((item.uploadedBytes / item.totalBytes) * 100);
           this._updateSpeed(item, end);
           this._notify();
           if (result) driveFile = result; // the final chunk's response is the created Drive file
@@ -303,10 +309,14 @@ class UploadManager {
       if (item.abortController) item.abortController.signal.addEventListener('abort', () => xhr.abort());
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
-          const loaded = start + e.loaded;
-          item.uploadedBytes = loaded;
-          item.progress = Math.round((loaded / item.totalBytes) * 100);
-          this._updateSpeed(item, loaded);
+          // Monotonic guard: when a chunk is retried after a failure, the XHR
+          // restarts from 0, which would drag the bar BACK to the chunk's
+          // start (e.g. 100% → 50%). Never let progress go backwards — only
+          // ever ratchet it upward.
+          const loaded = Math.max(item.uploadedBytes, start + e.loaded);
+          item.uploadedBytes = Math.min(loaded, item.totalBytes);
+          item.progress = Math.round((item.uploadedBytes / item.totalBytes) * 100);
+          this._updateSpeed(item, item.uploadedBytes);
           this._notify();
         }
       };
