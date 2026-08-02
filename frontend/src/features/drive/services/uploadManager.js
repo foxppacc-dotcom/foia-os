@@ -191,22 +191,42 @@ class UploadManager {
        }
      }
 
-     if (!driveFile) throw new Error('انتهى الرفع بدون رد نهائي من Google Drive');
-
-     const finalizeRes = await fetch(`${API}/gdrive/finalize`, {
-       method: 'POST',
-       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-       body: JSON.stringify({
-         case_id: item.caseId, drive_file_id: driveFile.id,
+     if (!driveFile) {
+       // The final chunk can legitimately answer 308 "resume incomplete"
+       // instead of the file metadata — the file IS in Drive. Send no
+       // drive_file_id and let the backend resolve it by name+size (it will
+       // also catch the case where a previous attempt already landed).
+       const finalizeBody = {
+         case_id: item.caseId,
          original_name: item.metadata.originalName || file.name,
          file_type: item.metadata.fileType || 'document',
          description: item.metadata.description || '',
-       }),
-     });
-     if (!finalizeRes.ok) throw new Error((await finalizeRes.json().catch(() => ({}))).error || 'تعذر تسجيل الملف بعد الرفع');
-   }
+         size: file.size,
+         category: item.metadata.category || 'attachments',
+       };
+       if (driveFile && driveFile.id) finalizeBody.drive_file_id = driveFile.id;
+       const finalizeRes = await fetch(`${API}/gdrive/finalize`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+         body: JSON.stringify(finalizeBody),
+       });
+       if (!finalizeRes.ok) throw new Error((await finalizeRes.json().catch(() => ({}))).error || 'تعذر تسجيل الملف بعد الرفع');
+     } else {
+       const finalizeRes = await fetch(`${API}/gdrive/finalize`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+         body: JSON.stringify({
+           case_id: item.caseId, drive_file_id: driveFile.id,
+           original_name: item.metadata.originalName || file.name,
+           file_type: item.metadata.fileType || 'document',
+           description: item.metadata.description || '',
+         }),
+       });
+       if (!finalizeRes.ok) throw new Error((await finalizeRes.json().catch(() => ({}))).error || 'تعذر تسجيل الملف بعد الرفع');
+       }
+       }
 
-  /** PUT all chunks of a file to a Drive resumable session URL (never touches our backend). */
+       /** PUT all chunks of a file to a Drive resumable session URL (never touches our backend). */
   async _uploadChunksToSession(item, file, sessionUrl) {
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     let driveFile = null;

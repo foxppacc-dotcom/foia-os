@@ -162,11 +162,27 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
 // client, so a tampered request can't forge size/mimeType/ownership.
 router.post('/gdrive/finalize', requireAuth, async (req, res) => {
   try {
-    const { case_id, drive_file_id, original_name, file_type, description } = req.body;
-    if (!case_id || !drive_file_id) return res.status(400).json({ error: 'case_id, drive_file_id مطلوبان' });
+    let { case_id, drive_file_id, original_name, file_type, description } = req.body;
+    if (!case_id) return res.status(400).json({ error: 'case_id مطلوب' });
+    if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
+
+    const sup = getSupabase();
+
+    // If the browser didn't give us a drive_file_id (the final chunk of a
+    // resumable upload can legitimately answer 308 "resume incomplete"
+    // instead of the file metadata), resolve it ourselves: the file already
+    // landed in the case's Drive folder — find it by name + size and use it.
+    // This makes "upload finished but response lost" fully self-healing.
+    if (!drive_file_id) {
+      const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[req.body.category] || 'Attachments');
+      const existing = await gdrive.findExistingFile(folderId, original_name, req.body.size);
+      if (!existing) {
+        return res.status(404).json({ error: 'تعذر العثور على الملف المرفوع على Google Drive — حاول مرة أخرى' });
+      }
+      drive_file_id = existing.id;
+    }
 
     const meta = await gdrive.getFileMetadata(drive_file_id);
-    const sup = getSupabase();
 
     // Idempotency guard: the browser may retry finalize after a lost
     // response even though the chunks already landed in Drive. If a row
