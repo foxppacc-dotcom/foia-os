@@ -175,52 +175,20 @@ class UploadManager {
          }),
        });
        if (!sessionRes.ok) throw new Error((await sessionRes.json().catch(() => ({}))).error || 'تعذر بدء جلسة الرفع');
-       const { sessionUrl } = await sessionRes.json();
+       const sessionData = await sessionRes.json();
 
-       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-       for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-         if (item.status === UPLOAD_STATUS.CANCELED || item.status === UPLOAD_STATUS.PAUSED) {
-           if (item.status === UPLOAD_STATUS.PAUSED) {
-             // Wait until resumed
-             await new Promise(resolve => {
-               const check = setInterval(() => {
-                 if (item.status === UPLOAD_STATUS.UPLOADING || item.status === UPLOAD_STATUS.CANCELED) {
-                   clearInterval(check);
-                   resolve();
-                 }
-               }, 500);
-             });
-             if (item.status === UPLOAD_STATUS.CANCELED) throw new DOMException('Canceled', 'AbortError');
-           } else throw new DOMException('Canceled', 'AbortError');
-         }
-
-         const start = chunkIndex * CHUNK_SIZE;
-         const end = Math.min(start + CHUNK_SIZE, file.size);
-         const chunk = file.slice(start, end);
-         let chunkRetries = 0;
-
-         while (chunkRetries <= MAX_CHUNK_RETRIES) {
-           try {
-             const result = await this._putChunkToDrive(sessionUrl, chunk, start, end, file.size, item);
-             item.uploadedBytes = end;
-             item.progress = Math.round((end / item.totalBytes) * 100);
-             this._updateSpeed(item, end);
-             this._notify();
-             if (result) driveFile = result; // the final chunk's response is the created Drive file
-             break;
-           } catch (err) {
-             chunkRetries++;
-             if (chunkRetries > MAX_CHUNK_RETRIES) throw err;
-             item.status = UPLOAD_STATUS.RETRYING;
-             this._notify();
-             await new Promise(r => setTimeout(r, RETRY_DELAY_MS * chunkRetries));
-             item.status = UPLOAD_STATUS.UPLOADING;
-             this._notify();
-           }
-         }
+       // Backend found the exact file already in Drive (same name + size from
+       // an earlier attempt whose response was lost) — skip the upload and
+       // finalize against the existing Drive file. Never creates a duplicate.
+       if (sessionData.existing && sessionData.drive_file_id) {
+         driveFile = { id: sessionData.drive_file_id, webViewLink: sessionData.webViewLink || null };
+         item.driveFile = driveFile;
+       } else {
+         const { sessionUrl } = sessionData;
+         if (!sessionUrl) throw new Error('تعذر بدء جلسة الرفع');
+         driveFile = await this._uploadChunksToSession(item, file, sessionUrl);
+         item.driveFile = driveFile;
        }
-       item.driveFile = driveFile;
      }
 
      if (!driveFile) throw new Error('انتهى الرفع بدون رد نهائي من Google Drive');
@@ -237,6 +205,55 @@ class UploadManager {
      });
      if (!finalizeRes.ok) throw new Error((await finalizeRes.json().catch(() => ({}))).error || 'تعذر تسجيل الملف بعد الرفع');
    }
+
+  /** PUT all chunks of a file to a Drive resumable session URL (never touches our backend). */
+  async _uploadChunksToSession(item, file, sessionUrl) {
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    let driveFile = null;
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+      if (item.status === UPLOAD_STATUS.CANCELED || item.status === UPLOAD_STATUS.PAUSED) {
+        if (item.status === UPLOAD_STATUS.PAUSED) {
+          // Wait until resumed
+          await new Promise(resolve => {
+            const check = setInterval(() => {
+              if (item.status === UPLOAD_STATUS.UPLOADING || item.status === UPLOAD_STATUS.CANCELED) {
+                clearInterval(check);
+                resolve();
+              }
+            }, 500);
+          });
+          if (item.status === UPLOAD_STATUS.CANCELED) throw new DOMException('Canceled', 'AbortError');
+        } else throw new DOMException('Canceled', 'AbortError');
+      }
+
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
+      let chunkRetries = 0;
+
+      while (chunkRetries <= MAX_CHUNK_RETRIES) {
+        try {
+          const result = await this._putChunkToDrive(sessionUrl, chunk, start, end, file.size, item);
+          item.uploadedBytes = end;
+          item.progress = Math.round((end / item.totalBytes) * 100);
+          this._updateSpeed(item, end);
+          this._notify();
+          if (result) driveFile = result; // the final chunk's response is the created Drive file
+          break;
+        } catch (err) {
+          chunkRetries++;
+          if (chunkRetries > MAX_CHUNK_RETRIES) throw err;
+          item.status = UPLOAD_STATUS.RETRYING;
+          this._notify();
+          await new Promise(r => setTimeout(r, RETRY_DELAY_MS * chunkRetries));
+          item.status = UPLOAD_STATUS.UPLOADING;
+          this._notify();
+        }
+      }
+    }
+    return driveFile;
+  }
 
   /** PUT one chunk directly to Google Drive's resumable session URL (never touches our backend). */
   _putChunkToDrive(sessionUrl, chunk, start, end, totalSize, item) {

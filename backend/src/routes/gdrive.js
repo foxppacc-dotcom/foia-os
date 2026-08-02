@@ -143,8 +143,14 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
     if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
 
     const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[category] || 'Attachments');
-    const sessionUrl = await gdrive.createResumableSession(file_name, mime_type, folderId, size);
-    res.json({ success: true, sessionUrl });
+    const session = await gdrive.createResumableSession(file_name, mime_type, folderId, size);
+    // The file already exists in Drive (same name+size) — tell the client to
+    // skip the upload and finalize against the existing file instead of
+    // creating a second copy.
+    if (session && typeof session === 'object' && session.__existing) {
+      return res.json({ success: true, existing: true, drive_file_id: session.__existing.id, webViewLink: session.__existing.webViewLink });
+    }
+    res.json({ success: true, sessionUrl: session });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

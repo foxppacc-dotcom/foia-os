@@ -256,11 +256,46 @@ class GoogleDriveService {
   }
 
   /**
+   * Find an existing, non-trashed file in a folder by name (and optionally
+   * exact size). This is the storage-level idempotency guard: if the exact
+   * file already landed in Drive (e.g. a previous attempt succeeded but its
+   * response was lost and the client retried), return its ID instead of
+   * creating a second copy. Returns null when no match.
+   */
+  async findExistingFile(folderId, fileName, fileSize = null) {
+    const drive = await this.initRealDrive();
+    if (!drive) return null;
+    try {
+      const q = `'${folderId}' in parents and name='${String(fileName).replace(/'/g, "\\'")}' and trashed=false`;
+      const res = await drive.files.list({ q, fields: 'files(id, name, size)', pageSize: 10 });
+      const files = res.data.files || [];
+      if (fileSize != null) {
+        const bySize = files.find(f => String(f.size) === String(fileSize));
+        return bySize || null;
+      }
+      return files[0] || null;
+    } catch (e) {
+      console.error('[googleDriveService] findExistingFile failed:', e.message);
+      return null;
+    }
+  }
+
+  /**
    * Upload real bytes to a Drive folder. Returns Drive's file metadata.
+   * Dedupes against an existing same-name+same-size file in the folder.
    */
   async uploadBytes(buffer, fileName, mimeType, folderId) {
     const drive = await this.initRealDrive();
     if (!drive) throw new Error('Google Drive غير متصل');
+
+    // Idempotency: if this exact file already exists in the folder, reuse it —
+    // never write a second copy (client retries after lost responses land here).
+    const existing = await this.findExistingFile(folderId, fileName, buffer.length);
+    if (existing) {
+      const { data: meta } = await drive.files.get({ fileId: existing.id, fields: 'id, name, size, mimeType, webViewLink, webContentLink, md5Checksum' });
+      return meta;
+    }
+
     const { Readable } = require('stream');
     const res = await drive.files.create({
       requestBody: { name: fileName, parents: [folderId] },
@@ -313,6 +348,18 @@ class GoogleDriveService {
    * never reaches the client.
    */
   async createResumableSession(fileName, mimeType, folderId, fileSize) {
+    // Idempotency: if the file already exists in the target folder (same name
+    // + same size — e.g. a previous chunked attempt finished but its response
+    // was lost and the browser retried), return a flag so the client reuses
+    // the existing file instead of creating a second Drive copy.
+    const existing = await this.findExistingFile(folderId, fileName, fileSize);
+    if (existing) {
+      const { data: meta } = await this.initRealDrive().then(d => d.files.get({
+        fileId: existing.id, fields: 'id, name, size, mimeType, webViewLink, md5Checksum',
+      }));
+      return { __existing: meta };
+    }
+
     const accessToken = await this.getAccessToken();
     const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
       method: 'POST',
