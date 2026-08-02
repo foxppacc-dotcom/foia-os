@@ -142,15 +142,59 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
     if (!case_id || !file_name) return res.status(400).json({ error: 'case_id, file_name مطلوبون' });
     if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
 
+    const sup = getSupabase();
     const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[category] || 'Attachments');
-    const session = await gdrive.createResumableSession(file_name, mime_type, folderId, size);
-    // The file already exists in Drive (same name+size) — tell the client to
-    // skip the upload and finalize against the existing file instead of
-    // creating a second copy.
-    if (session && typeof session === 'object' && session.__existing) {
-      return res.json({ success: true, existing: true, drive_file_id: session.__existing.id, webViewLink: session.__existing.webViewLink });
+
+    // 1) Reuse a live resumable session from a previous attempt (network drop
+    //    resume): same case + file name + size. Ask Google how far it got and
+    //    return the offset so the browser resumes from there instead of
+    //    re-uploading from byte 0. This is what makes 10GB uploads survive
+    //    disconnects.
+    const { data: existingSession } = await sup.from('drive_upload_sessions')
+      .select('id, session_url, uploaded_bytes, status')
+      .eq('case_id', parseInt(case_id)).eq('file_name', file_name)
+      .eq('file_size', parseInt(size)).eq('status', 'active').maybeSingle();
+    if (existingSession && existingSession.session_url) {
+      try {
+        const progress = await gdrive.checkSessionProgress(existingSession.session_url, parseInt(size));
+        if (progress.completed) {
+          return res.json({ success: true, existing: true, resume_offset: parseInt(size), completed: true });
+        }
+        // Keep the row fresh; report the resume offset.
+        await sup.from('drive_upload_sessions')
+          .update({ uploaded_bytes: progress.offset, updated_at: new Date().toISOString() })
+          .eq('id', existingSession.id);
+        return res.json({
+          success: true, resumable: true, session_url: existingSession.session_url,
+          resume_offset: progress.offset, folder_id: folderId,
+        });
+      } catch (e) {
+        // Session expired or gone (404/410) — fall through and open a new one.
+        await sup.from('drive_upload_sessions').update({ status: 'expired' }).eq('id', existingSession.id).catch(() => {});
+      }
     }
-    res.json({ success: true, sessionUrl: session });
+
+    // 2) The file already exists in Drive (same name+size from a fully
+    //    finished upload) — nothing to upload, finalize against it.
+    const existing = await gdrive.findExistingFile(folderId, file_name, size);
+    if (existing) {
+      const { data: meta } = await gdrive.initRealDrive().then(d => d.files.get({
+        fileId: existing.id, fields: 'id, name, size, mimeType, webViewLink, md5Checksum',
+      }));
+      return res.json({ success: true, existing: true, drive_file_id: meta.id, webViewLink: meta.webViewLink, resume_offset: parseInt(size) });
+    }
+
+    // 3) Fresh session — open it and persist it so a later drop can resume.
+    const sessionUrl = await gdrive.createResumableSession(file_name, mime_type, folderId, size);
+    if (sessionUrl && typeof sessionUrl === 'object' && sessionUrl.__existing) {
+      return res.json({ success: true, existing: true, drive_file_id: sessionUrl.__existing.id, webViewLink: sessionUrl.__existing.webViewLink, resume_offset: parseInt(size) });
+    }
+    await sup.from('drive_upload_sessions').insert({
+      case_id: parseInt(case_id), file_name, file_size: parseInt(size),
+      mime_type, category: category || 'attachments', folder_id: folderId,
+      session_url: sessionUrl, uploaded_bytes: 0, status: 'active',
+    }).then(() => {}).catch((e) => console.error('[gdrive] save session failed:', e.message));
+    res.json({ success: true, resumable: true, session_url: sessionUrl, resume_offset: 0, folder_id: folderId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -186,7 +186,16 @@ class UploadManager {
        } else {
          const { sessionUrl } = sessionData;
          if (!sessionUrl) throw new Error('تعذر بدء جلسة الرفع');
-         driveFile = await this._uploadChunksToSession(item, file, sessionUrl);
+         // Network-drop resume: the backend may return a resume_offset telling
+         // us Google already accepted the first N bytes of a previous attempt.
+         // Start from that byte — never re-upload the accepted prefix.
+         const startOffset = sessionData.resume_offset || 0;
+         if (startOffset > 0) {
+           item.uploadedBytes = startOffset;
+           item.progress = Math.round((startOffset / item.totalBytes) * 100);
+           this._notify();
+         }
+         driveFile = await this._uploadChunksToSession(item, file, sessionUrl, startOffset);
          item.driveFile = driveFile;
        }
      }
@@ -226,12 +235,15 @@ class UploadManager {
        }
        }
 
-       /** PUT all chunks of a file to a Drive resumable session URL (never touches our backend). */
-  async _uploadChunksToSession(item, file, sessionUrl) {
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    let driveFile = null;
+       /** PUT all chunks of a file to a Drive resumable session URL (never touches our backend).
+        *  startOffset (bytes): Google already accepted the prefix of a previous
+        *  attempt — resume from there and skip re-uploading accepted bytes. */
+       async _uploadChunksToSession(item, file, sessionUrl, startOffset = 0) {
+         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+         const firstChunk = Math.min(Math.floor(startOffset / CHUNK_SIZE), totalChunks);
+         let driveFile = null;
 
-    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+         for (let chunkIndex = firstChunk; chunkIndex < totalChunks; chunkIndex++) {
       if (item.status === UPLOAD_STATUS.CANCELED || item.status === UPLOAD_STATUS.PAUSED) {
         if (item.status === UPLOAD_STATUS.PAUSED) {
           // Wait until resumed

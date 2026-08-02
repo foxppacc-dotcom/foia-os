@@ -347,6 +347,31 @@ class GoogleDriveService {
    * session URL is itself the credential for those PUTs; our OAuth token
    * never reaches the client.
    */
+  /**
+   * Ask Google Drive how many bytes of a resumable session have already been
+   * accepted. Sends the documented status query (PUT with a wildcard
+   * Content-Range); Drive answers 308 + `Range: bytes=0-N` when incomplete,
+   * or 200/201 when complete. Returns { completed, offset }.
+   */
+  async checkSessionProgress(sessionUrl, totalSize) {
+    const res = await fetch(sessionUrl, {
+      method: 'PUT',
+      headers: { 'Content-Range': `bytes */${totalSize}` },
+    });
+    if (res.status === 200 || res.status === 201) return { completed: true, offset: totalSize };
+    if (res.status === 308) {
+      const range = res.headers.get('range');
+      // Range header looks like "bytes=0-10485759" → offset = end + 1
+      if (range) {
+        const m = range.match(/bytes=(\d+)-(\d+)/);
+        if (m) return { completed: false, offset: parseInt(m[2], 10) + 1 };
+      }
+      return { completed: false, offset: 0 };
+    }
+    // Session gone/expired (404/410) or any other failure → not resumable.
+    throw new Error(`لا يمكن استئناف الجلسة: HTTP ${res.status}`);
+  }
+
   async createResumableSession(fileName, mimeType, folderId, fileSize) {
     // Idempotency: if the file already exists in the target folder (same name
     // + same size — e.g. a previous chunked attempt finished but its response
