@@ -184,7 +184,9 @@ class UploadManager {
          driveFile = { id: sessionData.drive_file_id, webViewLink: sessionData.webViewLink || null };
          item.driveFile = driveFile;
        } else {
-         const { sessionUrl } = sessionData;
+         // session_url is the canonical field (newer backend); sessionUrl is
+         // kept for older bundles — accept either so uploads never break.
+         const sessionUrl = sessionData.session_url ?? sessionData.sessionUrl;
          if (!sessionUrl) throw new Error('تعذر بدء جلسة الرفع');
          // Network-drop resume: the backend may return a resume_offset telling
          // us Google already accepted the first N bytes of a previous attempt.

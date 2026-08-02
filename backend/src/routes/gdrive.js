@@ -158,6 +158,15 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
       try {
         const progress = await gdrive.checkSessionProgress(existingSession.session_url, parseInt(size));
         if (progress.completed) {
+          // Upload fully finished in a previous attempt — resolve the Drive
+          // file by name+size so the client can finalize against it directly.
+          const doneFile = await gdrive.findExistingFile(folderId, file_name, size);
+          if (doneFile) {
+            return res.json({
+              success: true, existing: true, drive_file_id: doneFile.id,
+              resume_offset: parseInt(size), completed: true,
+            });
+          }
           return res.json({ success: true, existing: true, resume_offset: parseInt(size), completed: true });
         }
         // Keep the row fresh; report the resume offset.
@@ -166,6 +175,7 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
           .eq('id', existingSession.id);
         return res.json({
           success: true, resumable: true, session_url: existingSession.session_url,
+          sessionUrl: existingSession.session_url,
           resume_offset: progress.offset, folder_id: folderId,
         });
       } catch (e) {
@@ -194,7 +204,7 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
       mime_type, category: category || 'attachments', folder_id: folderId,
       session_url: sessionUrl, uploaded_bytes: 0, status: 'active',
     }).then(() => {}).catch((e) => console.error('[gdrive] save session failed:', e.message));
-    res.json({ success: true, resumable: true, session_url: sessionUrl, resume_offset: 0, folder_id: folderId });
+    res.json({ success: true, resumable: true, session_url: sessionUrl, sessionUrl, resume_offset: 0, folder_id: folderId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
