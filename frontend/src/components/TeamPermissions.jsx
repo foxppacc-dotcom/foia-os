@@ -367,6 +367,38 @@ function PermissionsPanel({ toast, roles, roleLabel }) {
           </Card>
         ))}
       </div>
+
+      {/* Navigation Visibility — which Sidebar items this role can see */}
+      <Card title="رؤية القائمة الجانبية">
+        <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+          حدد عناصر القائمة الجانبية الظاهرة لهذا الدور — العنصر المخفي لا يظهر إطلاقًا (لا يشغل مساحة، لا يُعطَّل).
+        </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          {(schema.navItems || []).map(item => (
+            <label key={item.key} className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={isAllowed(activeRole, 'nav', item.key)} onChange={() => toggle('nav', item.key)}
+                className="w-4 h-4 rounded" style={{ accentColor: 'var(--accent)' }} />
+              <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
+            </label>
+          ))}
+        </div>
+      </Card>
+
+      {/* Production Line Visibility — which lists appear inside خط الإنتاج */}
+      <Card title="رؤية خط الإنتاج">
+        <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+          حدد قوائم خط الإنتاج الظاهرة لهذا الدور — القائمة المخفية لا تظهر ولا يمكن التفاعل معها.
+        </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          {(schema.productionLists || []).map(list => (
+            <label key={list.key} className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={isAllowed(activeRole, 'production_line', list.key)} onChange={() => toggle('production_line', list.key)}
+                className="w-4 h-4 rounded" style={{ accentColor: 'var(--accent)' }} />
+              <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{list.label}</span>
+            </label>
+          ))}
+        </div>
+      </Card>
       <p className="text-xs text-center" style={{ color: 'var(--text-muted)' }}>مدير النظام (admin) لديه صلاحية كاملة على كل الموارد دائمًا — غير موجود في هذه القائمة لأنه لا يمكن تقييده.</p>
     </div>
   );

@@ -33,8 +33,12 @@ router.get('/teams/:id/members', async (req, res) => {
   res.json({ success: true, data: members || [] });
 });
 
-// Admin/Manager only from here
-router.use(requireRole('admin', 'manager'));
+// Admin/Manager only for /teams* paths — NOT a bare router.use(): since every
+// router is mounted at '/api', an un-pathed router.use(requireRole) here would
+// intercept ALL /api/* requests that don't match a route in this file first
+// (e.g. a viewer hitting /api/permissions/mine would 403 here before the
+// permissions router ever saw it). Scope it to the teams paths.
+router.use('/teams', requireRole('admin', 'manager'));
 
 // POST /api/teams — create team
 router.post('/teams', async (req, res) => {

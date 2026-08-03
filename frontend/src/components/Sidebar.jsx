@@ -1,35 +1,36 @@
 import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import { FolderOpen, LayoutDashboard, GitBranch, Building2, Sparkles, Users, Mail, Timer, Key, FileText, ChevronRight, ChevronLeft, Cloud, UserCog, Phone, MailPlus, AtSign } from 'lucide-react';
+import { api } from '../api';
 
 const navGroups = [
   {
     label: 'الرئيسية',
     items: [
-      { path: '/', label: 'لوحة التحكم', icon: LayoutDashboard, roles: ['admin', 'manager', 'member', 'viewer'], end: true },
-      { path: '/intake', label: 'استقبال ذكي', icon: Sparkles, roles: ['admin', 'manager', 'member'] },
+      { path: '/', label: 'لوحة التحكم', icon: LayoutDashboard, roles: ['admin', 'manager', 'member', 'viewer'], end: true, navKey: 'dashboard' },
+      { path: '/intake', label: 'استقبال ذكي', icon: Sparkles, roles: ['admin', 'manager', 'member'], navKey: 'intake' },
     ],
   },
   {
     label: 'سير العمل',
     items: [
-      { path: '/cases', label: 'القضايا', icon: FolderOpen, roles: ['admin', 'manager', 'member'] },
-      { path: '/pipeline', label: 'خط الإنتاج', icon: GitBranch, roles: ['admin', 'manager', 'member'] },
-      { path: '/production', label: 'مونتاج', icon: Timer, roles: ['admin', 'manager', 'member'] },
+      { path: '/cases', label: 'القضايا', icon: FolderOpen, roles: ['admin', 'manager', 'member'], navKey: 'cases' },
+      { path: '/pipeline', label: 'خط الإنتاج', icon: GitBranch, roles: ['admin', 'manager', 'member'], navKey: 'pipeline' },
+      { path: '/production', label: 'مونتاج', icon: Timer, roles: ['admin', 'manager', 'member'], navKey: 'production' },
     ],
   },
   {
     label: 'الإدارة',
     items: [
-      { path: '/agencies', label: 'الجهات', icon: Building2, roles: ['admin', 'manager', 'member'] },
-      { path: '/portals', label: 'بوابات', icon: Key, roles: ['admin', 'manager'] },
-      { path: '/inbox', label: 'صندوق الوارد', icon: Mail, roles: ['admin', 'manager', 'member'] },
-      { path: '/email-accounts', label: 'إيميلات', icon: AtSign, roles: ['admin', 'manager', 'member'] },
-      { path: '/teams', label: 'الفرق', icon: Users, roles: ['admin'] },
-      { path: '/permissions', label: 'فريق العمل', icon: UserCog, roles: ['admin', 'manager'] },
-      { path: '/gdrive', label: 'Google Drive', icon: Cloud, roles: ['admin', 'manager', 'member'] },
-      { path: '/phone-logs', label: 'سجل المكالمات', icon: Phone, roles: ['admin', 'manager', 'member'] },
-      { path: '/mail-logs', label: 'البريد الفعلي', icon: MailPlus, roles: ['admin', 'manager', 'member'] },
+      { path: '/agencies', label: 'الجهات', icon: Building2, roles: ['admin', 'manager', 'member'], navKey: 'agencies' },
+      { path: '/portals', label: 'بوابات', icon: Key, roles: ['admin', 'manager'], navKey: 'portals' },
+      { path: '/inbox', label: 'صندوق الوارد', icon: Mail, roles: ['admin', 'manager', 'member'], navKey: 'inbox' },
+      { path: '/email-accounts', label: 'إيميلات', icon: AtSign, roles: ['admin', 'manager', 'member'], navKey: 'email_accounts' },
+      { path: '/teams', label: 'الفرق', icon: Users, roles: ['admin'], navKey: 'teams' },
+      { path: '/permissions', label: 'فريق العمل', icon: UserCog, roles: ['admin', 'manager'], navKey: 'permissions' },
+      { path: '/gdrive', label: 'Google Drive', icon: Cloud, roles: ['admin', 'manager', 'member'], navKey: 'gdrive' },
+      { path: '/phone-logs', label: 'سجل المكالمات', icon: Phone, roles: ['admin', 'manager', 'member'], navKey: 'phone_logs' },
+      { path: '/mail-logs', label: 'البريد الفعلي', icon: MailPlus, roles: ['admin', 'manager', 'member'], navKey: 'mail_logs' },
     ],
   },
 ];
@@ -43,6 +44,18 @@ export default function Sidebar({ user }) {
     try { return localStorage.getItem(STORAGE_KEY) === 'true'; }
     catch { return false; }
   });
+  // Role-based nav visibility from /permissions/mine (admin = everything).
+  // null = still loading → render everything (no flicker); {} = no rows yet
+  // → default open, so a brand-new role never loses its sidebar.
+  const [navVisibility, setNavVisibility] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get('/permissions/mine')
+      .then(d => { if (!cancelled) setNavVisibility(d.navVisibility || {}); })
+      .catch(() => { if (!cancelled) setNavVisibility({}); });
+    return () => { cancelled = true; };
+  }, [user?.role]);
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, collapsed ? 'true' : 'false'); }
@@ -51,6 +64,11 @@ export default function Sidebar({ user }) {
 
   const width = collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
   const canAccess = (item) => !item.roles || item.roles.includes(user?.role);
+  const isNavVisible = (item) => {
+    if (navVisibility === null) return true;      // still loading — show everything
+    if (Object.keys(navVisibility).length === 0) return true; // unconfigured — default open
+    return navVisibility[item.navKey] !== false;  // hidden only when explicitly false
+  };
 
   return (
     <aside className="fixed right-0 top-0 h-full flex flex-col z-10"
@@ -100,7 +118,7 @@ export default function Sidebar({ user }) {
               </div>
             )}
             <div className="space-y-0.5">
-              {group.items.filter(canAccess).map(item => (
+              {group.items.filter(item => canAccess(item) && isNavVisible(item)).map(item => (
                 <NavLink
                   key={item.path}
                   to={item.path}

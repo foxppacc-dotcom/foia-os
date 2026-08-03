@@ -104,7 +104,24 @@ export default function Pipeline() {
   const [assigneesByList, setAssigneesByList] = useState({});
   const [allUsers, setAllUsers] = useState([]);
   const [openAssignFor, setOpenAssignFor] = useState(null);
+  // Role-based Production Line visibility from /permissions/mine. null = loading
+  // → show everything; {} = unconfigured → default open (never hides by default).
+  const [prodVisibility, setProdVisibility] = useState(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get('/permissions/mine')
+      .then(d => { if (!cancelled) setProdVisibility(d.productionVisibility || {}); })
+      .catch(() => { if (!cancelled) setProdVisibility({}); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const isListVisible = (list) => {
+    if (prodVisibility === null) return true;                     // still loading
+    if (Object.keys(prodVisibility).length === 0) return true;    // unconfigured — default open
+    return prodVisibility[String(list.list_number)] !== false;    // hidden only when explicitly false
+  };
 
   const fetchAssignees = (listIds) => {
     Promise.all(listIds.map(id => api.get(`/pipeline/lists/${id}/assignees`).then(d => [id, d.data || []]).catch(() => [id, []])))
@@ -256,7 +273,7 @@ export default function Pipeline() {
         /* ===== أعمدة — تمرير عام واحد ===== */
         <div className="flex-1 overflow-y-auto">
           <div className="flex gap-4 pb-4" style={{ minHeight: '100%' }}>
-            {lists.map(col => {
+            {lists.filter(isListVisible).map(col => {
               const items = col.requests || col.tasks || [];
               const st = LIST_STYLES_BY_ID[col.id] || { bg: '#6B7280', label: col.name_ar };
               return (
@@ -310,7 +327,7 @@ export default function Pipeline() {
       ) : (
         /* ===== صفوف — كلها مفتوحة افتراضياً ===== */
         <div className="flex-1 overflow-y-auto space-y-3 pb-4">
-          {lists.map(col => {
+          {lists.filter(isListVisible).map(col => {
             const items = col.requests || col.tasks || [];
             const st = LIST_STYLES_BY_ID[col.id] || { bg: '#6B7280', label: col.name_ar };
             const isOpen = openLists.has(col.list_number);
