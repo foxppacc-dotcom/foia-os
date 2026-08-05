@@ -150,25 +150,29 @@ export default memo(function CaseHeader() {
       {/* Overdue responses — always visible regardless of active tab, so a
           case with a missed agency deadline can't be scrolled past unnoticed. */}
       {overdueReqs > 0 && (
-        <div className="px-5 py-3 space-y-1.5" style={{ borderTop: '1px solid var(--ds-border)', background: 'rgba(239,68,68,0.06)' }}>
-          <button onClick={() => setActiveTab?.('agencies')} className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: 'var(--ds-danger)' }}>
+        <div className="px-5 py-3 space-y-2" style={{ borderTop: '1px solid var(--ds-border)', background: 'rgba(239,68,68,0.06)' }}>
+          <div className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: 'var(--ds-danger)' }}>
             <AlertTriangle className="w-3.5 h-3.5" />
             تخطّى الموعد المتوقع للرد ({overdueReqs})
-          </button>
-          <div className="flex flex-wrap gap-1.5">
-            {overdueList.slice(0, 8).map(r => {
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {overdueList.map(r => {
               const daysLate = Math.floor((new Date(todayStr) - new Date(r.expected_response_date)) / (1000 * 60 * 60 * 24));
               const agencyName = r.agencies?.name_ar || r.agencies?.name_en || 'جهة';
               return (
                 <button key={r.id} onClick={() => setActiveTab?.('agencies')}
-                  className="text-[10px] px-2 py-1 rounded-lg ds-transition-colors" style={{ background: 'rgba(239,68,68,0.1)', color: 'var(--ds-danger)' }}>
-                  {agencyName} · متأخر {daysLate} يوم
+                  className="shrink-0 text-right rounded-xl px-3 py-2 min-w-[150px] ds-transition-colors"
+                  style={{ background: 'var(--ds-bg-secondary)', border: '1px solid rgba(239,68,68,0.3)' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--ds-bg-tertiary)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'var(--ds-bg-secondary)'}>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Building2 className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--ds-danger)' }} />
+                    <span className="text-xs font-medium truncate" style={{ color: 'var(--ds-text-primary)' }}>{agencyName}</span>
+                  </div>
+                  <span className="text-[10px]" style={{ color: 'var(--ds-danger)' }}>متأخر {daysLate} يوم</span>
                 </button>
               );
             })}
-            {overdueList.length > 8 && (
-              <span className="text-[10px] px-2 py-1" style={{ color: 'var(--ds-text-muted)' }}>+{overdueList.length - 8} أخرى</span>
-            )}
           </div>
         </div>
       )}

@@ -90,22 +90,18 @@ export default function Dashboard() {
               تخطّى الموعد المتوقع للرد ({data.overdueResponses.length})
             </h2>
           </div>
-          <div className="space-y-2">
-            {data.overdueResponses.slice(0, 8).map(r => (
+          <div className="flex gap-3 overflow-x-auto pb-1">
+            {data.overdueResponses.map(r => (
               <div key={r.id} onClick={() => navigate(`/cases/${r.case_id}`)}
-                className="flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-colors" style={{ background: 'var(--bg-primary)' }}
+                className="shrink-0 text-right rounded-xl p-3 min-w-[180px] cursor-pointer transition-colors"
+                style={{ background: 'var(--bg-primary)', border: '1px solid rgba(239,68,68,0.2)' }}
                 onMouseOver={e => e.currentTarget.style.background = 'var(--bg-elevated)'}
                 onMouseOut={e => e.currentTarget.style.background = 'var(--bg-primary)'}>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{r.case_title || `قضية #${r.case_id}`}</p>
-                  <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{r.agency_name || 'جهة'} · الموعد المتوقع: {r.expected_response_date}</p>
-                </div>
-                <span className="text-[10px] shrink-0 font-medium" style={{ color: '#EF4444' }}>متأخر {r.days_overdue} يوم</span>
+                <p className="text-xs font-medium truncate mb-1" style={{ color: 'var(--text-primary)' }}>{r.case_title || `قضية #${r.case_id}`}</p>
+                <p className="text-[10px] truncate mb-1.5" style={{ color: 'var(--text-muted)' }}>{r.agency_name || 'جهة'}</p>
+                <span className="text-[10px] font-medium" style={{ color: '#EF4444' }}>متأخر {r.days_overdue} يوم</span>
               </div>
             ))}
-            {data.overdueResponses.length > 8 && (
-              <p className="text-[10px] text-center pt-1" style={{ color: 'var(--text-muted)' }}>+{data.overdueResponses.length - 8} أخرى</p>
-            )}
           </div>
         </div>
       )}
