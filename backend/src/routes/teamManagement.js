@@ -88,7 +88,7 @@ router.post('/roles/:id/duplicate', requireAuth, requireRole('admin'), async (re
 router.get('/case-team-roles', requireAuth, async (req, res) => {
   const sup = getSupabase();
   const { data, error } = await sup.from('case_team_roles').select('*').order('sort_order');
-  if (error) return res.status(400).json({ error: error.message.includes('does not exist') ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (case_team_roles)' : error.message });
+  if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (case_team_roles)' : error.message });
   res.json({ success: true, data: data || [] });
 });
 
