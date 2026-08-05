@@ -49,6 +49,16 @@ const PRODUCTION_LISTS = [
   { key: '7', label: 'لسته محتاجة تأكيد مواطنة' },
 ];
 
+// These sidebar nav items map 1:1 onto a RESOURCES entry that already has a
+// 'view' action. Keeping their sidebar visibility independently toggleable
+// from that same resource's view permission was the root cause of repeated
+// "role X has permission but the link is hidden" (or the reverse: visible
+// link, 403 on click) reports -- so for exactly these keys, nav visibility
+// is derived straight from the resource's view permission instead of its
+// own row. Every other nav item (no matching resource, or no 'view' action)
+// keeps its own independently-configured visibility below.
+const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production'];
+
 // Fallback only for the rare case the roles table is empty/unreachable --
 // the real, editable role list lives in the `roles` table (teamManagement.js
 // /roles CRUD), not hardcoded here, so newly-added custom roles show up in
@@ -96,6 +106,11 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
   const navRows = (data || []).filter(p => p.resource === 'nav');
   const navVisibility = {};
   for (const item of NAV_ITEMS) {
+    if (RESOURCE_VIEW_NAV_KEYS.includes(item.key)) {
+      const viewRow = (data || []).find(p => p.resource === item.key && p.action === 'view');
+      navVisibility[item.key] = viewRow ? viewRow.allowed !== false : false;
+      continue;
+    }
     const row = navRows.find(p => p.action === item.key);
     navVisibility[item.key] = navRows.length === 0 ? true : (row ? row.allowed !== false : false);
   }

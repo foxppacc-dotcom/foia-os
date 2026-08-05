@@ -369,6 +369,10 @@ function PermissionsPanel({ toast, roles, roleLabel }) {
   if (loading) return <Spinner full />;
   if (!schema) return <EmptyState icon={ShieldCheck} title="تعذر تحميل نظام الصلاحيات" />;
 
+  // Kept in sync with backend/src/routes/permissions.js RESOURCE_VIEW_NAV_KEYS —
+  // any resource with a 'view' action drives its own sidebar link directly.
+  const derivedNavKeys = schema.resources.filter(r => r.actions.includes('view')).map(r => r.key);
+
   return (
     <div className="space-y-4 pb-16">
       <div className="flex items-center gap-1 flex-wrap">
@@ -403,13 +407,26 @@ function PermissionsPanel({ toast, roles, roleLabel }) {
           حدد عناصر القائمة الجانبية الظاهرة لهذا الدور — العنصر المخفي لا يظهر إطلاقًا (لا يشغل مساحة، لا يُعطَّل).
         </p>
         <div className="flex items-center gap-3 flex-wrap">
-          {(schema.navItems || []).map(item => (
-            <label key={item.key} className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={isAllowed(activeRole, 'nav', item.key)} onChange={() => toggle('nav', item.key)}
-                className="w-4 h-4 rounded" style={{ accentColor: 'var(--accent)' }} />
-              <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
-            </label>
-          ))}
+          {(schema.navItems || []).map(item => {
+            // Cases/Agencies/Pipeline/Production share their sidebar visibility
+            // with that resource's own "عرض" checkbox above -- a role that can't
+            // view a resource can't see its sidebar link either, and vice versa.
+            // Keeping a second independent toggle for the same concept was the
+            // actual bug: an admin would enable "عرض" up top and still find the
+            // link hidden because this row was never separately switched on.
+            const derivedFromResource = derivedNavKeys.includes(item.key);
+            const checked = derivedFromResource ? isAllowed(activeRole, item.key, 'view') : isAllowed(activeRole, 'nav', item.key);
+            return (
+              <label key={item.key} className="flex items-center gap-2 select-none" style={{ cursor: derivedFromResource ? 'default' : 'pointer', opacity: derivedFromResource ? 0.7 : 1 }}
+                title={derivedFromResource ? 'يتبع صلاحية "عرض" الخاصة بهذا المورد أعلاه' : undefined}>
+                <input type="checkbox" checked={checked} disabled={derivedFromResource} onChange={() => !derivedFromResource && toggle('nav', item.key)}
+                  className="w-4 h-4 rounded" style={{ accentColor: 'var(--accent)' }} />
+                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  {item.label}{derivedFromResource && <span className="text-xs" style={{ color: 'var(--text-muted)' }}> (يتبع صلاحية العرض)</span>}
+                </span>
+              </label>
+            );
+          })}
         </div>
       </Card>
 
