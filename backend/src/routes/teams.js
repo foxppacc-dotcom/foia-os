@@ -11,12 +11,15 @@ router.get('/teams', async (req, res) => {
   const sup = getSupabase();
   const { data: teams } = await sup.from('teams').select('*').order('created_at', { ascending: false });
 
-  // Get member counts for each team
-  const result = [];
-  for (const t of teams || []) {
-    const { count } = await sup.from('users').select('*', { count: 'exact', head: true }).eq('team_id', t.id);
-    result.push({ ...t, member_count: count || 0 });
+  // Member counts for all teams in one query instead of one count query per
+  // team (was N sequential PostgREST round trips).
+  const teamIds = (teams || []).map(t => t.id);
+  const countByTeam = {};
+  if (teamIds.length) {
+    const { data: memberRows } = await sup.from('users').select('team_id').in('team_id', teamIds);
+    for (const m of memberRows || []) countByTeam[m.team_id] = (countByTeam[m.team_id] || 0) + 1;
   }
+  const result = (teams || []).map(t => ({ ...t, member_count: countByTeam[t.id] || 0 }));
 
   res.json({ success: true, data: result });
 });

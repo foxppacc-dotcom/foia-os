@@ -184,46 +184,10 @@ router.get('/users/list', requireAuth, async (req, res) => {
   res.json({ success: true, data: users || [] });
 });
 
-// GET /api/users/specialized — users who have specialties
-router.get('/users/specialized', requireAuth, async (req, res) => {
-  const sup = getSupabase();
-
-  const { data: specUsers } = await sup
-    .from('user_specialties')
-    .select('user_id');
-
-  const userIds = [...new Set((specUsers || []).map(su => su.user_id))];
-  const result = [];
-
-  if (userIds.length > 0) {
-    const { data: users } = await sup
-      .from('users')
-      .select('id, name, email, role')
-      .in('id', userIds)
-      .order('name');
-
-    for (const u of users || []) {
-      const { data: userSpecs } = await sup
-        .from('user_specialties')
-        .select('specialty_id')
-        .eq('user_id', u.id);
-
-      const specialtyIds = (userSpecs || []).map(us => us.specialty_id);
-
-      let specs = [];
-      if (specialtyIds.length > 0) {
-        const { data: specsData } = await sup
-          .from('specialties')
-          .select('id, name_ar, name_en, icon')
-          .in('id', specialtyIds);
-        specs = specsData || [];
-      }
-
-      result.push({ ...u, specialties: specs });
-    }
-  }
-
-  res.json({ success: true, data: result });
-});
+// NOTE: GET /api/users/specialized used to be duplicated here. Both this
+// file and users.js are mounted at '/api', and users.js loads first in
+// index.js's routes array, so this copy never actually handled a request --
+// removed rather than left as dead/diverging code (users.js has the
+// maintained, N+1-free version).
 
 module.exports = router;

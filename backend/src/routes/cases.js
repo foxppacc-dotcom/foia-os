@@ -34,30 +34,30 @@ router.get('/cases', async (req, res) => {
     const { data: cases, error } = await query;
     if (error) throw error;
 
-    // For each case, get request_count and classified_count
-    const result = [];
-    for (const c of cases || []) {
-      const { count: requestCount } = await sup
-        .from('requests')
-        .select('*', { count: 'exact', head: true })
-        .eq('case_id', c.id);
-
-      const { count: classifiedCount } = await sup
-        .from('requests')
-        .select('*', { count: 'exact', head: true })
-        .eq('case_id', c.id)
-        .not('classification_id', 'is', null);
-
-      result.push({
-        ...c,
-        assigned_user_name: c.users_cases_assigned_to_fkey?.name || null,
-        created_by_name: c.users_cases_created_by_fkey?.name || null,
-        request_count: requestCount || 0,
-        classified_count: classifiedCount || 0,
-        users_cases_assigned_to_fkey: undefined,
-        users_cases_created_by_fkey: undefined
-      });
+    // request_count/classified_count per case in ONE extra round trip instead
+    // of 2 sequential count queries per case (was 2N+1 total; PostgREST calls
+    // are HTTP round trips, so that scaled linearly with the caseload — a
+    // few hundred cases meant 1000+ sequential requests just to list them).
+    const caseIds = (cases || []).map(c => c.id);
+    const countsByCase = {};
+    if (caseIds.length) {
+      const { data: requestRows } = await sup.from('requests').select('case_id, classification_id').in('case_id', caseIds);
+      for (const r of requestRows || []) {
+        if (!countsByCase[r.case_id]) countsByCase[r.case_id] = { request_count: 0, classified_count: 0 };
+        countsByCase[r.case_id].request_count++;
+        if (r.classification_id != null) countsByCase[r.case_id].classified_count++;
+      }
     }
+
+    const result = (cases || []).map(c => ({
+      ...c,
+      assigned_user_name: c.users_cases_assigned_to_fkey?.name || null,
+      created_by_name: c.users_cases_created_by_fkey?.name || null,
+      request_count: countsByCase[c.id]?.request_count || 0,
+      classified_count: countsByCase[c.id]?.classified_count || 0,
+      users_cases_assigned_to_fkey: undefined,
+      users_cases_created_by_fkey: undefined
+    }));
 
     res.json(result);
   } catch (err) {

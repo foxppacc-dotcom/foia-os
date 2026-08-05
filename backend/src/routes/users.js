@@ -122,34 +122,29 @@ router.get('/users/specialized', async (req, res) => {
     .select('user_id');
 
   const userIds = [...new Set((specUsers || []).map(su => su.user_id))];
-  const result = [];
+  let result = [];
 
   if (userIds.length > 0) {
-    const { data: users } = await sup
-      .from('users')
-      .select('id, name, email, role')
-      .in('id', userIds)
-      .order('name');
+    // Users + ALL their specialty links + the specialty catalog, in 3 fixed
+    // queries total instead of 2 extra ones per user (was O(N) round trips).
+    const [{ data: users }, { data: allLinks }] = await Promise.all([
+      sup.from('users').select('id, name, email, role').in('id', userIds).order('name'),
+      sup.from('user_specialties').select('user_id, specialty_id').in('user_id', userIds),
+    ]);
 
-    for (const u of users || []) {
-      const { data: userSpecs } = await sup
-        .from('user_specialties')
-        .select('specialty_id')
-        .eq('user_id', u.id);
+    const specialtyIds = [...new Set((allLinks || []).map(l => l.specialty_id))];
+    const { data: specsData } = specialtyIds.length
+      ? await sup.from('specialties').select('id, name_ar, name_en, icon').in('id', specialtyIds)
+      : { data: [] };
+    const specsById = Object.fromEntries((specsData || []).map(s => [s.id, s]));
 
-      const specialtyIds = (userSpecs || []).map(us => us.specialty_id);
+    const specIdsByUser = {};
+    for (const l of allLinks || []) (specIdsByUser[l.user_id] ||= []).push(l.specialty_id);
 
-      let specs = [];
-      if (specialtyIds.length > 0) {
-        const { data: specsData } = await sup
-          .from('specialties')
-          .select('id, name_ar, name_en, icon')
-          .in('id', specialtyIds);
-        specs = specsData || [];
-      }
-
-      result.push({ ...u, specialties: specs });
-    }
+    result = (users || []).map(u => ({
+      ...u,
+      specialties: (specIdsByUser[u.id] || []).map(id => specsById[id]).filter(Boolean),
+    }));
   }
 
   res.json({ success: true, data: result });
