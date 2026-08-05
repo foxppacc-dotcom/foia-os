@@ -142,6 +142,36 @@ class MailPoller {
         }
       }
 
+      // 2b. By a case-specific communication channel's email -- an admin
+      // can register an exact email address for a given (case, agency) pair
+      // (see case_agency_channels, added from a case's الجهات tab), which is
+      // a direct, unambiguous hit and takes priority over the generic
+      // agency-level tiers below.
+      if (!matchedCaseId && msg.from) {
+        try {
+          const { data: channel } = await sup.from('case_agency_channels').select('case_id, agency_id').eq('email', msg.from).maybeSingle();
+          if (channel) { matchedCaseId = channel.case_id; matchedAgencyId = channel.agency_id; }
+        } catch (e) { /* case_agency_channels may not exist yet */ }
+      }
+
+      // 2c. By a case-specific channel's filter keywords/phrases appearing
+      // in the subject or body -- the last resort before falling back to
+      // the broader agency-name/case-title heuristics below, since these
+      // phrases were deliberately configured by a user for this exact
+      // purpose rather than inferred.
+      if (!matchedCaseId) {
+        const haystack = `${msg.subject || ''} ${msg.text || ''}`.toLowerCase();
+        if (haystack.trim()) {
+          try {
+            const { data: channels } = await sup.from('case_agency_channels').select('case_id, agency_id, filter_keywords').not('filter_keywords', 'is', null);
+            for (const ch of channels || []) {
+              const phrases = (ch.filter_keywords || '').split(/[,\n]+/).map(p => p.trim().toLowerCase()).filter(Boolean);
+              if (phrases.some(p => haystack.includes(p))) { matchedCaseId = ch.case_id; matchedAgencyId = ch.agency_id; break; }
+            }
+          } catch (e) { /* case_agency_channels may not exist yet */ }
+        }
+      }
+
       // 3. By Agency Email -- the agency's own address, or any of its
       // individual contacts' emails (agency_contacts), since replies
       // legitimately come from a named person at the agency, not always

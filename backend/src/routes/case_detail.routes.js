@@ -20,7 +20,7 @@ router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (re
     if (caseRow.error) return res.status(404).json({ error: 'Case not found' });
 
     // Fetch all other data independently — failures are non-fatal
-    const [team, requests, checklist, documents, timeline] = await Promise.all([
+    const [team, requests, checklist, documents, timeline, channels] = await Promise.all([
       sup.from('case_assignees').select('*').eq('case_id', caseId).then(r => {
         if (r.error) return [];
         return r.data || [];
@@ -54,6 +54,8 @@ router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (re
         .or(`and(target_type.eq.case,target_id.eq.${caseId}),and(target_type.eq.checklist,target_id.eq.${caseId}),and(target_type.eq.document,target_id.eq.${caseId}),and(target_type.eq.request,target_id.eq.${caseId}),and(target_type.eq.team,target_id.eq.${caseId})`)
         .order('created_at', { ascending: false }).limit(50)
         .then(r => r.error ? [] : (r.data || [])),
+      sup.from('case_agency_channels').select('*').eq('case_id', caseId).order('created_at')
+        .then(r => r.error ? [] : (r.data || [])),
     ]);
 
     const recordsProgress = {
@@ -71,6 +73,7 @@ router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (re
       documents: documents || [],
       timeline: timeline || [],
       records_progress: recordsProgress,
+      channels: channels || [],
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -270,6 +273,41 @@ router.delete('/cases/:id/team/:userId', async (req, res) => {
   try {
     const sup = getSupabase();
     const { error } = await sup.from('case_assignees').delete().eq('case_id', parseInt(req.params.id)).eq('user_id', parseInt(req.params.userId));
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ==================== AGENCY COMMUNICATION CHANNELS ====================
+// Per-(case, agency) portal link + email + filter keywords, used to help
+// mailPoller.js auto-match an inbound email to this specific case even when
+// nothing else (thread headers, reference number, agency's own address on
+// file) resolves it -- see services/mailPoller.js tiers 3b/4b.
+
+// POST /api/cases/:id/agencies/:agencyId/channels
+router.post('/cases/:id/agencies/:agencyId/channels', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { portal_link, email, filter_keywords } = req.body;
+    if (!portal_link && !email && !filter_keywords) return res.status(400).json({ error: 'أدخل رابط بوابة أو بريد إلكتروني أو كلمات فلترة على الأقل' });
+    const { data, error } = await sup.from('case_agency_channels').insert({
+      case_id: parseInt(req.params.id),
+      agency_id: parseInt(req.params.agencyId),
+      portal_link: portal_link || null,
+      email: email || null,
+      filter_keywords: filter_keywords || null,
+    }).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/cases/:id/agencies/:agencyId/channels/:channelId
+router.delete('/cases/:id/agencies/:agencyId/channels/:channelId', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { error } = await sup.from('case_agency_channels').delete()
+      .eq('id', parseInt(req.params.channelId)).eq('case_id', parseInt(req.params.id));
     if (error) throw error;
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
