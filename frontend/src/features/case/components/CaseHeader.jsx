@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, Calendar, MapPin, Shield, Users, FileText, Building2, Activity, CheckCircle, UserPlus, Package, XCircle, ArrowUpCircle, Send, Upload, Eye, Trash2 } from 'lucide-react';
+import { ArrowRight, Calendar, MapPin, Shield, Users, FileText, Building2, Activity, CheckCircle, UserPlus, Package, XCircle, ArrowUpCircle, Send, Upload, Eye, Trash2, AlertTriangle } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import AppBadge from '../../../components/ds/AppBadge';
 import { EvidenceStageBadge } from './EvidenceStageBadge';
@@ -46,7 +46,8 @@ export default memo(function CaseHeader() {
   const blockedIRs = checklist?.filter(i => i.evidence_stage === 'blocked' || i.status === 'blocked').length || 0;
   const verificationsPending = checklist?.filter(i => i.evidence_stage === 'received' || i.evidence_stage === 'evidence_received').length || 0;
   const todayStr = new Date().toISOString().split('T')[0];
-  const overdueReqs = (requests || []).filter(r => r.expected_response_date && r.expected_response_date < todayStr && !r.response_date).length;
+  const overdueList = (requests || []).filter(r => r.expected_response_date && r.expected_response_date < todayStr && !r.response_date);
+  const overdueReqs = overdueList.length;
 
   const handleTransfer = async () => {
     if (!transferTo) return;
@@ -145,6 +146,32 @@ export default memo(function CaseHeader() {
           </div>
         ))}
       </div>
+
+      {/* Overdue responses — always visible regardless of active tab, so a
+          case with a missed agency deadline can't be scrolled past unnoticed. */}
+      {overdueReqs > 0 && (
+        <div className="px-5 py-3 space-y-1.5" style={{ borderTop: '1px solid var(--ds-border)', background: 'rgba(239,68,68,0.06)' }}>
+          <button onClick={() => setActiveTab?.('agencies')} className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: 'var(--ds-danger)' }}>
+            <AlertTriangle className="w-3.5 h-3.5" />
+            تخطّى الموعد المتوقع للرد ({overdueReqs})
+          </button>
+          <div className="flex flex-wrap gap-1.5">
+            {overdueList.slice(0, 8).map(r => {
+              const daysLate = Math.floor((new Date(todayStr) - new Date(r.expected_response_date)) / (1000 * 60 * 60 * 24));
+              const agencyName = r.agencies?.name_ar || r.agencies?.name_en || 'جهة';
+              return (
+                <button key={r.id} onClick={() => setActiveTab?.('agencies')}
+                  className="text-[10px] px-2 py-1 rounded-lg ds-transition-colors" style={{ background: 'rgba(239,68,68,0.1)', color: 'var(--ds-danger)' }}>
+                  {agencyName} · متأخر {daysLate} يوم
+                </button>
+              );
+            })}
+            {overdueList.length > 8 && (
+              <span className="text-[10px] px-2 py-1" style={{ color: 'var(--ds-text-muted)' }}>+{overdueList.length - 8} أخرى</span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 });

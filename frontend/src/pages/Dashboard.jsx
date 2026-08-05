@@ -79,6 +79,37 @@ export default function Dashboard() {
         ))}
       </div>
 
+      {/* Overdue Responses — requests whose agency never responded by the
+          expected date, aggregated system-wide (mirrors the same section
+          shown per-case in CaseHeader). */}
+      {data.overdueResponses?.length > 0 && (
+        <div className="rounded-2xl p-5" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.3)', boxShadow: 'var(--shadow-md)' }}>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: '#EF4444' }}>
+              <AlertTriangle className="w-4 h-4" />
+              تخطّى الموعد المتوقع للرد ({data.overdueResponses.length})
+            </h2>
+          </div>
+          <div className="space-y-2">
+            {data.overdueResponses.slice(0, 8).map(r => (
+              <div key={r.id} onClick={() => navigate(`/cases/${r.case_id}`)}
+                className="flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-colors" style={{ background: 'var(--bg-primary)' }}
+                onMouseOver={e => e.currentTarget.style.background = 'var(--bg-elevated)'}
+                onMouseOut={e => e.currentTarget.style.background = 'var(--bg-primary)'}>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{r.case_title || `قضية #${r.case_id}`}</p>
+                  <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{r.agency_name || 'جهة'} · الموعد المتوقع: {r.expected_response_date}</p>
+                </div>
+                <span className="text-[10px] shrink-0 font-medium" style={{ color: '#EF4444' }}>متأخر {r.days_overdue} يوم</span>
+              </div>
+            ))}
+            {data.overdueResponses.length > 8 && (
+              <p className="text-[10px] text-center pt-1" style={{ color: 'var(--text-muted)' }}>+{data.overdueResponses.length - 8} أخرى</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Status Distribution + Pipeline Summary */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Status Distribution */}
