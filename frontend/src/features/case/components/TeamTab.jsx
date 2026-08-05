@@ -6,32 +6,24 @@ import AppSection from '../../../components/ds/AppSection';
 import AppButton from '../../../components/ds/AppButton';
 import Button from '../../../components/ui/Button';
 
-const INVESTIGATION_ROLES = [
-  { value: 'lead_investigator', label: 'محقق رئيسي' },
-  { value: 'investigator', label: 'محقق' },
-  { value: 'researcher', label: 'باحث' },
-  { value: 'legal_reviewer', label: 'مراجع قانوني' },
-  { value: 'producer', label: 'منتج' },
-  { value: 'viewer', label: 'مشاهد' },
-  { value: 'observer', label: 'مراقب' },
-];
-
-const ROLE_COLORS = {
-  owner: '#d4a843', lead_investigator: '#3b82f6', investigator: '#8b5cf6',
-  researcher: '#22c55e', legal_reviewer: '#ef4444', producer: '#eab308',
-  viewer: '#636366', observer: '#636366',
-};
-
 export default function TeamTab() {
   const { id: caseId, c, team, users, handleAddTeam, handleRemoveTeam } = useCaseContext();
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ user_id: '', role: 'investigator' });
+  const [teamRoles, setTeamRoles] = useState([]);
+  const [form, setForm] = useState({ user_id: '', role: '' });
   const [workload, setWorkload] = useState(null);
   const [transferTo, setTransferTo] = useState('');
 
   useEffect(() => {
     api.get('/users/workload').then(setWorkload).catch(() => {});
+    api.get('/case-team-roles').then(d => {
+      const roles = d.data || [];
+      setTeamRoles(roles);
+      if (roles.length) setForm(f => ({ ...f, role: f.role || roles[0].value }));
+    }).catch(() => {});
   }, []);
+
+  const roleColor = (value) => value === 'owner' ? '#d4a843' : (teamRoles.find(r => r.value === value)?.color || '#636366');
 
   const ownerId = c?.owner_id;
   const owner = users?.find(u => u.id === ownerId);
@@ -90,7 +82,7 @@ export default function TeamTab() {
             </select>
             <select className="w-36 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
               value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
-              {INVESTIGATION_ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+              {teamRoles.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
             <Button variant="primary" size="sm" onClick={handleAdd}><Check className="w-3 h-3" /></Button>
             <Button variant="ghost" size="sm" onClick={() => setShowAdd(false)}><X className="w-3 h-3" /></Button>
@@ -100,8 +92,8 @@ export default function TeamTab() {
         {/* Member cards */}
         {(team || []).map(tm => {
           const wl = getWorkload(tm.user_id);
-          const roleInfo = INVESTIGATION_ROLES.find(r => r.value === tm.role) || { label: tm.custom_role_name || tm.role, value: tm.role };
-          const color = ROLE_COLORS[tm.role] || '#636366';
+          const roleInfo = teamRoles.find(r => r.value === tm.role) || { label: tm.custom_role_name || tm.role, value: tm.role };
+          const color = roleColor(tm.role);
           const memberName = tm.users?.name || tm.user_name || tm.name || 'مستخدم محذوف';
           const memberEmail = tm.users?.email || tm.email;
           return (

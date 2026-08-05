@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, getCurrentUser } from '../api';
-import { Plus, Trash2, KeyRound, Search, UserCog, ShieldCheck, Pencil, Check, X, Save, Undo2 } from 'lucide-react';
+import { Plus, Trash2, KeyRound, Search, UserCog, ShieldCheck, Pencil, Check, X, Save, Undo2, Briefcase } from 'lucide-react';
 import { useToast } from './ui/Toast';
 import Button from './ui/Button';
 import Input from './ui/Input';
@@ -33,7 +33,7 @@ export default function TeamPermissions() {
 
   const tabs = [
     { key: 'members', label: 'الأعضاء' },
-    ...(isAdmin ? [{ key: 'roles', label: 'الأدوار' }, { key: 'permissions', label: 'الصلاحيات' }] : []),
+    ...(isAdmin ? [{ key: 'roles', label: 'الأدوار' }, { key: 'permissions', label: 'الصلاحيات' }, { key: 'team_titles', label: 'المسميات الوظيفية' }] : []),
   ];
 
   return (
@@ -50,6 +50,7 @@ export default function TeamPermissions() {
         tab === 'members' ? <MembersPanel toast={toast} roles={roles} roleLabel={roleLabel} isAdmin={isAdmin} /> :
         tab === 'roles' && isAdmin ? <RolesPanel toast={toast} roles={roles} onRolesChanged={fetchRoles} /> :
         tab === 'permissions' && isAdmin ? <PermissionsPanel toast={toast} roles={roles.filter(r => r.name !== 'admin')} roleLabel={roleLabel} /> :
+        tab === 'team_titles' && isAdmin ? <TeamTitlesPanel toast={toast} /> :
         <MembersPanel toast={toast} roles={roles} roleLabel={roleLabel} isAdmin={isAdmin} />
       )}
     </div>
@@ -297,6 +298,116 @@ function RolesPanel({ toast, roles, onRolesChanged }) {
 
       <ConfirmDialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} onConfirm={doDelete}
         title="حذف الدور" confirmLabel="حذف" message={`هل أنت متأكد من حذف الدور "${confirmDelete?.label}"؟ سيفشل الحذف إذا كان هناك أعضاء مسندون لهذا الدور حاليًا.`} />
+    </div>
+  );
+}
+
+function TeamTitlesPanel({ toast }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ value: '', label: '', color: '#636366' });
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ label: '', color: '#636366' });
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  const fetchItems = () => {
+    setLoading(true);
+    api.get('/case-team-roles').then(d => setItems(d.data || [])).catch(() => {}).finally(() => setLoading(false));
+  };
+  useEffect(() => { fetchItems(); }, []);
+
+  const create = async () => {
+    if (!form.value.trim() || !form.label.trim()) return;
+    try {
+      await api.post('/case-team-roles', form);
+      toast.success('تمت إضافة المسمى الوظيفي');
+      setForm({ value: '', label: '', color: '#636366' });
+      setShowAdd(false);
+      fetchItems();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const saveEdit = async (id) => {
+    try {
+      await api.put(`/case-team-roles/${id}`, editForm);
+      toast.success('تم التحديث');
+      setEditingId(null);
+      fetchItems();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const doDelete = async () => {
+    if (!confirmDelete) return;
+    try { await api.delete(`/case-team-roles/${confirmDelete.id}`); toast.success('تم الحذف'); setConfirmDelete(null); fetchItems(); }
+    catch (e) { toast.error(e.message); setConfirmDelete(null); }
+  };
+
+  if (loading) return <Spinner full />;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>المسميات الوظيفية التي تظهر عند إضافة موظف لفريق أي قضية (محقق، باحث، مراجع قانوني...) — عدّلها من هنا بدل التعديل في الكود.</p>
+        <Button icon={Plus} onClick={() => setShowAdd(true)}>مسمى جديد</Button>
+      </div>
+
+      {items.length === 0 ? <EmptyState icon={Briefcase} title="لا توجد مسميات وظيفية" /> : (
+        <TableShell>
+          <Thead><Th>اللون</Th><Th>الاسم المعروض</Th><Th>القيمة البرمجية</Th><Th align="center">إجراءات</Th></Thead>
+          <tbody>
+            {items.map(it => (
+              <Tr key={it.id}>
+                <Td>
+                  {editingId === it.id ? (
+                    <input type="color" value={editForm.color} onChange={e => setEditForm(f => ({ ...f, color: e.target.value }))} className="w-8 h-8 rounded cursor-pointer border-0 bg-transparent" />
+                  ) : (
+                    <span className="inline-block w-4 h-4 rounded-full" style={{ background: it.color }} />
+                  )}
+                </Td>
+                <Td>
+                  {editingId === it.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <Input value={editForm.label} onChange={e => setEditForm(f => ({ ...f, label: e.target.value }))} containerClassName="flex-1" />
+                      <button onClick={() => saveEdit(it.id)} style={{ color: 'var(--success)' }}><Check className="w-4 h-4" /></button>
+                      <button onClick={() => setEditingId(null)} style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+                    </div>
+                  ) : (
+                    <button className="flex items-center gap-1.5" onClick={() => { setEditingId(it.id); setEditForm({ label: it.label, color: it.color }); }} style={{ color: 'var(--text-primary)' }}>
+                      {it.label} <Pencil className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
+                    </button>
+                  )}
+                </Td>
+                <Td><code className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>{it.value}</code></Td>
+                <Td align="center">
+                  <button onClick={() => setConfirmDelete(it)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                    onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </Td>
+              </Tr>
+            ))}
+          </tbody>
+        </TableShell>
+      )}
+
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="مسمى وظيفي جديد">
+        <div className="space-y-3">
+          <Input label="الاسم المعروض" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder="محقق ميداني" />
+          <Input label="القيمة البرمجية (بالإنجليزية، بدون مسافات)" value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} placeholder="field_investigator" />
+          <div className="flex items-center gap-2">
+            <label className="text-sm" style={{ color: 'var(--text-secondary)' }}>اللون</label>
+            <input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} className="w-8 h-8 rounded cursor-pointer border-0 bg-transparent" />
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button className="flex-1" onClick={create}>إنشاء</Button>
+            <Button variant="secondary" className="flex-1" onClick={() => setShowAdd(false)}>إلغاء</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmDialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} onConfirm={doDelete}
+        title="حذف المسمى الوظيفي" confirmLabel="حذف" message={`هل أنت متأكد من حذف "${confirmDelete?.label}"؟ سيفشل الحذف إذا كان مستخدمًا في تعيينات فرق قضايا حالية.`} />
     </div>
   );
 }
