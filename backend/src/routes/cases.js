@@ -7,7 +7,7 @@ const { logActivity } = require('../services/activityLogger');
 const { scopeCasesQuery, canAccessCase } = require('../services/caseAccess');
 
 // GET /api/cases — list all cases
-router.get('/cases', async (req, res) => {
+router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { status, priority, search, assigned_to, limit, offset } = req.query;
@@ -66,7 +66,7 @@ router.get('/cases', async (req, res) => {
 });
 
 // GET /api/cases/:id — full case detail
-router.get('/cases/:id', async (req, res) => {
+router.get('/cases/:id', requirePermission('cases', 'view'), async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -176,7 +176,7 @@ router.get('/cases/:id', async (req, res) => {
 });
 
 // POST /api/cases — create a case with agencies
-router.post('/cases', async (req, res) => {
+router.post('/cases', requirePermission('cases', 'create'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { title, description, priority, client_name, assigned_to, deadline, agencies } = req.body;
@@ -288,7 +288,7 @@ router.post('/cases', async (req, res) => {
 });
 
 // PUT /api/cases/:id
-router.put('/cases/:id', async (req, res) => {
+router.put('/cases/:id', requirePermission('cases', 'edit'), async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);

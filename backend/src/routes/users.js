@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole, bcrypt } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission, bcrypt } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 
 // All routes require auth; mutating routes additionally require admin
@@ -37,7 +37,7 @@ async function getValidRoleNames(sup) {
 }
 
 // POST /api/users — create user
-router.post('/users', requireRole('admin'), async (req, res) => {
+router.post('/users', requirePermission('users', 'invite'), async (req, res) => {
   const { name, email, password, role, team_id } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, password required' });
 
@@ -61,7 +61,7 @@ router.post('/users', requireRole('admin'), async (req, res) => {
 });
 
 // PUT /api/users/:id — update user
-router.put('/users/:id', async (req, res) => {
+router.put('/users/:id', requirePermission('users', 'edit'), async (req, res) => {
   const { name, email, password, role, team_id, is_active } = req.body;
   const sup = getSupabase();
 
@@ -89,7 +89,7 @@ router.put('/users/:id', async (req, res) => {
 });
 
 // POST /api/users/:id/reset-password — admin sets a new password directly
-router.post('/users/:id/reset-password', async (req, res) => {
+router.post('/users/:id/reset-password', requirePermission('users', 'edit'), async (req, res) => {
   const { password } = req.body;
   if (!password || password.length < 6) return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 6 أحرف' });
   const sup = getSupabase();
@@ -101,7 +101,7 @@ router.post('/users/:id/reset-password', async (req, res) => {
 });
 
 // DELETE /api/users/:id
-router.delete('/users/:id', async (req, res) => {
+router.delete('/users/:id', requirePermission('users', 'delete'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
   if (id === req.user.id) return res.status(400).json({ error: 'لا يمكن حذف نفسك' });

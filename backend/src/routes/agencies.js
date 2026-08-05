@@ -94,7 +94,7 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
 });
 
 // GET /api/agencies — قائمة الجهات (بحث + فلترة + صفحات)
-router.get('/agencies', requireAuth, async (req, res) => {
+router.get('/agencies', requireAuth, requirePermission('agencies', 'view'), async (req, res) => {
   const sup = getSupabase();
   const { search, type, status, page = 1, limit = 100 } = req.query;
 
@@ -124,7 +124,7 @@ router.get('/agencies', requireAuth, async (req, res) => {
 });
 
 // GET /api/agencies/:id — تفاصيل جهة كاملة (بيانات + جهات اتصال من notes JSON)
-router.get('/agencies/:id', requireAuth, async (req, res) => {
+router.get('/agencies/:id', requireAuth, requirePermission('agencies', 'view'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
   const { data: agency } = await sup.from('agencies').select('*').eq('id', id).single();
@@ -224,7 +224,7 @@ router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), 
 });
 
 // DELETE /api/agencies/:id
-router.delete('/agencies/:id', requireAuth, requireRole('admin'), async (req, res) => {
+router.delete('/agencies/:id', requireAuth, requirePermission('agencies', 'delete'), async (req, res) => {
   const sup = getSupabase();
   await sup.from('agencies').delete().eq('id', parseInt(req.params.id));
   res.json({ success: true });
@@ -243,7 +243,7 @@ router.post('/agencies/bulk/status', requireAuth, requirePermission('agencies', 
 });
 
 // POST /api/agencies/bulk/delete — حذف جماعي
-router.post('/agencies/bulk/delete', requireAuth, requireRole('admin'), async (req, res) => {
+router.post('/agencies/bulk/delete', requireAuth, requirePermission('agencies', 'delete'), async (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids مطلوبة' });
   const sup = getSupabase();

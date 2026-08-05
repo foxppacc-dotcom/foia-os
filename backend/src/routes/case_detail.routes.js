@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requirePermission } = require('../middleware/auth');
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { canAccessCase } = require('../services/caseAccess');
 
 // GET /api/cases/:id/dashboard — combined overview
-router.get('/cases/:id/dashboard', async (req, res) => {
+router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);

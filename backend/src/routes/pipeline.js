@@ -1,11 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requirePermission } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 
 // GET /api/pipeline — returns all 7 lists with their tasks grouped
-router.get('/pipeline', async (req, res) => {
+router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { caseId, sort_by } = req.query;
@@ -91,7 +91,7 @@ router.get('/pipeline', async (req, res) => {
 });
 
 // PUT /api/pipeline/tasks/:id — update task's list_id (drag-drop)
-router.put('/pipeline/tasks/:id', async (req, res) => {
+router.put('/pipeline/tasks/:id', requirePermission('pipeline', 'move'), async (req, res) => {
   try {
     const sup = getSupabase();
     const taskId = parseInt(req.params.id);

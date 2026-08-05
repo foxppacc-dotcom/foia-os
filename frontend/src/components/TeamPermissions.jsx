@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, getCurrentUser } from '../api';
-import { Plus, Trash2, KeyRound, Search, UserCog, ShieldCheck, Pencil, Check, X } from 'lucide-react';
+import { Plus, Trash2, KeyRound, Search, UserCog, ShieldCheck, Pencil, Check, X, Save, Undo2 } from 'lucide-react';
 import { useToast } from './ui/Toast';
 import Button from './ui/Button';
 import Input from './ui/Input';
@@ -303,9 +303,11 @@ function RolesPanel({ toast, roles, onRolesChanged }) {
 
 function PermissionsPanel({ toast, roles, roleLabel }) {
   const [schema, setSchema] = useState(null);
-  const [matrix, setMatrix] = useState([]); // [{role, resource, action, allowed}]
+  const [matrix, setMatrix] = useState([]); // [{role, resource, action, allowed}] -- last saved state from server
+  const [pending, setPending] = useState({}); // key `${role}|${resource}|${action}` -> {role, resource, action, allowed} -- unsaved edits
   const [activeRole, setActiveRole] = useState(roles[0]?.name || '');
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const fetchAll = () => {
     setLoading(true);
@@ -316,24 +318,51 @@ function PermissionsPanel({ toast, roles, roleLabel }) {
   useEffect(() => { fetchAll(); }, []);
   useEffect(() => { if (!activeRole && roles.length) setActiveRole(roles[0].name); }, [roles]);
 
+  // Two different fail-safe defaults exist server-side for an unconfigured
+  // (no row yet) cell, and the checkbox must mirror whichever one actually
+  // applies or it lies to the admin about what the role can really do:
+  // - nav / production_line / cases.view_all: fail-OPEN (unconfigured =
+  //   visible/unrestricted) so shipping this feature never silently hid
+  //   something from an existing role that no one had configured yet.
+  // - every other resource/action (requirePermission middleware): fail-
+  //   CLOSED (unconfigured = denied) as the secure default for real
+  //   permission gates.
+  const defaultsOpen = (resource, action) => resource === 'nav' || resource === 'production_line' || (resource === 'cases' && action === 'view_all');
+  const cellKey = (role, resource, action) => `${role}|${resource}|${action}`;
   const isAllowed = (role, resource, action) => {
+    const key = cellKey(role, resource, action);
+    if (key in pending) return pending[key].allowed;
     const row = matrix.find(m => m.role === role && m.resource === resource && m.action === action);
-    return row ? row.allowed !== false : false;
+    if (row) return row.allowed !== false;
+    return defaultsOpen(resource, action);
   };
 
-  const toggle = async (resource, action) => {
+  // Toggling only stages the change locally -- nothing hits the server until
+  // "حفظ التغييرات" is clicked, so an admin can review a whole role's matrix
+  // before committing it (and can discard a misclick without side effects).
+  const toggle = (resource, action) => {
     const current = isAllowed(activeRole, resource, action);
-    const next = !current;
-    setMatrix(prev => {
-      const exists = prev.find(m => m.role === activeRole && m.resource === resource && m.action === action);
-      if (exists) return prev.map(m => m === exists ? { ...m, allowed: next } : m);
-      return [...prev, { role: activeRole, resource, action, allowed: next }];
-    });
+    const key = cellKey(activeRole, resource, action);
+    setPending(prev => ({ ...prev, [key]: { role: activeRole, resource, action, allowed: !current } }));
+  };
+
+  const pendingCount = Object.keys(pending).length;
+
+  const discardChanges = () => setPending({});
+
+  const saveChanges = async () => {
+    const changes = Object.values(pending);
+    if (!changes.length) return;
+    setSaving(true);
     try {
-      await api.put('/permissions', { role: activeRole, resource, action, allowed: next });
+      await Promise.all(changes.map(c => api.put('/permissions', c)));
+      toast.success(`تم حفظ ${changes.length} تغيير`);
+      setPending({});
+      fetchAll();
     } catch (e) {
       toast.error(e.message);
-      fetchAll();
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -341,7 +370,7 @@ function PermissionsPanel({ toast, roles, roleLabel }) {
   if (!schema) return <EmptyState icon={ShieldCheck} title="تعذر تحميل نظام الصلاحيات" />;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-16">
       <div className="flex items-center gap-1 flex-wrap">
         {roles.map(r => (
           <button key={r.name} onClick={() => setActiveRole(r.name)}
@@ -400,6 +429,17 @@ function PermissionsPanel({ toast, roles, roleLabel }) {
         </div>
       </Card>
       <p className="text-xs text-center" style={{ color: 'var(--text-muted)' }}>مدير النظام (admin) لديه صلاحية كاملة على كل الموارد دائمًا — غير موجود في هذه القائمة لأنه لا يمكن تقييده.</p>
+
+      {pendingCount > 0 && (
+        <div className="fixed bottom-0 inset-x-0 z-40 flex justify-center px-4 pb-4 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-2xl border"
+            style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-strong)', boxShadow: 'var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.15))' }}>
+            <Badge variant="warning" dot>{pendingCount} تغيير غير محفوظ</Badge>
+            <Button variant="secondary" icon={Undo2} onClick={discardChanges} disabled={saving}>تراجع</Button>
+            <Button icon={Save} onClick={saveChanges} loading={saving}>حفظ التغييرات</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
