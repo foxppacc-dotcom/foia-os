@@ -13,7 +13,7 @@ import EmptyState from './ui/EmptyState';
 import Spinner from './ui/Spinner';
 import { TableShell, Thead, Th, Td, Tr } from './ui/Table';
 
-const ACTION_LABEL = { view: 'عرض', create: 'إنشاء', edit: 'تعديل', delete: 'حذف', move: 'نقل', export: 'تصدير', manage: 'إدارة', invite: 'دعوة' };
+const ACTION_LABEL = { view: 'عرض', view_all: 'عرض كل القضايا (وليس المسندة فقط)', create: 'إنشاء', edit: 'تعديل', delete: 'حذف', move: 'نقل', export: 'تصدير', manage: 'إدارة', invite: 'دعوة' };
 
 export default function TeamPermissions() {
   const toast = useToast();

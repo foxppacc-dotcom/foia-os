@@ -4,6 +4,7 @@ const { requireAuth, requireRole, requirePermission } = require("../middleware/a
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { logActivity } = require('../services/activityLogger');
+const { scopeCasesQuery, canAccessCase } = require('../services/caseAccess');
 
 // GET /api/cases — list all cases
 router.get('/cases', async (req, res) => {
@@ -24,6 +25,11 @@ router.get('/cases', async (req, res) => {
     if (limit) query = query.limit(limit);
     if (offset) query = query.range(offset, offset + (limit || 10) - 1);
     query = query.order('created_at', { ascending: false });
+
+    // Case visibility scope: a role without cases.view_all only sees cases
+    // it's assigned to / created, not the whole organization's caseload.
+    query = await scopeCasesQuery(sup, query, req.user);
+    if (!query) return res.json([]);
 
     const { data: cases, error } = await query;
     if (error) throw error;
@@ -65,6 +71,10 @@ router.get('/cases/:id', async (req, res) => {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
     if (isNaN(caseId)) return res.status(400).json({ error: 'Invalid case ID' });
+
+    if (!(await canAccessCase(sup, req.user, caseId))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     const { data: caseRow, error } = await sup
       .from('cases')

@@ -3,12 +3,17 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
+const { canAccessCase } = require('../services/caseAccess');
 
 // GET /api/cases/:id/dashboard — combined overview
 router.get('/cases/:id/dashboard', async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
+
+    if (!(await canAccessCase(sup, req.user, caseId))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     // Fetch case first (required)
     const caseRow = await sup.from('cases').select('*').eq('id', caseId).single();

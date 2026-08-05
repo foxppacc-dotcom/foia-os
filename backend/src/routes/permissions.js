@@ -7,7 +7,7 @@ const { getSupabase } = require('../supabase');
 // The *values* (which role has which permission) live entirely in the
 // role_permissions table — this list only defines the shape of the matrix.
 const RESOURCES = [
-  { key: 'cases', label: 'القضايا', actions: ['view', 'create', 'edit', 'delete'] },
+  { key: 'cases', label: 'القضايا', actions: ['view', 'view_all', 'create', 'edit', 'delete'] },
   { key: 'agencies', label: 'الجهات', actions: ['view', 'create', 'edit', 'delete'] },
   { key: 'pipeline', label: 'خط الإنتاج', actions: ['view', 'move', 'edit'] },
   { key: 'production', label: 'مونتاج', actions: ['view', 'edit'] },
@@ -83,13 +83,13 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
   if (role === 'admin') {
     // Admin always has full access — no need to hit the table.
     return res.json({
-      success: true, role, wildcard: true, permissions: [],
+      success: true, role, wildcard: true, permissions: [], canViewAllCases: true,
       navVisibility: Object.fromEntries(NAV_ITEMS.map(i => [i.key, true])),
       productionVisibility: Object.fromEntries(PRODUCTION_LISTS.map(l => [l.key, true])),
     });
   }
   const { data, error } = await sup.from('role_permissions').select('resource, action, allowed').eq('role', role);
-  if (error) return res.json({ success: true, role, wildcard: false, permissions: [], navVisibility: {}, productionVisibility: {} });
+  if (error) return res.json({ success: true, role, wildcard: false, permissions: [], navVisibility: {}, productionVisibility: {}, canViewAllCases: true });
 
   // Nav visibility: if the role has NO nav rows yet (not configured), default to
   // everything visible — a freshly created role must never lose its sidebar.
@@ -108,10 +108,15 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
     productionVisibility[list.key] = prodRows.length === 0 ? true : (row ? row.allowed !== false : false);
   }
 
+  // Case visibility scope: unconfigured (no row yet) defaults to unrestricted,
+  // same convention as nav/production above — see caseAccess.js.
+  const viewAllRow = (data || []).find(p => p.resource === 'cases' && p.action === 'view_all');
+  const canViewAllCases = viewAllRow ? viewAllRow.allowed !== false : true;
+
   res.json({
     success: true, role, wildcard: false,
     permissions: (data || []).filter(p => p.allowed !== false),
-    navVisibility, productionVisibility,
+    navVisibility, productionVisibility, canViewAllCases,
   });
 });
 

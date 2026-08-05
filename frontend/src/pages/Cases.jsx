@@ -16,6 +16,7 @@ export default function Cases() {
   const [showForm, setShowForm] = useState(false);
   const [agencies, setAgencies] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [canViewAllCases, setCanViewAllCases] = useState(true);
   const [form, setForm] = useState({
     title: '', description: '', priority: 'medium', client_name: '',
     selectedAgencies: []
@@ -36,6 +37,9 @@ export default function Cases() {
   };
 
   useEffect(() => { fetchCases(); }, []);
+  useEffect(() => {
+    api.get('/permissions/mine').then(d => setCanViewAllCases(d.canViewAllCases !== false)).catch(() => {});
+  }, []);
 
   const toggleAgency = (agencyId) => {
     setForm(prev => {
@@ -124,7 +128,10 @@ export default function Cases() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>🗂️ القضايا</h1>
-          <p style={{ color: 'var(--text-muted)' }}>{cases.length} قضية</p>
+          <p style={{ color: 'var(--text-muted)' }}>
+            {cases.length} قضية
+            {!canViewAllCases && <span className="mr-2 text-xs px-2 py-0.5 rounded-lg" style={{ background: 'var(--accent-subtle, rgba(212,168,67,0.12))', color: 'var(--accent)' }}>القضايا المسندة إليك فقط</span>}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {/* Upload Excel */}
