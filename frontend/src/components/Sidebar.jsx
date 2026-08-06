@@ -123,11 +123,16 @@ export default function Sidebar({ user, mobileOpen, onCloseMobile }) {
           </div>
         </nav>
 
-        {/* Pinned footer — الإعدادات always lives here, below the sortable
-            nav list, not as a topbar dropdown item and not reorderable itself. */}
-        <div className="shrink-0 px-2.5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
-          <NavItemLink item={{ path: '/settings', label: 'الإعدادات', icon: SettingsIcon }} collapsed={collapsed} onNavigate={onCloseMobile} />
-        </div>
+        {/* Pinned footer — الإعدادات lives here (below the sortable nav
+            list, not as a topbar dropdown item, not itself reorderable),
+            but its visibility is still controlled from الصلاحيات like any
+            other item: derived from the settings resource's "عرض"
+            permission (see RESOURCE_VIEW_NAV_KEYS on the backend). */}
+        {isNavVisible({ key: 'settings' }) && (
+          <div className="shrink-0 px-2.5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+            <NavItemLink item={{ path: '/settings', label: 'الإعدادات', icon: SettingsIcon }} collapsed={collapsed} onNavigate={onCloseMobile} />
+          </div>
+        )}
       </aside>
     </>
   );

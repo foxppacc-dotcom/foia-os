@@ -23,6 +23,7 @@ const RESOURCES = [
 // A hidden item is simply not rendered in the Sidebar (no space, no disable).
 const NAV_ITEMS = [
   { key: 'dashboard', label: 'لوحة التحكم' },
+  { key: 'settings', label: 'الإعدادات (زر أسفل القائمة الجانبية)' },
   { key: 'intake', label: 'استقبال ذكي' },
   { key: 'cases', label: 'القضايا' },
   { key: 'pipeline', label: 'خط الإنتاج' },
@@ -60,7 +61,7 @@ const PRODUCTION_LISTS = [
 // is derived straight from the resource's view permission instead of its
 // own row. Every other nav item (no matching resource, or no 'view' action)
 // keeps its own independently-configured visibility below.
-const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production'];
+const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production', 'settings'];
 
 // Fallback only for the rare case the roles table is empty/unreachable --
 // the real, editable role list lives in the `roles` table (teamManagement.js
