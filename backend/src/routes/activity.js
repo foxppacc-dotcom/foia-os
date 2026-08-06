@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requirePermission } = require('../middleware/auth');
 const { getRecentActivity } = require('../services/activityLogger');
 const { getSupabase } = require('../supabase');
 
@@ -13,8 +13,11 @@ router.get('/cases/:id/activities', requireAuth, async (req, res) => {
   res.json(activities);
 });
 
-// GET /api/activity — get recent activity
-router.get('/activity', requireAuth, async (req, res) => {
+// GET /api/activity — system-wide activity feed (Dashboard's "الخط الزمني
+// الشامل" section). Gated by its own permission (resource 'timeline',
+// action 'view') rather than being open to any authenticated user, since an
+// admin should decide per-role whether this cross-case feed is visible.
+router.get('/activity', requireAuth, requirePermission('timeline', 'view'), async (req, res) => {
   const { limit = 50, target_type, target_id } = req.query;
   const logs = await getRecentActivity(
     parseInt(limit),

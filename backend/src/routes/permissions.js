@@ -12,6 +12,7 @@ const RESOURCES = [
   { key: 'pipeline', label: 'خط الإنتاج', actions: ['view', 'move', 'edit'] },
   { key: 'production', label: 'مونتاج', actions: ['view', 'edit'] },
   { key: 'reports', label: 'التقارير', actions: ['view', 'export'] },
+  { key: 'timeline', label: 'الخط الزمني الشامل', actions: ['view'] },
   { key: 'settings', label: 'الإعدادات', actions: ['view', 'manage'] },
   { key: 'users', label: 'المستخدمين', actions: ['invite', 'edit', 'delete'] },
   { key: 'email_accounts', label: 'حسابات البريد', actions: ['manage'] },
