@@ -26,6 +26,7 @@ import LoginPage from './pages/Login';
 import ErrorBoundary from './components/ErrorBoundary';
 
 const Settings = lazy(() => import('./pages/Settings'));
+const ProductionListsAdmin = lazy(() => import('./pages/ProductionListsAdmin'));
 const Users = lazy(() => import('./pages/Users'));
 const Teams = lazy(() => import('./pages/Teams'));
 const Pipeline = lazy(() => import('./pages/Pipeline'));
@@ -145,6 +146,7 @@ function App() {
             {canAccess('communications') && <Route path="/email-accounts" element={<EmailAccounts />} />}
             {canAccess('communications') && <Route path="/inbox" element={<Inbox />} />}
             {canAccess('settings') && <Route path="/settings" element={<Settings />} />}
+            {canAccess('settings') && <Route path="/production-lists" element={<ProductionListsAdmin />} />}
             <Route path="/pipeline/lists/:id" element={<ListDetail />} />
             <Route path="/profile/:id" element={<Profile />} />
             <Route path="/profile" element={<Profile />} />

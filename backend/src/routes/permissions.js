@@ -35,6 +35,7 @@ const NAV_ITEMS = [
   { key: 'gdrive', label: 'Google Drive' },
   { key: 'phone_logs', label: 'سجل المكالمات' },
   { key: 'mail_logs', label: 'البريد الفعلي' },
+  { key: 'production_lists', label: 'إدارة قوائم الإنتاج' },
 ];
 
 // Production Line visibility catalog — mirrors pipeline_lists (list_number).
@@ -148,6 +149,42 @@ router.put('/permissions', requireAuth, requireRole('admin'), async (req, res) =
     .upsert({ role, resource, action, allowed: !!allowed }, { onConflict: 'role,resource,action' });
 
   if (error) return res.status(400).json({ error: error.message.includes('does not exist') ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (role_permissions)' : error.message });
+  res.json({ success: true });
+});
+
+// GET /api/nav-layout — global sidebar order + placement (sidebar vs
+// settings-only) for every nav item. Distinct from per-role nav visibility
+// above -- this is one shared layout for everyone, editable from
+// الإعدادات → ترتيب القائمة الجانبية.
+router.get('/nav-layout', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const { data, error } = await sup.from('nav_layout').select('*').order('sort_order');
+  if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (nav_layout)' : error.message });
+
+  // Any catalog item with no row yet (e.g. newly added to NAV_ITEMS after
+  // the layout was last saved) defaults to the sidebar, appended after
+  // whatever's already configured -- never silently disappears.
+  const byKey = Object.fromEntries((data || []).map(r => [r.nav_key, r]));
+  let nextOrder = Math.max(0, ...(data || []).map(r => r.sort_order)) + 1;
+  const full = NAV_ITEMS.map(item => byKey[item.key] || { nav_key: item.key, location: 'sidebar', sort_order: nextOrder++ });
+  full.sort((a, b) => a.sort_order - b.sort_order);
+
+  res.json({ success: true, data: full });
+});
+
+// PUT /api/nav-layout — bulk save (admin only): [{nav_key, location, sort_order}, ...]
+router.put('/nav-layout', requireAuth, requireRole('admin'), async (req, res) => {
+  const { items } = req.body;
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'items array مطلوبة' });
+  const sup = getSupabase();
+  const rows = items.map(i => ({
+    nav_key: i.nav_key,
+    location: i.location === 'settings' ? 'settings' : 'sidebar',
+    sort_order: parseInt(i.sort_order) || 0,
+    updated_at: new Date().toISOString(),
+  }));
+  const { error } = await sup.from('nav_layout').upsert(rows, { onConflict: 'nav_key' });
+  if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (nav_layout)' : error.message });
   res.json({ success: true });
 });
 

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { Sun, Moon, Bell, Settings as SettingsIcon, UserCircle, LogOut, ChevronDown } from 'lucide-react';
+import { Sun, Moon, Bell, UserCircle, LogOut, ChevronDown } from 'lucide-react';
 import { api } from '../api';
 
 function timeAgo(dateStr) {
@@ -160,12 +160,6 @@ export default function Topbar({ user, onLogout, theme, toggleTheme }) {
                 onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
                 onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
                 <UserCircle className="w-4 h-4" /> ملفي الشخصي
-              </Link>
-              <Link to="/settings" onClick={() => setMenuOpen(false)}
-                className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm transition-colors" style={{ color: 'var(--text-secondary)' }}
-                onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
-                onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
-                <SettingsIcon className="w-4 h-4" /> الإعدادات
               </Link>
               <div className="my-1.5" style={{ borderTop: '1px solid var(--border)' }} />
               <button onClick={onLogout}
