@@ -72,6 +72,7 @@ router.get('/dashboard', async (req, res) => {
       sup.from('requests')
         .select(`id, case_id, expected_response_date, cases!left(title), agencies!left(name_ar, name_en)`)
         .lt('expected_response_date', todayStr).is('response_date', null).neq('status', 'closed')
+        .is('overdue_ack_by', null)
         .order('expected_response_date', { ascending: true }),
     ]);
 

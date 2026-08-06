@@ -36,13 +36,22 @@ router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (re
       sup.from('requests').select('*').eq('case_id', caseId).then(async (r) => {
         if (r.error) return [];
         const reqs = r.data || [];
-        // Batch fetch agencies separately
+        // Batch fetch agencies + overdue-acknowledgment users separately
         const agencyIds = [...new Set(reqs.map(r => r.agency_id).filter(Boolean))];
-        if (!agencyIds.length) return reqs;
-        const { data: ags } = await sup.from('agencies').select('*').in('id', agencyIds);
+        const ackUserIds = [...new Set(reqs.map(r => r.overdue_ack_by).filter(Boolean))];
+        const [{ data: ags }, { data: ackUsers }] = await Promise.all([
+          agencyIds.length ? sup.from('agencies').select('*').in('id', agencyIds) : Promise.resolve({ data: [] }),
+          ackUserIds.length ? sup.from('users').select('id, name').in('id', ackUserIds) : Promise.resolve({ data: [] }),
+        ]);
         const agMap = {};
         (ags || []).forEach(a => agMap[a.id] = a);
-        return reqs.map(r => ({ ...r, agencies: agMap[r.agency_id] || null }));
+        const ackUserMap = {};
+        (ackUsers || []).forEach(u => ackUserMap[u.id] = u);
+        return reqs.map(r => ({
+          ...r,
+          agencies: agMap[r.agency_id] || null,
+          overdue_ack_user: r.overdue_ack_by ? (ackUserMap[r.overdue_ack_by] || null) : null,
+        }));
       }),
       sup.from('case_records_checklist').select('*').eq('case_id', caseId).order('record_type')
         .then(async (r) => r.error ? generateChecklist(sup, caseId) : (r.data?.length > 0 ? r.data : generateChecklist(sup, caseId)))

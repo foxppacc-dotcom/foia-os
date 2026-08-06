@@ -221,4 +221,42 @@ router.put('/requests/:id/sort', async (req, res) => {
   }
 });
 
+// POST /api/requests/:id/acknowledge-overdue — mark a "تخطّى الموعد المتوقع
+// للرد" item as seen/handled. Permanent (no route unmarks it, matching the
+// requirement that this be a documented, undeletable record): drops the
+// request off the system-wide Dashboard overdue panel, but stays visible
+// inside the case itself as "تم الاطلاع من قبل <name>" instead of vanishing.
+router.post('/requests/:id/acknowledge-overdue', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const requestId = parseInt(req.params.id);
+
+    const { data: existing } = await sup.from('requests').select('id, case_id, agency_id').eq('id', requestId).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'Request not found' });
+
+    const { error } = await sup.from('requests').update({
+      overdue_ack_by: req.user.id,
+      overdue_ack_at: new Date().toISOString(),
+    }).eq('id', requestId);
+    if (error) return res.status(400).json({ error: error.message.includes('overdue_ack') ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (overdue_ack_by/overdue_ack_at)' : error.message });
+
+    const { data: agency } = existing.agency_id
+      ? await sup.from('agencies').select('name_ar, name_en').eq('id', existing.agency_id).maybeSingle()
+      : { data: null };
+    const agencyName = agency?.name_ar || agency?.name_en || 'جهة';
+
+    try {
+      await sup.from('activity_logs').insert({
+        user_id: req.user.id, user_name: req.user.name,
+        action_type: 'overdue_acknowledged', target_type: 'case', target_id: existing.case_id,
+        target_title: `✅ تم الاطلاع على تخطي الموعد المتوقع للرد — ${agencyName}`,
+      });
+    } catch (e) { console.error('[acknowledge-overdue] activity_logs insert failed:', e.message); }
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

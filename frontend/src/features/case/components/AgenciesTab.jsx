@@ -1,5 +1,6 @@
 import { api } from '../../../api';
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, ChevronDown, ChevronUp, UserPlus, XCircle, CheckCircle, AlertTriangle, CalendarClock, History } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import { useRequests } from '../../request/hooks/useRequests';
@@ -35,6 +36,7 @@ function formatDateTime(dateStr) {
 }
 
 export default function AgenciesTab() {
+  const navigate = useNavigate();
   const { id, requests, allAgencies, refetch, channels: caseChannels } = useCaseContext();
   const { showAdd, setShowAdd, selectedAgencyId, setSelectedAgencyId, handleAdd, handleRemove } = useRequests(id, refetch);
   const [extraAgencies, setExtraAgencies] = useState([]);
@@ -113,6 +115,11 @@ export default function AgenciesTab() {
   const setClassification = async (reqId, value) => {
     try { await classifyRequest(id, reqId, value); refetch?.(true); }
     catch (e) { alert('❌ ' + e.message); }
+  };
+
+  const acknowledgeOverdue = async (reqId) => {
+    try { await api.post(`/requests/${reqId}/acknowledge-overdue`); refetch?.(true); }
+    catch (e) { alert('❌ فشل تسجيل الاطلاع: ' + e.message); }
   };
 
   const logPortalSubmission = async (reqId, agencyId) => {
@@ -290,10 +297,11 @@ export default function AgenciesTab() {
                         const rWaitingDays = req.created_at ? Math.floor((Date.now() - new Date(req.created_at)) / (1000*60*60*24)) : 0;
                         const todayStr = new Date().toISOString().split('T')[0];
                         const isLate = !!(req.expected_response_date && req.expected_response_date < todayStr && !req.response_date);
+                        const isAcked = isLate && !!req.overdue_ack_by;
                         const isPortalFormOpen = showPortalForm[req.id];
                         const reqLog = getRequestLog(req.id, agency?.id);
                         return (
-                          <div key={req.id} className="p-3.5 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: isLate ? '3px solid #ef4444' : '3px solid transparent' }}>
+                          <div key={req.id} className="p-3.5 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: isLate && !isAcked ? '3px solid #ef4444' : '3px solid transparent' }}>
                             <div className="flex items-center gap-2 mb-2">
                               <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: 'var(--ds-accent)', color: 'white' }}>#{req.id}</div>
                               <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--ds-text-muted)' }}>
@@ -313,9 +321,18 @@ export default function AgenciesTab() {
                               </select>
                             </div>
 
-                            {isLate && (
-                              <div className="flex items-center gap-1.5 mb-2 text-xs px-2.5 py-1.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
-                                <AlertTriangle className="w-4 h-4" /> تخطّى الموعد المتوقع للرد ({req.expected_response_date})
+                            {isLate && !isAcked && (
+                              <div className="flex items-center justify-between gap-2 mb-2 text-xs px-2.5 py-1.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
+                                <span className="flex items-center gap-1.5"><AlertTriangle className="w-4 h-4" /> تخطّى الموعد المتوقع للرد ({req.expected_response_date})</span>
+                                <button onClick={() => acknowledgeOverdue(req.id)} className="px-2 py-1 rounded-lg shrink-0" style={{ background: 'var(--ds-bg-secondary)', color: '#ef4444' }}>تم الاطلاع</button>
+                              </div>
+                            )}
+                            {isAcked && (
+                              <div className="flex items-center gap-1.5 mb-2 text-xs px-2.5 py-1.5 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>
+                                <CheckCircle className="w-4 h-4" /> تخطّى الموعد المتوقع للرد — تم الاطلاع من قبل{' '}
+                                <button onClick={() => navigate(`/profile/${req.overdue_ack_user?.id}`)} className="underline" style={{ color: 'var(--ds-accent)' }}>
+                                  {req.overdue_ack_user?.name || 'مستخدم'}
+                                </button>
                               </div>
                             )}
                             {!isLate && req.expected_response_date && (
