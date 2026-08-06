@@ -104,8 +104,13 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
   const { data, error } = await sup.from('role_permissions').select('resource, action, allowed').eq('role', role);
   if (error) return res.json({ success: true, role, wildcard: false, permissions: [], navVisibility: {}, productionVisibility: {}, canViewAllCases: true });
 
-  // Nav visibility: if the role has NO nav rows yet (not configured), default to
-  // everything visible — a freshly created role must never lose its sidebar.
+  // Nav visibility: each item defaults to visible unless a row explicitly
+  // sets it to false — per-item, not "if this role has any nav row at all".
+  // That coarser rule used to mean touching ONE nav item for a role quietly
+  // hid every OTHER never-configured item too, which is exactly the "I only
+  // hid list 4-7, why did 1 and 2 disappear as well" class of report this
+  // was rebuilt to stop causing (first for nav, now applied identically to
+  // production_line below after the same bug reproduced there).
   const navRows = (data || []).filter(p => p.resource === 'nav');
   const navVisibility = {};
   for (const item of NAV_ITEMS) {
@@ -115,15 +120,15 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
       continue;
     }
     const row = navRows.find(p => p.action === item.key);
-    navVisibility[item.key] = navRows.length === 0 ? true : (row ? row.allowed !== false : false);
+    navVisibility[item.key] = row ? row.allowed !== false : true;
   }
 
-  // Production line visibility: same default-open logic per list.
+  // Production line visibility: same per-item default-open rule as nav above.
   const prodRows = (data || []).filter(p => p.resource === 'production_line');
   const productionVisibility = {};
   for (const list of PRODUCTION_LISTS) {
     const row = prodRows.find(p => p.action === list.key);
-    productionVisibility[list.key] = prodRows.length === 0 ? true : (row ? row.allowed !== false : false);
+    productionVisibility[list.key] = row ? row.allowed !== false : true;
   }
 
   // Case visibility scope: unconfigured (no row yet) defaults to unrestricted,
