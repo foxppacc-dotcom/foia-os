@@ -27,6 +27,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 
 const Settings = lazy(() => import('./pages/Settings'));
 const ProductionListsAdmin = lazy(() => import('./pages/ProductionListsAdmin'));
+const ThemeSettings = lazy(() => import('./pages/ThemeSettings'));
 const Users = lazy(() => import('./pages/Users'));
 const Teams = lazy(() => import('./pages/Teams'));
 const Pipeline = lazy(() => import('./pages/Pipeline'));
@@ -148,6 +149,7 @@ function App() {
             {canAccess('communications') && <Route path="/inbox" element={<Inbox />} />}
             {canAccess('settings') && <Route path="/settings" element={<Settings />} />}
             {canAccess('settings') && <Route path="/production-lists" element={<ProductionListsAdmin />} />}
+            {canAccess('settings') && <Route path="/theme-settings" element={<ThemeSettings />} />}
             <Route path="/pipeline/lists/:id" element={<ListDetail />} />
             <Route path="/profile/:id" element={<Profile />} />
             <Route path="/profile" element={<Profile />} />

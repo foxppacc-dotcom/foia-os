@@ -37,6 +37,7 @@ const NAV_ITEMS = [
   { key: 'phone_logs', label: 'سجل المكالمات' },
   { key: 'mail_logs', label: 'البريد الفعلي' },
   { key: 'production_lists', label: 'إدارة قوائم الإنتاج' },
+  { key: 'theme_settings', label: 'الألوان والثيم' },
 ];
 
 // Production Line visibility catalog — mirrors pipeline_lists (list_number).

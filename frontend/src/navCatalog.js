@@ -6,7 +6,7 @@
 // drive per-role visibility, this drives path/label/icon/order/placement.
 import {
   FolderOpen, LayoutDashboard, GitBranch, Building2, Sparkles, Users, Mail,
-  Timer, Key, Cloud, UserCog, Phone, MailPlus, AtSign, ListChecks,
+  Timer, Key, Cloud, UserCog, Phone, MailPlus, AtSign, ListChecks, Palette,
 } from 'lucide-react';
 
 export const NAV_CATALOG = [
@@ -25,6 +25,7 @@ export const NAV_CATALOG = [
   { key: 'phone_logs', path: '/phone-logs', label: 'سجل المكالمات', icon: Phone, roles: ['admin', 'manager', 'member'] },
   { key: 'mail_logs', path: '/mail-logs', label: 'البريد الفعلي', icon: MailPlus, roles: ['admin', 'manager', 'member'] },
   { key: 'production_lists', path: '/production-lists', label: 'إدارة قوائم الإنتاج', icon: ListChecks, roles: ['admin', 'manager'] },
+  { key: 'theme_settings', path: '/theme-settings', label: 'الألوان والثيم', icon: Palette, roles: ['admin', 'manager'] },
 ];
 
 export const getNavItem = (key) => NAV_CATALOG.find(i => i.key === key);

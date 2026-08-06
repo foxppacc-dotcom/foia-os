@@ -19,12 +19,14 @@ const PAGE_META = [
   { test: p => /^\/cases\/\d+/.test(p), eyebrow: 'القضايا', title: 'تفاصيل القضية' },
   { test: p => p.startsWith('/cases'), eyebrow: 'إدارة', title: 'القضايا' },
   { test: p => p.startsWith('/pipeline'), eyebrow: 'سير العمل', title: 'خط الإنتاج' },
+  { test: p => p.startsWith('/production-lists'), eyebrow: 'النظام', title: 'إدارة قوائم الإنتاج' },
   { test: p => p.startsWith('/production'), eyebrow: 'سير العمل', title: 'مونتاج' },
   { test: p => p.startsWith('/agencies'), eyebrow: 'إدارة', title: 'الجهات' },
   { test: p => p.startsWith('/portals'), eyebrow: 'إدارة', title: 'البوابات الإلكترونية' },
   { test: p => p.startsWith('/email-accounts'), eyebrow: 'إدارة', title: 'حسابات البريد' },
   { test: p => p.startsWith('/teams'), eyebrow: 'إدارة', title: 'الفرق' },
-  { test: p => p.startsWith('/settings'), eyebrow: 'النظام', title: 'الإعدادات' },
+  { test: p => p.startsWith('/theme-settings'), eyebrow: 'النظام', title: 'الألوان والثيم' },
+  { test: p => p.startsWith('/settings'), eyebrow: 'النظام', title: 'ترتيب القائمة الجانبية' },
   { test: p => p.startsWith('/profile'), eyebrow: 'حسابي', title: 'الملف الشخصي' },
 ];
 
