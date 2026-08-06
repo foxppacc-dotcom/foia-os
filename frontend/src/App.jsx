@@ -47,6 +47,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState(localStorage.getItem('foia_theme') || 'light');
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('foia_token');
@@ -128,10 +129,10 @@ function App() {
 
   return (
     <div className="flex h-screen" style={{ background: 'var(--bg-primary)' }}>
-      <Sidebar user={user} />
-      <div className="flex-1 flex flex-col overflow-hidden" style={{ marginRight: '256px' }}>
-        <Topbar user={user} onLogout={handleLogout} theme={theme} toggleTheme={toggleTheme} />
-        <main className="flex-1 overflow-y-auto p-6">
+      <Sidebar user={user} mobileOpen={mobileSidebarOpen} onCloseMobile={() => setMobileSidebarOpen(false)} />
+      <div className="flex-1 flex flex-col overflow-hidden transition-[margin] duration-200 mr-0 md:mr-[var(--sidebar-width,220px)]">
+        <Topbar user={user} onLogout={handleLogout} theme={theme} toggleTheme={toggleTheme} onMenuClick={() => setMobileSidebarOpen(true)} />
+        <main className="flex-1 overflow-y-auto p-3 md:p-6">
           <ErrorBoundary>
           <Suspense fallback={<AppFallback />}><Routes>
             <Route path="/login" element={<Dashboard />} />

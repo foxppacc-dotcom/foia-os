@@ -4,16 +4,16 @@ import { api } from '../api';
 import { Plus, Trash2, User, RefreshCw, FolderOpen, Calendar, ChevronDown, AlertTriangle } from 'lucide-react';
 
 const statusConfig = {
-  pending:      { label: 'معلق',       emoji: '🟡', color: 'bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20' },
-  in_progress:  { label: 'قيد التنفيذ', emoji: '🔵', color: 'bg-[#3B82F6]/10 text-[#3B82F6] border-[#3B82F6]/20' },
-  completed:    { label: 'مكتمل',       emoji: '🟢', color: 'bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20' },
-  cancelled:    { label: 'ملغي',       emoji: '🔴', color: 'bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20' },
+  pending:      { label: 'معلق',       emoji: '🟡', color: 'var(--warning)' },
+  in_progress:  { label: 'قيد التنفيذ', emoji: '🔵', color: '#3B82F6' },
+  completed:    { label: 'مكتمل',       emoji: '🟢', color: 'var(--success)' },
+  cancelled:    { label: 'ملغي',       emoji: '🔴', color: 'var(--danger)' },
 };
 
 const priorityConfig = {
-  high:   { label: 'عاجل',   color: 'text-[#EF4444] bg-[#EF4444]/10 border-[#EF4444]/20' },
-  medium: { label: 'متوسط',  color: 'text-[#F59E0B] bg-[#F59E0B]/10 border-[#F59E0B]/20' },
-  low:    { label: 'منخفض',  color: 'text-[#3B82F6] bg-[#3B82F6]/10 border-[#3B82F6]/20' },
+  high:   { label: 'عاجل',   color: 'var(--danger)' },
+  medium: { label: 'متوسط',  color: 'var(--warning)' },
+  low:    { label: 'منخفض',  color: '#3B82F6' },
 };
 
 export default function Production() {
@@ -37,14 +37,14 @@ export default function Production() {
   }, []);
 
   const fetchProduction = () => {
-    api.get('/api/production').then(d => {
+    api.get('/production').then(d => {
       setItems(Array.isArray(d) ? d : d.data || []);
       setLoading(false);
     }).catch(() => setLoading(false));
   };
 
   const fetchUsers = () => {
-    api.get('/api/users').then(d => {
+    api.get('/users').then(d => {
       setUsers(Array.isArray(d) ? d : d.data || []);
     }).catch(() => {});
   };
@@ -57,40 +57,40 @@ export default function Production() {
   const createItem = async () => {
     if (!form.case_id) return;
     try {
-      await api.post('/api/production', form);
+      await api.post('/production/add', form);
       setShowForm(false);
       setForm({ case_id: '', assigned_to: '', priority: 'medium', notes: '' });
       fetchProduction();
-    } catch {}
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const updateStatus = async (id, status) => {
     try {
-      await api.put(`/api/production/${id}`, { status });
+      await api.put(`/production/${id}`, { status });
       fetchProduction();
-    } catch {}
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const assignUser = async (id, assigned_to) => {
     try {
-      await api.put(`/api/production/${id}`, { assigned_to });
+      await api.put(`/production/${id}`, { assigned_to });
       fetchProduction();
-    } catch {}
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const deleteItem = async (id) => {
     try {
-      await api.delete(`/api/production/${id}`);
+      await api.delete(`/production/${id}`);
       fetchProduction();
-    } catch {}
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const autoCheck = async () => {
     setAutoChecking(true);
     try {
-      await api.post('/api/production/auto-check');
+      await api.post('/production/auto-check');
       fetchProduction();
-    } catch {}
+    } catch (e) { alert('❌ ' + e.message); }
     setAutoChecking(false);
   };
 
@@ -100,7 +100,7 @@ export default function Production() {
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
-      <div className="w-8 h-8 border-2 border-[#D4A843] border-t-transparent rounded-full animate-spin" />
+      <div className="w-8 h-8 rounded-full animate-spin" style={{ border: '2px solid var(--accent)', borderTopColor: 'transparent' }} />
     </div>
   );
 
@@ -113,25 +113,26 @@ export default function Production() {
   ];
 
   return (
-    <div className="space-y-6 animate-fadeIn" dir="rtl">
+    <div className="space-y-5 animate-fadeIn" dir="rtl">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold text-white">مونتاج — Production Pipeline</h1>
-          <p className="text-xs text-gray-600 mt-0.5">{items.length} قضية</p>
+          <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>مونتاج — Production Pipeline</h1>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{items.length} قضية</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={autoCheck}
             disabled={autoChecking}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm card-container text-gray-300 hover:text-white hover:border-[#D4A843]/40 transition-all active:scale-[0.97] disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm card-container transition-all active:scale-[0.97] disabled:opacity-50"
+            style={{ color: 'var(--text-secondary)' }}
           >
             <RefreshCw className={`w-4 h-4 ${autoChecking ? 'animate-spin' : ''}`} />
             فحص تلقائي
           </button>
           <button
             onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#D4A843] to-[#e4b84a] text-[#0A0A0F] hover:shadow-lg hover:shadow-[#D4A843]/30 transition-all active:scale-[0.97]"
+            className="btn-accent flex items-center gap-2 px-4 py-2 text-sm"
           >
             <Plus className="w-4 h-4" />
             إضافة قضية
@@ -142,7 +143,7 @@ export default function Production() {
       {/* Create Form */}
       {showForm && (
         <div className="card-container rounded-2xl p-5 animate-slideUp">
-          <h2 className="text-sm font-semibold var(--accent) mb-4">إضافة قضية إلى مونتاج</h2>
+          <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--accent)' }}>إضافة قضية إلى مونتاج</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input
               value={form.case_id}
@@ -199,11 +200,12 @@ export default function Production() {
           <button
             key={tab.key}
             onClick={() => setStatusFilter(tab.key)}
-            className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all ${
-              statusFilter === tab.key
-                ? 'bg-[#D4A843]/10 var(--accent) border border-[#D4A843]/20'
-                : 'bg-[rgba(17,17,34,0.4)] text-gray-400 border border-transparent hover:text-white hover:var(--bg-tertiary)'
-            }`}
+            className="px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all shrink-0"
+            style={{
+              background: statusFilter === tab.key ? 'var(--accent-subtle)' : 'transparent',
+              color: statusFilter === tab.key ? 'var(--accent)' : 'var(--text-muted)',
+              border: `1px solid ${statusFilter === tab.key ? 'var(--accent)' : 'transparent'}`,
+            }}
           >
             {tab.label}
           </button>
@@ -213,13 +215,13 @@ export default function Production() {
       {/* Cards Grid */}
       {filteredItems.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
-          <div className="w-16 h-16 rounded-full var(--bg-tertiary) flex items-center justify-center mb-4">
-            <FolderOpen className="w-8 h-8 text-gray-600" />
+          <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ background: 'var(--bg-tertiary)' }}>
+            <FolderOpen className="w-8 h-8" style={{ color: 'var(--text-muted)' }} />
           </div>
-          <h3 className="text-base font-medium text-gray-400 mb-1">
+          <h3 className="text-base font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
             {statusFilter === 'all' ? 'لا توجد قضايا في المونتاج' : 'لا توجد قضايا بهذه الحالة'}
           </h3>
-          <p className="text-sm text-gray-600 mb-4">أضف قضية لبدء الإنتاج</p>
+          <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>أضف قضية لبدء الإنتاج</p>
           <button
             onClick={() => setShowForm(true)}
             className="btn-accent px-5 py-2.5 text-sm"
@@ -228,33 +230,37 @@ export default function Production() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
           {filteredItems.map(item => {
             const st = statusConfig[item.status] || statusConfig.pending;
             const pr = priorityConfig[item.priority] || priorityConfig.medium;
             return (
               <div
                 key={item.id}
-                className="card-container rounded-2xl p-5 hover:border-[#D4A843]/30 transition-all group"
+                className="card-container rounded-2xl p-5 transition-all group"
               >
                 {/* Header: Title + Delete */}
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-mono text-gray-600 shrink-0">
+                      <span className="text-[10px] font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>
                         {item.case_uuid ? `#${item.case_uuid.slice(0, 8)}` : `#${item.id}`}
                       </span>
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] border ${st.color}`}>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px]"
+                        style={{ background: `${st.color}1a`, color: st.color, border: `1px solid ${st.color}33` }}>
                         {st.emoji} {st.label}
                       </span>
                     </div>
-                    <h3 className="text-sm font-semibold text-white leading-snug line-clamp-2">
+                    <h3 className="text-sm font-semibold leading-snug line-clamp-2" style={{ color: 'var(--text-primary)' }}>
                       {item.case_title || 'بدون عنوان'}
                     </h3>
                   </div>
                   <button
                     onClick={() => deleteItem(item.id)}
-                    className="p-1.5 rounded-lg text-gray-600 hover:text-[#EF4444] hover:bg-[#EF4444]/10 transition-all opacity-0 group-hover:opacity-100 shrink-0"
+                    className="p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 shrink-0"
+                    style={{ color: 'var(--text-muted)' }}
+                    onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'}
+                    onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}
                     title="إزالة"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -263,19 +269,19 @@ export default function Production() {
 
                 {/* Details */}
                 <div className="space-y-2 mb-4">
-                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                     <User className="w-3.5 h-3.5 shrink-0" />
                     <span className="truncate">{item.assigned_user_name || 'غير معين'}</span>
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] border ${pr.color}`}>{pr.label}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: `${pr.color}1a`, color: pr.color, border: `1px solid ${pr.color}33` }}>{pr.label}</span>
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                     <FolderOpen className="w-3.5 h-3.5 shrink-0" />
                     <span>{item.drive_file_count ?? 0} ملف</span>
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                     <Calendar className="w-3.5 h-3.5 shrink-0" />
                     <span>{item.created_at ? new Date(item.created_at).toLocaleDateString('ar-EG') : '—'}</span>
                   </div>
@@ -287,7 +293,8 @@ export default function Production() {
                     href={item.drive_folder_link}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-xs var(--accent) hover:text-[#e4b84a] mb-4 transition-colors"
+                    className="flex items-center gap-1.5 text-xs mb-4 transition-colors"
+                    style={{ color: 'var(--accent)' }}
                   >
                     <FolderOpen className="w-3 h-3" />
                     فتح مجلد Drive
@@ -295,20 +302,20 @@ export default function Production() {
                 )}
 
                 {/* Actions row */}
-                <div className="flex items-center gap-2 pt-3 border-t border-[rgba(255,255,255,0.06)]">
+                <div className="flex items-center gap-2 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
                   {/* Status dropdown */}
                   <div className="relative flex-1">
                     <select
                       value={item.status}
                       onChange={e => updateStatus(item.id, e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl text-xs bg-[#13131A] border border-[#1F1F2A] text-white focus:outline-none focus:border-[#D4A843] appearance-none cursor-pointer"
+                      className="w-full px-3 py-2 rounded-xl text-xs appearance-none cursor-pointer input-base"
                     >
                       <option value="pending">🟡 معلق</option>
                       <option value="in_progress">🔵 قيد التنفيذ</option>
                       <option value="completed">🟢 مكتمل</option>
                       <option value="cancelled">🔴 ملغي</option>
                     </select>
-                    <ChevronDown className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                    <ChevronDown className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none" style={{ color: 'var(--text-muted)' }} />
                   </div>
 
                   {/* Assign user dropdown */}
@@ -316,14 +323,14 @@ export default function Production() {
                     <select
                       value={item.assigned_to || ''}
                       onChange={e => assignUser(item.id, e.target.value || null)}
-                      className="w-full px-3 py-2 rounded-xl text-xs bg-[#13131A] border border-[#1F1F2A] text-white focus:outline-none focus:border-[#D4A843] appearance-none cursor-pointer"
+                      className="w-full px-3 py-2 rounded-xl text-xs appearance-none cursor-pointer input-base"
                     >
                       <option value="">تعيين...</option>
                       {users.map(u => (
                         <option key={u.id} value={u.id}>{u.name}</option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                    <ChevronDown className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none" style={{ color: 'var(--text-muted)' }} />
                   </div>
                 </div>
               </div>

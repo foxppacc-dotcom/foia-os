@@ -8,7 +8,7 @@ const EXPANDED_WIDTH = 220;
 const COLLAPSED_WIDTH = 60;
 const STORAGE_KEY = 'foia_sidebar_collapsed';
 
-export default function Sidebar({ user }) {
+export default function Sidebar({ user, mobileOpen, onCloseMobile }) {
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem(STORAGE_KEY) === 'true'; }
     catch { return false; }
@@ -43,6 +43,14 @@ export default function Sidebar({ user }) {
     catch {}
   }, [collapsed]);
 
+  // Published as a CSS variable so the page shell (App.jsx) can reserve
+  // exactly this much space -- previously hardcoded to 256px regardless of
+  // collapsed state, leaving a visible gap (or overlap) next to the sidebar
+  // whichever state it was actually in.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--sidebar-width', `${collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH}px`);
+  }, [collapsed]);
+
   const width = collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
   const canAccess = (item) => !item.roles || item.roles.includes(user?.role);
   const isNavVisible = (item) => {
@@ -62,65 +70,75 @@ export default function Sidebar({ user }) {
     .sort((a, b) => (layoutByKey[a.key]?.sort_order ?? 999) - (layoutByKey[b.key]?.sort_order ?? 999));
 
   return (
-    <aside className="fixed right-0 top-0 h-full flex flex-col z-10"
-      style={{
-        width: `${width}px`,
-        background: 'var(--bg-secondary)',
-        borderLeft: '1px solid var(--border)',
-        transition: 'width 0.2s ease',
-        overflow: 'hidden',
-      }}
-      dir="rtl"
-      onMouseEnter={collapsed ? (e) => { e.currentTarget.style.width = `${EXPANDED_WIDTH}px`; } : undefined}
-      onMouseLeave={collapsed ? (e) => { e.currentTarget.style.width = `${COLLAPSED_WIDTH}px`; } : undefined}>
+    <>
+      {/* Backdrop — mobile only, closes the sidebar on tap-outside */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-30 md:hidden" style={{ background: 'rgba(0,0,0,0.4)' }} onClick={onCloseMobile} />
+      )}
 
-      {/* Logo section — compact but readable */}
-      <div className="flex items-center justify-between h-[56px] shrink-0 px-3"
-        style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="flex items-center gap-2 overflow-hidden">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: 'var(--accent)' }}>
-            <FileText className="w-4 h-4" style={{ color: 'var(--text-inverse)' }} />
-          </div>
-          {!collapsed && (
-            <div className="whitespace-nowrap">
-              <div className="text-sm font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>FOIA OS</div>
+      <aside
+        className={`fixed right-0 top-0 h-full flex flex-col z-40 transition-transform duration-200
+          ${mobileOpen ? 'translate-x-0' : 'translate-x-full'} md:translate-x-0`}
+        style={{
+          width: `${width}px`,
+          background: 'var(--bg-secondary)',
+          borderLeft: '1px solid var(--border)',
+          transition: 'width 0.2s ease',
+          overflow: 'hidden',
+        }}
+        dir="rtl"
+        onMouseEnter={collapsed ? (e) => { e.currentTarget.style.width = `${EXPANDED_WIDTH}px`; } : undefined}
+        onMouseLeave={collapsed ? (e) => { e.currentTarget.style.width = `${COLLAPSED_WIDTH}px`; } : undefined}>
+
+        {/* Logo section — compact but readable */}
+        <div className="flex items-center justify-between h-[56px] shrink-0 px-3"
+          style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2 overflow-hidden">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+              style={{ background: 'var(--accent)' }}>
+              <FileText className="w-4 h-4" style={{ color: 'var(--text-inverse)' }} />
             </div>
-          )}
+            {!collapsed && (
+              <div className="whitespace-nowrap">
+                <div className="text-sm font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>FOIA OS</div>
+              </div>
+            )}
+          </div>
+          {/* Collapse button — desktop only; mobile closes via the backdrop or a nav tap */}
+          <button
+            onClick={() => setCollapsed(c => !c)}
+            className="hidden md:block p-1 rounded-md shrink-0 ds-transition-colors"
+            style={{ color: 'var(--text-muted)' }}
+            title={collapsed ? 'توسيع الشريط الجانبي' : 'طي الشريط الجانبي'}>
+            {collapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          </button>
         </div>
-        {/* Collapse button — subtle, permanent */}
-        <button
-          onClick={() => setCollapsed(c => !c)}
-          className="p-1 rounded-md shrink-0 ds-transition-colors"
-          style={{ color: 'var(--text-muted)' }}
-          title={collapsed ? 'توسيع الشريط الجانبي' : 'طي الشريط الجانبي'}>
-          {collapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-        </button>
-      </div>
 
-      {/* Navigation — flat, order driven entirely by /nav-layout */}
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3">
-        <div className="space-y-0.5">
-          {items.map(item => (
-            <NavItemLink key={item.key} item={item} collapsed={collapsed} />
-          ))}
+        {/* Navigation — flat, order driven entirely by /nav-layout */}
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3">
+          <div className="space-y-0.5">
+            {items.map(item => (
+              <NavItemLink key={item.key} item={item} collapsed={collapsed} onNavigate={onCloseMobile} />
+            ))}
+          </div>
+        </nav>
+
+        {/* Pinned footer — الإعدادات always lives here, below the sortable
+            nav list, not as a topbar dropdown item and not reorderable itself. */}
+        <div className="shrink-0 px-2.5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+          <NavItemLink item={{ path: '/settings', label: 'الإعدادات', icon: SettingsIcon }} collapsed={collapsed} onNavigate={onCloseMobile} />
         </div>
-      </nav>
-
-      {/* Pinned footer — الإعدادات always lives here, below the sortable
-          nav list, not as a topbar dropdown item and not reorderable itself. */}
-      <div className="shrink-0 px-2.5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
-        <NavItemLink item={{ path: '/settings', label: 'الإعدادات', icon: SettingsIcon }} collapsed={collapsed} />
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }
 
-function NavItemLink({ item, collapsed }) {
+function NavItemLink({ item, collapsed, onNavigate }) {
   return (
     <NavLink
       to={item.path}
       end={item.end}
+      onClick={onNavigate}
       className={({ isActive }) =>
         `flex items-center gap-3 px-2.5 py-2 rounded-lg ds-transition-colors ${
           isActive ? 'font-semibold' : ''

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { Sun, Moon, Bell, UserCircle, LogOut, ChevronDown } from 'lucide-react';
+import { Sun, Moon, Bell, UserCircle, LogOut, ChevronDown, Menu } from 'lucide-react';
 import { api } from '../api';
 
 function timeAgo(dateStr) {
@@ -32,7 +32,7 @@ function getPageMeta(pathname) {
   return PAGE_META.find(m => m.test(pathname)) || { eyebrow: 'FOIA OS', title: '' };
 }
 
-export default function Topbar({ user, onLogout, theme, toggleTheme }) {
+export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -79,14 +79,22 @@ export default function Topbar({ user, onLogout, theme, toggleTheme }) {
   };
 
   return (
-    <header className="sticky top-0 z-20 flex items-center justify-between px-6 h-[68px] shrink-0"
+    <header className="sticky top-0 z-20 flex items-center justify-between gap-2 px-3 md:px-6 h-[68px] shrink-0"
       style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border)' }}>
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--accent)' }}>{meta.eyebrow}</p>
-        <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>{meta.title}</h1>
+      <div className="flex items-center gap-2 min-w-0">
+        <button onClick={onMenuClick} className="md:hidden p-2 rounded-xl shrink-0 transition-colors" style={{ color: 'var(--text-secondary)' }}
+          onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
+          onMouseOut={e => e.currentTarget.style.background = 'transparent'}
+          title="القائمة">
+          <Menu className="w-5 h-5" />
+        </button>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: 'var(--accent)' }}>{meta.eyebrow}</p>
+          <h1 className="text-lg font-bold truncate" style={{ color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>{meta.title}</h1>
+        </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1 md:gap-2 shrink-0">
         <button onClick={toggleTheme} className="p-2.5 rounded-xl transition-colors" style={{ color: 'var(--text-secondary)' }}
           onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
           onMouseOut={e => e.currentTarget.style.background = 'transparent'}
