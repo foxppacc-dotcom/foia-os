@@ -77,7 +77,7 @@ export default memo(function InvestigationSummary() {
         <SummaryIcon className="w-4 h-4" style={{ color: 'var(--ds-accent)' }} />
         <span className="text-sm font-semibold" style={{ color: 'var(--ds-text-primary)' }}>معلومات القضية</span>
       </div>
-      <AppStack gap="8px">
+      <AppStack gap="10px">
         <p className="text-xs font-semibold" style={{ color: 'var(--ds-text-muted)' }}>معلومات تسجيل القضية</p>
         <EditableField icon={User} label="اسم المتهم" value={c.defendant_name} placeholder="اسم المتهم" onSave={saveField('defendant_name')} />
         <EditableField icon={Building2} label="اسم الوكالة" value={c.source_agency_name} placeholder="اسم الوكالة" onSave={saveField('source_agency_name')} />
@@ -85,7 +85,7 @@ export default memo(function InvestigationSummary() {
         <EditableField icon={Link2} label="رابط المقال" value={c.article_url} placeholder="رابط المقال" isLink onSave={saveField('article_url')} />
         <EditableField icon={FileText} label="ملخص القضية" value={c.case_summary} placeholder="اكتب ملخص القضية هنا..." multiline onSave={saveField('case_summary')} />
 
-        <div className="flex items-center gap-3 text-[11px] pt-1 flex-wrap">
+        <div className="flex items-center gap-3 text-[11px] pt-2 flex-wrap" style={{ borderTop: '1px solid var(--ds-border)' }}>
           <span className="flex items-center gap-1"><FileText className="w-3 h-3" style={{ color: 'var(--ds-success)' }} />{(documents?.length||0)} ملف</span>
           <span className="flex items-center gap-1"><Building2 className="w-3 h-3" style={{ color: 'var(--ds-accent)' }} />{(requests?.length||0)} جهة</span>
           <span className="flex items-center gap-1"><Users className="w-3 h-3" style={{ color: 'var(--ds-info)' }} />{(team?.length||0)} فريق</span>
