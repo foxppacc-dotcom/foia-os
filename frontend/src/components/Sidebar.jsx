@@ -52,7 +52,6 @@ export default function Sidebar({ user, mobileOpen, onCloseMobile }) {
   }, [collapsed]);
 
   const width = collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
-  const canAccess = (item) => !item.roles || item.roles.includes(user?.role);
   const isNavVisible = (item) => {
     if (navVisibility === null) return true;      // still loading — show everything
     if (Object.keys(navVisibility).length === 0) return true; // unconfigured — default open
@@ -64,8 +63,15 @@ export default function Sidebar({ user, mobileOpen, onCloseMobile }) {
   // catalog order, everything in the sidebar, while /nav-layout is loading
   // or unreachable -- never blocks navigation on that request.
   const layoutByKey = Object.fromEntries((navLayout || []).map(l => [l.nav_key, l]));
+  // canAccess used to gate on each item's hardcoded navCatalog `roles` list
+  // (only ever admin/manager/member/viewer) -- ANDed with isNavVisible, so
+  // any custom role created from فريق العمل (e.g.
+  // order_management_specialist) failed that check for every single item
+  // and got a completely empty sidebar no matter what was granted in
+  // الصلاحيات. navVisibility from /permissions/mine is the real,
+  // per-role-configurable gate; the old hardcoded list is redundant now.
   const items = NAV_CATALOG
-    .filter(item => canAccess(item) && isNavVisible(item))
+    .filter(item => isNavVisible(item))
     .filter(item => (layoutByKey[item.key]?.location || 'sidebar') === 'sidebar')
     .sort((a, b) => (layoutByKey[a.key]?.sort_order ?? 999) - (layoutByKey[b.key]?.sort_order ?? 999));
 
