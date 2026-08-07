@@ -174,7 +174,15 @@ async function generateChecklist(sup, caseId) {
         status: 'pending',
         notes: '',
         evidence_stage: null,
-        _virtual: false,
+        // These rows don't exist in case_records_checklist yet either --
+        // must be marked the same as the hardcoded-fallback branch below so
+        // persistChecklist() actually inserts them and assigns a real id.
+        // Previously false here caused persistChecklist's `!items[0]._virtual`
+        // guard to skip persistence entirely: every item kept id=undefined,
+        // so React's per-item state (case_id keyed by item.id in
+        // ChecklistTab) collapsed onto one shared key -- expanding/collapsing
+        // any one checklist card visibly expanded/collapsed all of them.
+        _virtual: true,
       }));
     }
   } catch (e) {
@@ -330,7 +338,7 @@ router.get('/cases/:id/checklist', async (req, res) => {
     const { data, error } = await sup.from('case_records_checklist').select('*').eq('case_id', caseId).order('record_type');
     if (error || !data || data.length === 0) {
       // Table doesn't exist or empty — return virtual checklist merged with activity_logs
-      const virtual = generateChecklist(sup, caseId).map((item, i) => ({ ...item, id: -(i + 1) }));
+      const virtual = (await generateChecklist(sup, caseId)).map((item, i) => ({ ...item, id: -(i + 1) }));
       const merged = await mergeChecklistWithLogs(sup, caseId, virtual);
       return res.json({ data: merged });
     }
