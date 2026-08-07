@@ -179,7 +179,8 @@ router.get('/cases/:id', requirePermission('cases', 'view'), async (req, res) =>
 router.post('/cases', requirePermission('cases', 'create'), async (req, res) => {
   try {
     const sup = getSupabase();
-    const { title, description, priority, client_name, assigned_to, deadline, agencies } = req.body;
+    const { title, description, priority, client_name, assigned_to, deadline, agencies,
+      defendant_name, source_agency_name, story_hook, article_url, case_summary } = req.body;
 
     if (!title) return res.status(400).json({ error: 'عنوان القضية مطلوب' });
 
@@ -200,6 +201,11 @@ router.post('/cases', requirePermission('cases', 'create'), async (req, res) => 
         created_by: req.user?.id || null,
         assigned_to: assigned_to || null,
         deadline: deadline || null,
+        defendant_name: defendant_name || null,
+        source_agency_name: source_agency_name || null,
+        story_hook: story_hook || null,
+        article_url: article_url || null,
+        case_summary: case_summary || null,
         created_at: now,
         updated_at: now
       })
@@ -296,7 +302,8 @@ router.put('/cases/:id', requirePermission('cases', 'edit'), async (req, res) =>
     const { data: existing } = await sup.from('cases').select('*').eq('id', caseId).single();
     if (!existing) return res.status(404).json({ error: 'Case not found' });
 
-    const { title, description, status, priority, client_name, assigned_to, deadline } = req.body;
+    const { title, description, status, priority, client_name, assigned_to, deadline,
+      defendant_name, source_agency_name, story_hook, article_url, case_summary } = req.body;
 
     const updates = {};
     if (title !== undefined) updates.title = title;
@@ -306,9 +313,18 @@ router.put('/cases/:id', requirePermission('cases', 'edit'), async (req, res) =>
     if (client_name !== undefined) updates.client_name = client_name;
     if (assigned_to !== undefined) updates.assigned_to = assigned_to;
     if (deadline !== undefined) updates.deadline = deadline;
+    if (defendant_name !== undefined) updates.defendant_name = defendant_name;
+    if (source_agency_name !== undefined) updates.source_agency_name = source_agency_name;
+    if (story_hook !== undefined) updates.story_hook = story_hook;
+    if (article_url !== undefined) updates.article_url = article_url;
+    if (case_summary !== undefined) updates.case_summary = case_summary;
     updates.updated_at = new Date().toISOString();
 
-    await sup.from('cases').update(updates).eq('id', caseId);
+    // supabase-js resolves {data, error} rather than throwing -- an ignored
+    // error here would silently report success on a rejected update, same
+    // class of bug just fixed in users.js's PUT /users/:id.
+    const { error: updateError } = await sup.from('cases').update(updates).eq('id', caseId);
+    if (updateError) return res.status(400).json({ error: updateError.message });
 
     const { data: updated } = await sup.from('cases').select('*').eq('id', caseId).single();
     res.json(updated);

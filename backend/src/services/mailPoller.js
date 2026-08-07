@@ -210,13 +210,20 @@ class MailPoller {
         }
       }
 
-      // 6. By case title appearing in the subject (skip short/generic
-      // titles -- too high a false-positive risk to match on those).
+      // 6. By case title or defendant name appearing in the subject/body
+      // (skip short/generic values -- too high a false-positive risk to
+      // match on those). defendant_name is part of "معلومات تسجيل القضية"
+      // recorded at case creation specifically so it can double as an
+      // email-matching signal, same purpose as case_agency_channels'
+      // filter_keywords.
       if (!matchedCaseId) {
-        const subjectLower = (msg.subject || '').toLowerCase();
-        if (subjectLower) {
-          const { data: openCases } = await sup.from('cases').select('id, title').in('status', ['open', 'in_progress']);
-          const match = (openCases || []).find(c => c.title && c.title.trim().length > 6 && subjectLower.includes(c.title.trim().toLowerCase()));
+        const haystackLower = `${msg.subject || ''} ${msg.text || ''}`.toLowerCase();
+        if (haystackLower.trim()) {
+          const { data: openCases } = await sup.from('cases').select('id, title, defendant_name').in('status', ['open', 'in_progress']);
+          const match = (openCases || []).find(c =>
+            (c.title && c.title.trim().length > 6 && haystackLower.includes(c.title.trim().toLowerCase())) ||
+            (c.defendant_name && c.defendant_name.trim().length > 3 && haystackLower.includes(c.defendant_name.trim().toLowerCase()))
+          );
           if (match) matchedCaseId = match.id;
         }
       }

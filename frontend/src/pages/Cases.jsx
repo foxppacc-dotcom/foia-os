@@ -19,6 +19,7 @@ export default function Cases() {
   const [canViewAllCases, setCanViewAllCases] = useState(true);
   const [form, setForm] = useState({
     title: '', description: '', priority: 'medium', client_name: '',
+    defendant_name: '', source_agency_name: '', story_hook: '', article_url: '', case_summary: '',
     selectedAgencies: []
   });
   const navigate = useNavigate();
@@ -61,6 +62,11 @@ export default function Cases() {
         description: form.description,
         priority: form.priority,
         client_name: form.client_name,
+        defendant_name: form.defendant_name,
+        source_agency_name: form.source_agency_name,
+        story_hook: form.story_hook,
+        article_url: form.article_url,
+        case_summary: form.case_summary,
         agencies: form.selectedAgencies.map(id => ({ agency_id: id }))
       });
       // Auto-classify to pipeline list 1 after creation
@@ -72,7 +78,7 @@ export default function Cases() {
         ));
       }
       setShowForm(false);
-      setForm({ title: '', description: '', priority: 'medium', client_name: '', selectedAgencies: [] });
+      setForm({ title: '', description: '', priority: 'medium', client_name: '', defendant_name: '', source_agency_name: '', story_hook: '', article_url: '', case_summary: '', selectedAgencies: [] });
       fetchCases();
     } catch (e) {
       alert('❌ فشل إنشاء القضية: ' + e.message);
@@ -188,6 +194,31 @@ export default function Cases() {
                   <option value="high">🔴 عاجل</option>
                 </select>
               </div>
+
+              {/* معلومات تسجيل القضية */}
+              <p className="text-xs font-semibold pt-1" style={{ color: 'var(--text-muted)' }}>معلومات تسجيل القضية</p>
+              <div className="flex gap-3">
+                <input value={form.defendant_name} onChange={e => setForm({...form, defendant_name: e.target.value})}
+                  placeholder="اسم المتهم"
+                  className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
+                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+                <input value={form.source_agency_name} onChange={e => setForm({...form, source_agency_name: e.target.value})}
+                  placeholder="اسم الوكالة"
+                  className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
+                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+              </div>
+              <input value={form.story_hook} onChange={e => setForm({...form, story_hook: e.target.value})}
+                placeholder="الهوك"
+                className="w-full px-4 py-3 rounded-xl border focus:outline-none"
+                style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+              <input value={form.article_url} onChange={e => setForm({...form, article_url: e.target.value})}
+                placeholder="رابط المقال"
+                className="w-full px-4 py-3 rounded-xl border focus:outline-none"
+                style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+              <textarea value={form.case_summary} onChange={e => setForm({...form, case_summary: e.target.value})}
+                placeholder="ملخص القضية" rows={3}
+                className="w-full px-4 py-3 rounded-xl border resize-none focus:outline-none"
+                style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
             </div>
             {/* Agencies Selection */}
             <div>
