@@ -1,5 +1,5 @@
 import { useCaseContext } from '../context/CaseContext';
-import { Phone, Siren, Camera, Video, Car, Mic, ClipboardList, FileText, CheckCircle, Circle, MinusCircle, Building2, Users } from 'lucide-react';
+import { Phone, Siren, Camera, Video, Car, Mic, ClipboardList, FileText, CheckCircle, Circle, MinusCircle, Building2, Users, Activity } from 'lucide-react';
 import AppSection from '../../../components/ds/AppSection';
 import AppEmptyState from '../../../components/ds/AppEmptyState';
 import AppStack from '../../../components/ds/AppStack';
@@ -32,6 +32,7 @@ export default function OverviewTab() {
     { v: requests?.length || 0, l: 'جهات', c: 'var(--ds-accent)', icon: Building2 },
     { v: team?.length || 0, l: 'فريق', c: 'var(--ds-info)', icon: Users },
     { v: documents?.length || 0, l: 'ملفات', c: '#8B5CF6', icon: FileText },
+    { v: timeline?.length || 0, l: 'نشاط', c: 'var(--ds-warning)', icon: Activity },
   ];
 
   const received = checklist?.filter(i => i.status === 'completed' || i.status === 'received' || i.receipt_status === 'received').length || 0;
@@ -43,9 +44,14 @@ export default function OverviewTab() {
       <div className="lg:col-span-7 space-y-4">
         <CaseClassificationSelector />
         <InvestigationSummary />
-        <div className="grid grid-cols-3 gap-3">
+      </div>
+      <div className="lg:col-span-5 space-y-4">
+        {/* Quick stats + السجلات -- kept in their own column, independent of
+            معلومات القضية's height, so expanding ملخص القضية (resizable) on
+            the left never pushes or disrupts these. */}
+        <div className="grid grid-cols-4 gap-2.5">
           {stats.map((s, i) => (
-            <div key={i} className="flex items-center gap-2.5 p-3.5 rounded-lg ds-hover-lift" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
+            <div key={i} className="flex flex-col items-center gap-1.5 p-3 rounded-lg text-center ds-hover-lift" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
               <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: s.c + '18' }}>
                 <s.icon className="w-4 h-4" style={{ color: s.c }} />
               </div>
@@ -65,7 +71,7 @@ export default function OverviewTab() {
             </div>
           )}
           {checklist?.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2">
               {checklist.map(item => {
                 const meta = recordMeta[item.record_type];
                 const RIcon = meta?.icon || FileText;
@@ -85,8 +91,6 @@ export default function OverviewTab() {
             </div>
           ) : <AppEmptyState compact title="لم يتم إعداد قائمة التدقيق" />}
         </AppSection>
-      </div>
-      <div className="lg:col-span-5 space-y-4">
         <div className="p-4 rounded-xl" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
           <p className="text-xs font-semibold mb-3" style={{ color: 'var(--ds-text-secondary)' }}>آخر المستندات ({documents?.length || 0})</p>
           {documents?.length > 0 ? (
