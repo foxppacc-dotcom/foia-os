@@ -83,7 +83,14 @@ router.put('/users/:id', requirePermission('users', 'edit'), async (req, res) =>
 
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields to update' });
 
-  await sup.from('users').update(updates).eq('id', parseInt(req.params.id));
+  // supabase-js resolves {data, error} rather than throwing on a DB-level
+  // rejection (e.g. a stale CHECK constraint on users.role) -- ignoring
+  // `error` here meant a rejected update still reported success while the
+  // row silently stayed unchanged. Concretely reproduced with a newly
+  // created custom role: assigning it to a user looked like it worked, but
+  // the role never actually changed.
+  const { error } = await sup.from('users').update(updates).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
 
   res.json({ success: true, message: '✅ تم تحديث المستخدم' });
 });
@@ -96,7 +103,8 @@ router.post('/users/:id/reset-password', requirePermission('users', 'edit'), asy
   const { data: user } = await sup.from('users').select('id').eq('id', parseInt(req.params.id)).maybeSingle();
   if (!user) return res.status(404).json({ error: 'User not found' });
   const hash = bcrypt.hashSync(password, 10);
-  await sup.from('users').update({ password_hash: hash }).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('users').update({ password_hash: hash }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true, message: '✅ تم إعادة تعيين كلمة المرور' });
 });
 
