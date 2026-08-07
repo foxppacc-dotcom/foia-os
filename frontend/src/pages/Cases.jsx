@@ -18,7 +18,7 @@ export default function Cases() {
   const [searchTerm, setSearchTerm] = useState('');
   const [canViewAllCases, setCanViewAllCases] = useState(true);
   const [form, setForm] = useState({
-    title: '', description: '', priority: 'medium', client_name: '',
+    priority: 'medium',
     defendant_name: '', source_agency_name: '', story_hook: '', article_url: '', case_summary: '',
     selectedAgencies: []
   });
@@ -55,13 +55,17 @@ export default function Cases() {
   };
 
   const createCase = async () => {
-    if (!form.title.trim()) return;
+    if (!form.defendant_name.trim()) return;
     try {
+      // معلومات تسجيل القضية replaced the old عنوان/وصف/عميل fields entirely --
+      // اسم المتهم is now the case's effective title (everything downstream --
+      // the cases list, search, mailPoller's title-matching -- reads
+      // cases.title, so it still needs a meaningful value), and ملخص القضية
+      // doubles as the description.
       const res = await api.post('/cases', {
-        title: form.title,
-        description: form.description,
+        title: form.defendant_name,
+        description: form.case_summary,
         priority: form.priority,
-        client_name: form.client_name,
         defendant_name: form.defendant_name,
         source_agency_name: form.source_agency_name,
         story_hook: form.story_hook,
@@ -78,7 +82,7 @@ export default function Cases() {
         ));
       }
       setShowForm(false);
-      setForm({ title: '', description: '', priority: 'medium', client_name: '', defendant_name: '', source_agency_name: '', story_hook: '', article_url: '', case_summary: '', selectedAgencies: [] });
+      setForm({ priority: 'medium', defendant_name: '', source_agency_name: '', story_hook: '', article_url: '', case_summary: '', selectedAgencies: [] });
       fetchCases();
     } catch (e) {
       alert('❌ فشل إنشاء القضية: ' + e.message);
@@ -173,33 +177,18 @@ export default function Cases() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div className="space-y-3">
-              <input value={form.title} onChange={e => setForm({...form, title: e.target.value})}
-                placeholder="عنوان القضية *"
-                className="w-full px-4 py-3 rounded-xl border focus:outline-none"
-                style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
-              <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})}
-                placeholder="وصف القضية" rows={3}
-                className="w-full px-4 py-3 rounded-xl border resize-none focus:outline-none"
-                style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
-              <div className="flex gap-3">
-                <input value={form.client_name} onChange={e => setForm({...form, client_name: e.target.value})}
-                  placeholder="اسم العميل"
-                  className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
-                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
-                <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})}
-                  className="px-4 py-3 rounded-xl border"
-                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
-                  <option value="low">🟢 منخفض</option>
-                  <option value="medium">🟡 متوسط</option>
-                  <option value="high">🔴 عاجل</option>
-                </select>
-              </div>
-
-              {/* معلومات تسجيل القضية */}
-              <p className="text-xs font-semibold pt-1" style={{ color: 'var(--text-muted)' }}>معلومات تسجيل القضية</p>
+              {/* معلومات تسجيل القضية -- replaces the old عنوان/وصف/عميل fields;
+                  اسم المتهم is now the case's effective title. */}
+              <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})}
+                className="w-full px-4 py-3 rounded-xl border"
+                style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
+                <option value="low">🟢 منخفض</option>
+                <option value="medium">🟡 متوسط</option>
+                <option value="high">🔴 عاجل</option>
+              </select>
               <div className="flex gap-3">
                 <input value={form.defendant_name} onChange={e => setForm({...form, defendant_name: e.target.value})}
-                  placeholder="اسم المتهم"
+                  placeholder="اسم المتهم *"
                   className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
                   style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
                 <input value={form.source_agency_name} onChange={e => setForm({...form, source_agency_name: e.target.value})}
