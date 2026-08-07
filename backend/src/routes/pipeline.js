@@ -121,10 +121,11 @@ router.put('/pipeline/tasks/:id', requirePermission('pipeline', 'move'), async (
       return res.status(400).json({ error: 'Invalid list_id' });
     }
 
-    await sup
+    const { error: moveErr } = await sup
       .from('case_tasks')
       .update({ list_id })
       .eq('id', taskId);
+    if (moveErr) return res.status(400).json({ error: moveErr.message });
 
     const { data: updated } = await sup
       .from('case_tasks')

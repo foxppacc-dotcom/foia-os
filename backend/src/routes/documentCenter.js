@@ -464,7 +464,8 @@ router.delete('/communications/:id/attachments/:index', requireAuth, async (req,
     else if (att.storageKey) await storage.deleteByKey(att.storageKey).catch(e => console.warn('Storage delete failed:', e.message));
 
     const updatedAttachments = attachments.filter((_, i) => i !== index);
-    await sup.from('communications').update({ metadata: JSON.stringify({ ...meta, attachments: updatedAttachments }) }).eq('id', commId);
+    const { error: metaErr } = await sup.from('communications').update({ metadata: JSON.stringify({ ...meta, attachments: updatedAttachments }) }).eq('id', commId);
+    if (metaErr) return res.status(400).json({ error: metaErr.message });
 
     try {
       await sup.from('activity_logs').insert({
@@ -525,7 +526,8 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
 // PUT /api/inbox/:id/archive
 router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
 

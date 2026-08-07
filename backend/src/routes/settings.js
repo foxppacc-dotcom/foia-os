@@ -25,10 +25,11 @@ router.put('/settings', requireAuth, requirePermission('settings', 'manage'), as
     const { data: exists } = await sup.from('system_settings').select('key').eq('key', key).maybeSingle();
     if (!exists) continue; // skip unknown keys
 
-    await sup
+    const { error } = await sup
       .from('system_settings')
       .update({ value: String(value), updated_at: new Date().toISOString() })
       .eq('key', key);
+    if (error) return res.status(400).json({ error: error.message });
     count++;
   }
 
@@ -62,10 +63,11 @@ router.post('/settings/reset', requireAuth, requirePermission('settings', 'manag
 
   const now = new Date().toISOString();
   for (const [key, value] of Object.entries(defaults)) {
-    await sup
+    const { error } = await sup
       .from('system_settings')
       .update({ value, updated_at: now })
       .eq('key', key);
+    if (error) return res.status(400).json({ error: error.message });
   }
 
   res.json({ success: true, message: '✅ تم إعادة تعيين الإعدادات' });

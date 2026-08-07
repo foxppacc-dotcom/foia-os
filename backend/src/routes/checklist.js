@@ -76,7 +76,8 @@ router.post('/templates/reorder', requireAuth, requireRole('admin'), async (req,
     const { order } = req.body;
     if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of {id, sort_order}' });
     for (const item of order) {
-      await sup.from('checklist_templates').update({ sort_order: item.sort_order }).eq('id', item.id);
+      const { error } = await sup.from('checklist_templates').update({ sort_order: item.sort_order }).eq('id', item.id);
+      if (error) return res.status(400).json({ error: error.message });
     }
     res.json({ success: true });
   } catch (err) {

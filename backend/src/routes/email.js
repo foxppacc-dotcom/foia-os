@@ -165,7 +165,8 @@ router.put('/email-accounts/:id', requireAuth, requirePermission('email_accounts
 router.delete('/accounts/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   try {
-    await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    const { error } = await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true, message: '✅ تم حذف الحساب' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -176,7 +177,8 @@ router.delete('/accounts/:id', requireAuth, requireRole('admin'), async (req, re
 router.delete('/email-accounts/:id', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   const sup = getSupabase();
   try {
-    await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    const { error } = await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true, message: '✅ تم حذف الحساب' });
   } catch (err) {
     res.status(500).json({ error: err.message });

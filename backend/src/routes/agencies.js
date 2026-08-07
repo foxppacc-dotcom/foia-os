@@ -226,7 +226,8 @@ router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), 
 // DELETE /api/agencies/:id
 router.delete('/agencies/:id', requireAuth, requirePermission('agencies', 'delete'), async (req, res) => {
   const sup = getSupabase();
-  await sup.from('agencies').delete().eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('agencies').delete().eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
 
@@ -314,7 +315,8 @@ router.put('/agencies/:id/contacts/:contactId', requireAuth, requirePermission('
   contacts[idx].updated_at = new Date().toISOString();
 
   parsed._contacts = contacts;
-  await sup.from('agencies').update({ notes: JSON.stringify(parsed) }).eq('id', agency_id);
+  const { error } = await sup.from('agencies').update({ notes: JSON.stringify(parsed) }).eq('id', agency_id);
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
 
@@ -331,7 +333,8 @@ router.delete('/agencies/:id/contacts/:contactId', requireAuth, requirePermissio
   try { if (agency.notes) parsed = JSON.parse(agency.notes); } catch {}
   parsed._contacts = (parsed._contacts || []).filter(c => c.id !== contactId);
 
-  await sup.from('agencies').update({ notes: JSON.stringify(parsed) }).eq('id', agency_id);
+  const { error } = await sup.from('agencies').update({ notes: JSON.stringify(parsed) }).eq('id', agency_id);
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
 

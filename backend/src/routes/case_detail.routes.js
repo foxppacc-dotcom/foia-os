@@ -464,7 +464,8 @@ router.delete('/cases/:id/requests/:reqId', async (req, res) => {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
     const reqId = parseInt(req.params.reqId);
-    await sup.from('requests').delete().eq('id', reqId).eq('case_id', caseId);
+    const { error: delErr } = await sup.from('requests').delete().eq('id', reqId).eq('case_id', caseId);
+    if (delErr) return res.status(400).json({ error: delErr.message });
     await sup.from('activity_logs').insert({
       user_id: req.user.id, user_name: req.user.name,
       action_type: 'delete', target_type: 'request', target_id: reqId,
@@ -597,8 +598,11 @@ router.delete('/cases/:id/documents/:docId', async (req, res) => {
     // Fetch document first to know where its bytes actually live
     const { data: doc } = await sup.from('case_documents').select('storage_key, storage_provider, drive_file_id').eq('id', docId).eq('case_id', caseId).maybeSingle();
 
-    // Delete from database
-    await sup.from('case_documents').delete().eq('id', docId).eq('case_id', caseId);
+    // Delete from database first -- only remove the actual bytes once the DB
+    // row is confirmed gone, so a rejected DB delete can never leave an
+    // orphaned row pointing at bytes that no longer exist.
+    const { error: delErr } = await sup.from('case_documents').delete().eq('id', docId).eq('case_id', caseId);
+    if (delErr) return res.status(400).json({ error: delErr.message });
 
     // Delete the underlying bytes from wherever they're actually stored
     if (doc?.storage_provider === 'google_drive' && doc?.drive_file_id) {

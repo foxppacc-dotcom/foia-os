@@ -399,10 +399,11 @@ router.put('/requests/:id/classification', async (req, res) => {
     const { data: list } = await sup.from('pipeline_lists').select('id').eq('id', classification_id).single();
     if (!list) return res.status(400).json({ error: 'Invalid classification_id' });
 
-    await sup
+    const { error: classifyErr } = await sup
       .from('requests')
       .update({ classification_id, status: 'classified' })
       .eq('id', requestId);
+    if (classifyErr) return res.status(400).json({ error: classifyErr.message });
 
     // Add timeline entry
     const { data: listName } = await sup.from('pipeline_lists').select('name_ar').eq('id', classification_id).single();

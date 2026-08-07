@@ -75,10 +75,11 @@ router.put('/pipeline-lists/:id/reorder', requireAuth, requireRole('admin'), asy
 
   // Update each list's list_number
   for (let i = 0; i < all.length; i++) {
-    await sup
+    const { error: reorderErr } = await sup
       .from('pipeline_lists')
       .update({ list_number: i + 1 })
       .eq('id', all[i].id);
+    if (reorderErr) return res.status(400).json({ error: reorderErr.message });
   }
 
   const { data: lists } = await sup
@@ -105,7 +106,8 @@ router.put('/pipeline-lists/:id', requireAuth, requireRole('admin'), async (req,
   if (reminder_days !== undefined) updates.reminder_days = reminder_days;
   if (responsible_team_id !== undefined) updates.responsible_team_id = responsible_team_id;
 
-  await sup.from('pipeline_lists').update(updates).eq('id', id);
+  const { error: updateErr } = await sup.from('pipeline_lists').update(updates).eq('id', id);
+  if (updateErr) return res.status(400).json({ error: updateErr.message });
 
   const { data: updated } = await sup.from('pipeline_lists').select('*').eq('id', id).single();
   res.json({ success: true, data: updated });
@@ -120,8 +122,10 @@ router.delete('/pipeline-lists/:id', requireAuth, requireRole('admin'), async (r
   if (!list) return res.status(404).json({ error: 'قائمة غير موجودة' });
 
   // Unlink all requests in this list
-  await sup.from('requests').update({ classification_id: null }).eq('classification_id', id);
-  await sup.from('pipeline_lists').delete().eq('id', id);
+  const { error: unlinkErr } = await sup.from('requests').update({ classification_id: null }).eq('classification_id', id);
+  if (unlinkErr) return res.status(400).json({ error: unlinkErr.message });
+  const { error: deleteErr } = await sup.from('pipeline_lists').delete().eq('id', id);
+  if (deleteErr) return res.status(400).json({ error: deleteErr.message });
 
   logActivity({
     action_type: 'delete_pipeline_list',
