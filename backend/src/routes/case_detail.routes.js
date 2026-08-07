@@ -55,8 +55,16 @@ router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (re
       }),
       sup.from('case_records_checklist').select('*').eq('case_id', caseId).order('record_type')
         .then(async (r) => r.error ? generateChecklist(sup, caseId) : (r.data?.length > 0 ? r.data : generateChecklist(sup, caseId)))
-        .then(cl => persistChecklist(sup, caseId, cl))
-        .then(cl => mergeChecklistWithLogs(sup, caseId, cl)),
+        // mergeChecklistWithLogs is intentionally NOT run here once rows are
+        // real/persisted (the branch above only falls through to
+        // generateChecklist for genuinely virtual/unpersisted data). It
+        // replays the last activity_logs snapshot over the row's own fields,
+        // so a fresh, successful PUT to case_records_checklist would get
+        // silently overwritten back to whatever was last logged -- e.g.
+        // clicking a status button in "حالة التحقيق" would appear to save,
+        // then instantly revert on the next fetch. persistChecklist below
+        // only inserts missing rows; it never touches existing ones.
+        .then(cl => persistChecklist(sup, caseId, cl)),
       sup.from('case_documents').select('*').eq('case_id', caseId).order('created_at', { ascending: false })
         .then(r => r.error ? [] : (r.data || [])),
       sup.from('activity_logs').select('*')
