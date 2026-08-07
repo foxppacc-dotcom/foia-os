@@ -41,7 +41,7 @@ router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) 
     // Also get requests grouped by classification
     let requestsQuery = sup
       .from('requests')
-      .select(`*, pipeline_lists!classification_id!left(name_ar, name_en, color), agencies!left(name_en), cases!left(title)`)
+      .select(`*, pipeline_lists!classification_id!left(name_ar, name_en, color), agencies!left(name_ar, name_en), cases!left(title)`)
       .order('created_at', { ascending: sortOrder === 'oldest' });
 
     if (caseId) {
@@ -56,7 +56,13 @@ router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) 
       classification_name_ar: r.pipeline_lists?.name_ar || null,
       classification_name_en: r.pipeline_lists?.name_en || null,
       classification_color: r.pipeline_lists?.color || null,
+      // Pipeline.jsx renders agency_name_ar on each card to distinguish
+      // multiple requests for the same case (e.g. two agencies both landing
+      // in "مطلوب دفع") -- this key was never set, so every card silently
+      // fell back to showing nothing there, making distinct per-agency
+      // cards look like unexplained duplicates of the same case.
       agency_name: r.agencies?.name_en || null,
+      agency_name_ar: r.agencies?.name_ar || r.agencies?.name_en || null,
       case_title: r.cases?.title || null,
       pipeline_lists: undefined,
       agencies: undefined,
