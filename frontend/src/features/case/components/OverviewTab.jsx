@@ -1,5 +1,5 @@
 import { useCaseContext } from '../context/CaseContext';
-import { Phone, Siren, Camera, Video, Car, Mic, ClipboardList, FileText, CheckCircle, Circle, MinusCircle, Building2, Users, Activity } from 'lucide-react';
+import { Phone, Siren, Camera, Video, Car, Mic, ClipboardList, FileText, CheckCircle, Circle, MinusCircle, XCircle, Clock, Building2, Users, Activity } from 'lucide-react';
 import AppSection from '../../../components/ds/AppSection';
 import AppEmptyState from '../../../components/ds/AppEmptyState';
 import AppStack from '../../../components/ds/AppStack';
@@ -19,10 +19,20 @@ const recordMeta = {
   'victim_statement': { label: 'التحقيق مع الضحية', icon: ClipboardList },
 };
 
-const statusLabels = {
-  received: 'تم الاستلام', pending: 'قيد الانتظار', not_started: 'لم يبدأ',
-  requested: 'تم الطلب', waiting: 'بانتظار الرد', partially_received: 'استلمت جزئياً',
-  completed: 'مكتمل', rejected: 'مرفوض', not_applicable: 'غير مطبق',
+// One clear, distinct color per status instead of collapsing everything
+// into 3 buckets -- مكتمل specifically reads green, تم الطلب/بانتظار الرد
+// blue, قيد الانتظار/استلمت جزئياً amber, مرفوض red, and so on.
+const STATUS_META = {
+  received:           { label: 'تم الاستلام',    color: 'var(--ds-success)', icon: CheckCircle },
+  completed:          { label: 'مكتمل',          color: 'var(--ds-success)', icon: CheckCircle },
+  partially_received: { label: 'استلمت جزئياً',   color: '#F59E0B', icon: Clock },
+  pending:            { label: 'قيد الانتظار',    color: '#F59E0B', icon: Clock },
+  requested:          { label: 'تم الطلب',        color: '#3B82F6', icon: Clock },
+  waiting:            { label: 'بانتظار الرد',     color: '#3B82F6', icon: Clock },
+  not_started:        { label: 'لم يبدأ',         color: 'var(--ds-text-muted)', icon: MinusCircle },
+  not_applicable:     { label: 'غير مطبق',        color: 'var(--ds-text-muted)', icon: MinusCircle },
+  rejected:           { label: 'مرفوض',           color: 'var(--ds-danger)', icon: XCircle },
+  will_not_receive:   { label: 'لن يتم الاستلام', color: 'var(--ds-danger)', icon: XCircle },
 };
 
 export default function OverviewTab() {
@@ -74,17 +84,19 @@ export default function OverviewTab() {
             <div className="grid grid-cols-1 gap-2">
               {checklist.map(item => {
                 const meta = recordMeta[item.record_type];
-                const RIcon = meta?.icon || FileText;
-                const isDone = item.receipt_status === 'received' || item.status === 'received';
-                const isNeg = item.receipt_status === 'will_not_receive' || item.status === 'will_not_receive' || item.doc_status === 'no_documents';
-                const Icon = isDone ? CheckCircle : isNeg ? Circle : MinusCircle;
-                const icoColor = isDone ? 'var(--ds-success)' : isNeg ? 'var(--ds-text-muted)' : 'var(--ds-warning)';
-                const statusText = statusLabels[item.status] || statusLabels[item.receipt_status] || '';
+                const statusKey = item.status || item.receipt_status || (item.doc_status === 'no_documents' ? 'will_not_receive' : null);
+                const statusMeta = STATUS_META[statusKey];
+                const Icon = statusMeta?.icon || Circle;
+                const statusColor = statusMeta?.color || 'var(--ds-text-muted)';
                 return (
-                  <div key={item.id ?? item.record_type} className="flex items-center gap-2 p-2.5 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
-                    <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: icoColor }} />
-                    <span className="text-xs flex-1" style={{ color: 'var(--ds-text-primary)' }}>{meta?.label || item.record_type}</span>
-                    {statusText && <span className="text-[10px]" style={{ color: icoColor }}>{statusText}</span>}
+                  <div key={item.id ?? item.record_type} className="flex items-center gap-2.5 p-3 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
+                    <Icon className="w-4 h-4 shrink-0" style={{ color: statusColor }} />
+                    <span className="text-sm flex-1" style={{ color: 'var(--ds-text-primary)' }}>{meta?.label || item.record_type}</span>
+                    {statusMeta && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ color: statusColor, background: statusColor + '18' }}>
+                        {statusMeta.label}
+                      </span>
+                    )}
                   </div>
                 );
               })}
