@@ -14,6 +14,22 @@ const LIST_STYLES_BY_ID = {
   7: { bg: '#EC4899', label: '🆔 محتاج تأكيد مواطنة', emoji: '🆔' },
 };
 
+// Response-deadline chip for a pipeline card -- expected_response_date is
+// real, populated data (set the moment a request is sent via email/portal,
+// see documentCenter.js) already used for overdue tracking elsewhere in the
+// app (CaseHeader, Dashboard). Cards had this mostly-empty bottom row with
+// only agency name on the left; surfacing the deadline here fills that
+// space with the single most actionable fact for a production-board card.
+function getDeadlineChip(item) {
+  if (item.response_date) return { text: 'تم الرد', color: 'var(--success, #10B981)' };
+  if (!item.expected_response_date) return null;
+  const todayStr = new Date().toISOString().split('T')[0];
+  const daysLeft = Math.floor((new Date(item.expected_response_date) - new Date(todayStr)) / 86400000);
+  if (item.expected_response_date < todayStr) return { text: `متأخر ${Math.abs(daysLeft)} يوم`, color: '#EF4444' };
+  if (daysLeft <= 3) return { text: `باقي ${daysLeft} يوم`, color: '#F59E0B' };
+  return { text: `باقي ${daysLeft} يوم`, color: 'var(--text-muted)' };
+}
+
 // Avatars + a checkbox popover for who's responsible for this list -- the
 // list_assignees API already existed and worked, but the only UI for it
 // was buried in Settings' "إدارة قوائم الإنتاج" tab (hover-only) or
@@ -312,9 +328,15 @@ export default function Pipeline() {
                         onDragOver={e => { e.preventDefault(); }}
                         onDrop={e => handleInternalDrop(e, col, idx)}>
                         <div className="px-4 py-3">
-                          <span className="font-mono font-bold" style={{ color: st.bg, fontSize: '1rem' }}>#{item.case_id || item.id}</span>
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold" style={{ color: st.bg, fontSize: '1rem' }}>#{item.case_id || item.id}</span>
+                            {item.priority === 'high' && <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: '#EF444420', color: '#EF4444' }}>عاجل</span>}
+                          </div>
                           <p className="font-medium leading-snug line-clamp-2 mt-1" style={{ color: 'var(--text-primary)' }}>{item.case_title || item.title || 'بدون عنوان'}</p>
-                          {item.agency_name_ar && <p className="text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>🏛️ {item.agency_name_ar}</p>}
+                          <div className="flex items-center justify-between text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>
+                            {item.agency_name_ar && <span className="truncate">🏛️ {item.agency_name_ar}</span>}
+                            {(() => { const d = getDeadlineChip(item); return d && <span className="shrink-0 font-medium" style={{ color: d.color }}>⏳ {d.text}</span>; })()}
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -381,7 +403,7 @@ export default function Pipeline() {
                             <p className="font-medium leading-snug line-clamp-2 mb-2" style={{ color: 'var(--text-primary)' }}>{item.case_title || item.title || 'بدون عنوان'}</p>
                             <div className="flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
                               {item.agency_name_ar && <span className="truncate">🏛️ {item.agency_name_ar}</span>}
-                              {item.sent_date && <span className="shrink-0">📅 {new Date(item.sent_date).toLocaleDateString('ar-EG')}</span>}
+                              {(() => { const d = getDeadlineChip(item); return d && <span className="shrink-0 font-medium" style={{ color: d.color }}>⏳ {d.text}</span>; })()}
                             </div>
                           </div>
                         </div>
