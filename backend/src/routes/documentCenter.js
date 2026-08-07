@@ -125,21 +125,36 @@ router.put('/documents/:id', requireAuth, async (req, res) => {
 
 // GET /api/documents/:id/download — signed URL for download/preview
 router.get('/documents/:id/download', requireAuth, async (req, res) => {
-  const sup = getSupabase();
-  const { data: doc } = await sup.from('case_documents').select('storage_key, file_path, original_name, storage_provider, drive_file_id').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (!doc) return res.status(404).json({ error: 'Document not found' });
+  // Previously had no try/catch: a rejected gdrive.getFileLinks() call (e.g.
+  // an expired/invalid token, or Google's API hanging) was an unhandled
+  // promise rejection in an async Express handler -- neither res.json() nor
+  // res.status() ever ran, so the request hung indefinitely with no error
+  // and no response. The click looked like it "just doesn't work".
+  try {
+    const sup = getSupabase();
+    const { data: doc } = await sup.from('case_documents').select('storage_key, file_path, original_name, storage_provider, drive_file_id').eq('id', parseInt(req.params.id)).maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
 
-  if (doc.storage_provider === 'google_drive' && doc.drive_file_id) {
-    const { downloadUrl, viewUrl } = await gdrive.getFileLinks(doc.drive_file_id);
-    return res.json({ success: true, url: downloadUrl || viewUrl || doc.file_path, filename: doc.original_name });
+    if (doc.storage_provider === 'google_drive' && doc.drive_file_id) {
+      // Bound the Drive call so a hung/slow Google API request surfaces as a
+      // clear timeout error instead of hanging the whole request forever.
+      const withTimeout = (promise, ms) => Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Google Drive لم يستجب في الوقت المناسب')), ms)),
+      ]);
+      const { downloadUrl, viewUrl } = await withTimeout(gdrive.getFileLinks(doc.drive_file_id), 15000);
+      return res.json({ success: true, url: downloadUrl || viewUrl || doc.file_path, filename: doc.original_name });
+    }
+
+    const key = doc.storage_key || doc.file_path;
+    if (!key || !key.includes('/')) return res.status(404).json({ error: 'No storage key on this document' });
+    const [bucket, ...pathParts] = key.split('/');
+    const url = await storage.getSignedUrl(bucket, pathParts.join('/'));
+    if (!url) return res.status(500).json({ error: 'Could not generate download URL' });
+    res.json({ success: true, url, filename: doc.original_name });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  const key = doc.storage_key || doc.file_path;
-  if (!key || !key.includes('/')) return res.status(404).json({ error: 'No storage key on this document' });
-  const [bucket, ...pathParts] = key.split('/');
-  const url = await storage.getSignedUrl(bucket, pathParts.join('/'));
-  if (!url) return res.status(500).json({ error: 'Could not generate download URL' });
-  res.json({ success: true, url, filename: doc.original_name });
 });
 
 // DELETE /api/documents/:id — soft delete
