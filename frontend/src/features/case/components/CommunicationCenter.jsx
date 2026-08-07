@@ -47,8 +47,12 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
     setAgencyId(newAgencyId);
     // Only auto-fill "to" if it's empty or still matches the previous agency's
     // email -- never clobber an address the user deliberately typed in.
-    const prevAgencyEmail = (agencies || []).find(a => a.id === agencyId)?.email;
-    const newAgency = (agencies || []).find(a => a.id === newAgencyId);
+    // <select> onChange always gives a string, but agency.id from the API is
+    // a number -- comparing them directly with === never matched, so
+    // newAgency was always undefined and this never fired at all. Coerce
+    // both sides to string so the lookup actually finds the agency.
+    const prevAgencyEmail = (agencies || []).find(a => String(a.id) === String(agencyId))?.email;
+    const newAgency = (agencies || []).find(a => String(a.id) === String(newAgencyId));
     if (newAgency?.email && (!to || to === prevAgencyEmail)) setTo(newAgency.email);
   };
   const [accountId, setAccountId] = useState(replyTo?.email_account_id || replyTo?.assigned_email_account_id || accounts?.[0]?.id || '');
