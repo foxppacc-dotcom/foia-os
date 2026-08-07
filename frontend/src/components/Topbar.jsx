@@ -41,6 +41,7 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [roleLabel, setRoleLabel] = useState(null);
   const menuRef = useRef(null);
   const notifRef = useRef(null);
   const meta = getPageMeta(pathname);
@@ -54,6 +55,21 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
     const interval = setInterval(loadNotifications, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  // The role chip used to hardcode only admin/manager and fall back to the
+  // generic "عضو" for everything else -- so any custom role created from
+  // "فريق العمل" (e.g. "Order Management Specialist") displayed as plain
+  // "Member" here, making it look like the role assignment hadn't taken.
+  // Resolve the real label from /roles instead.
+  useEffect(() => {
+    let cancelled = false;
+    api.get('/roles').then(d => {
+      if (cancelled) return;
+      const match = (d.roles || []).find(r => r.name === user?.role);
+      setRoleLabel(match?.label || null);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [user?.role]);
 
   useEffect(() => {
     const onClick = (e) => {
@@ -154,7 +170,7 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
             <div className="text-right hidden sm:block">
               <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{user?.name}</p>
               <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                {user?.role === 'admin' ? 'مدير النظام' : user?.role === 'manager' ? 'مدير' : 'عضو'}
+                {roleLabel || (user?.role === 'admin' ? 'مدير النظام' : user?.role === 'manager' ? 'مدير' : 'عضو')}
               </p>
             </div>
             <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>

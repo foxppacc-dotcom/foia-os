@@ -17,7 +17,12 @@ const PROFILE_TABS = [
   { key: 'kpi', label: 'مؤشرات الأداء' },
 ];
 
-const ROLE_LABEL = { admin: 'مدير النظام', manager: 'مدير', agent: 'وكيل' };
+// Fallback only -- used until /roles resolves, or if a role was deleted
+// after being assigned. The hardcoded map used to be the ONLY source, so
+// any custom role (e.g. one created from "فريق العمل") fell through to
+// the generic "مشاهد" here, which looked like the role assignment never
+// took even though the DB had the correct role all along.
+const ROLE_LABEL_FALLBACK = { admin: 'مدير النظام', manager: 'مدير', agent: 'وكيل' };
 
 export default function Profile() {
   const { id } = useParams();
@@ -27,6 +32,7 @@ export default function Profile() {
   const [form, setForm] = useState({});
   const [activeTab, setActiveTab] = useState('tasks');
   const [todayAttendance, setTodayAttendance] = useState(null);
+  const [roles, setRoles] = useState([]);
 
   const fetchProfile = () => {
     api.get(`/profile/${id || 1}`).then(d => {
@@ -36,6 +42,7 @@ export default function Profile() {
     }).catch(() => setLoading(false));
   };
   useEffect(() => { fetchProfile(); }, [id]);
+  useEffect(() => { api.get('/roles').then(d => setRoles(d.roles || [])).catch(() => {}); }, []);
 
   const checkToday = () => {
     const today = new Date().toISOString().split('T')[0];
@@ -112,7 +119,7 @@ export default function Profile() {
                 <div className="flex items-center gap-3 text-sm mt-1.5 flex-wrap" style={{ color: 'var(--text-muted)' }}>
                   {u.phone && <span className="inline-flex items-center gap-1"><Phone className="w-3.5 h-3.5" />{u.phone}</span>}
                   {u.employee_id && <span className="inline-flex items-center gap-1"><IdCard className="w-3.5 h-3.5" />{u.employee_id}</span>}
-                  <span>{ROLE_LABEL[u.role] || 'مشاهد'}</span>
+                  <span>{roles.find(r => r.name === u.role)?.label || ROLE_LABEL_FALLBACK[u.role] || u.role}</span>
                 </div>
                 {u.bio && <p className="text-sm mt-2" style={{ color: 'var(--text-secondary)' }}>{u.bio}</p>}
               </>
