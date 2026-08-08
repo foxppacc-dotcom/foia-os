@@ -17,7 +17,7 @@ export const NAV_CATALOG = [
   { key: 'production', path: '/production', label: 'مونتاج', icon: Timer, roles: ['admin', 'manager', 'member'] },
   { key: 'agencies', path: '/agencies', label: 'الجهات', icon: Building2, roles: ['admin', 'manager', 'member'] },
   { key: 'portals', path: '/portals', label: 'بوابات', icon: Key, roles: ['admin', 'manager'] },
-  { key: 'inbox', path: '/inbox', label: 'صندوق الوارد', icon: Mail, roles: ['admin', 'manager', 'member'] },
+  { key: 'inbox', path: '/inbox', label: 'صندوق البريد', icon: Mail, roles: ['admin', 'manager', 'member'] },
   { key: 'email_accounts', path: '/email-accounts', label: 'إيميلات', icon: AtSign, roles: ['admin', 'manager', 'member'] },
   { key: 'teams', path: '/teams', label: 'الفرق', icon: Users, roles: ['admin'] },
   { key: 'permissions', path: '/permissions', label: 'فريق العمل', icon: UserCog, roles: ['admin', 'manager'] },

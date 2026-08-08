@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, getApiBase } from '../api';
-import { Mail, Search, Inbox, Archive, Link2, Eye, ChevronDown, RefreshCw, Loader2, ExternalLink, Trash2 } from 'lucide-react';
+import { Mail, Search, Inbox, Archive, Link2, Eye, ChevronDown, RefreshCw, Loader2, ExternalLink, Trash2, Send, X } from 'lucide-react';
 import AppSection from '../components/ds/AppSection';
 import AppButton from '../components/ds/AppButton';
 import AppBadge from '../components/ds/AppBadge';
@@ -24,6 +24,10 @@ export default function InboxPage() {
   const [selected, setSelected] = useState(null);
   const [polling, setPolling] = useState(false);
   const [unread, setUnread] = useState(0);
+  const [showComposer, setShowComposer] = useState(false);
+  const [composeForm, setComposeForm] = useState({ account_id: '', to: '', cc: '', subject: '', body: '' });
+  const [composing, setComposing] = useState(false);
+  const [composeError, setComposeError] = useState('');
 
   const fetchInbox = async () => {
     try {
@@ -89,6 +93,26 @@ export default function InboxPage() {
     }
   };
 
+  // Sending a fresh, case-unrelated email previously had nowhere to go --
+  // compose only existed inside a case's الاتصالات tab (POST /cases/:id/compose,
+  // hard-requires a case). This uses the new /inbox/compose route instead.
+  const sendCompose = async () => {
+    if (!composeForm.account_id || !composeForm.to || !composeForm.subject) return;
+    setComposing(true); setComposeError('');
+    try {
+      const r = await fetch(`${BASE}/inbox/compose`, {
+        method: 'POST', headers: hdrs(),
+        body: JSON.stringify(composeForm),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { setComposeError(d.error || 'فشل الإرسال'); setComposing(false); return; }
+      setShowComposer(false);
+      setComposeForm({ account_id: '', to: '', cc: '', subject: '', body: '' });
+      fetchInbox();
+    } catch (e) { setComposeError('خطأ: ' + (e.message || '')); }
+    setComposing(false);
+  };
+
   const handleArchive = async (id) => {
     await fetch(`${BASE}/inbox/${id}/archive`, { method: 'PUT', headers: hdrs() });
     fetchInbox();
@@ -113,12 +137,52 @@ export default function InboxPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Inbox className="w-5 h-5" style={{ color: 'var(--ds-accent)' }} />
-          <h1 className="text-lg font-semibold" style={{ color: 'var(--ds-text-primary)' }}>صندوق الوارد</h1>
+          <h1 className="text-lg font-semibold" style={{ color: 'var(--ds-text-primary)' }}>صندوق البريد</h1>
         </div>
-        <AppButton size="sm" icon={polling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} onClick={handlePoll} disabled={polling}>
-          {polling ? 'جاري الجلب...' : 'جلب الإيميلات'}
-        </AppButton>
+        <div className="flex items-center gap-2">
+          <AppButton size="sm" variant="secondary" icon={<Send className="w-3.5 h-3.5" />} onClick={() => { setShowComposer(true); setComposeError(''); }}>
+            رسالة جديدة
+          </AppButton>
+          <AppButton size="sm" icon={polling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} onClick={handlePoll} disabled={polling}>
+            {polling ? 'جاري الجلب...' : 'جلب الإيميلات'}
+          </AppButton>
+        </div>
       </div>
+
+      {/* Standalone composer -- not tied to any case */}
+      {showComposer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.4)' }} onClick={() => !composing && setShowComposer(false)}>
+          <div className="w-full max-w-lg rounded-2xl p-5 max-h-[85vh] overflow-y-auto"
+            style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--ds-text-primary)' }}>رسالة جديدة</h3>
+              <button onClick={() => setShowComposer(false)} style={{ color: 'var(--ds-text-muted)' }}><X className="w-4 h-4" /></button>
+            </div>
+            <div className="space-y-2">
+              <select value={composeForm.account_id} onChange={e => setComposeForm({ ...composeForm, account_id: e.target.value })}
+                className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
+                <option value="">اختر الحساب المرسل منه</option>
+                {accounts.filter(a => a.is_active).map(a => <option key={a.id} value={a.id}>{a.email} ({a.name})</option>)}
+              </select>
+              <input value={composeForm.to} onChange={e => setComposeForm({ ...composeForm, to: e.target.value })} placeholder="إلى..."
+                className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+              <input value={composeForm.cc} onChange={e => setComposeForm({ ...composeForm, cc: e.target.value })} placeholder="CC (اختياري)"
+                className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+              <input value={composeForm.subject} onChange={e => setComposeForm({ ...composeForm, subject: e.target.value })} placeholder="الموضوع"
+                className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+              <textarea value={composeForm.body} onChange={e => setComposeForm({ ...composeForm, body: e.target.value })} placeholder="نص الرسالة..." rows={6}
+                className="w-full px-2 py-1.5 rounded-lg text-xs resize-none" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+              {composeError && <div className="text-[11px] p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>{composeError}</div>}
+              <div className="flex justify-end gap-2 pt-1">
+                <AppButton size="sm" variant="secondary" onClick={() => setShowComposer(false)} disabled={composing}>إلغاء</AppButton>
+                <AppButton size="sm" onClick={sendCompose} disabled={composing || !composeForm.account_id || !composeForm.to || !composeForm.subject}>
+                  {composing ? 'جارٍ الإرسال...' : 'إرسال'}
+                </AppButton>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Status tabs + direction/account filters, all in one row */}
       <div className="flex gap-1.5 flex-wrap items-center">

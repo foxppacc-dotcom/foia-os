@@ -175,7 +175,7 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted,
   // Opening a message here previously called nothing at all -- the card
   // just showed a truncated preview with no expand/read interaction, so a
   // message read only from inside a case's الاتصالات tab stayed "unread" in
-  // the main صندوق الوارد forever (same is_read column, shared everywhere).
+  // the main صندوق البريد forever (same is_read column, shared everywhere).
   const toggleExpand = () => {
     setExpanded(e => !e);
     if (!expanded && thread.is_read === false) {

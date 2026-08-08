@@ -534,6 +534,39 @@ router.get('/inbox', requireAuth, async (req, res) => {
   } catch (ex) { res.status(500).json({ error: ex.message }); }
 });
 
+// POST /api/inbox/compose — send a standalone email from صندوق البريد, not
+// tied to any case. The only compose path before this was /cases/:caseId/compose,
+// which hard-requires a case; general correspondence unrelated to any
+// investigation had nowhere to go through this system's own accounts.
+router.post('/inbox/compose', requireAuth, async (req, res) => {
+  try {
+    const { account_id, to, cc, bcc, subject, body } = req.body;
+    if (!account_id || !to || !subject) return res.status(400).json({ error: 'account_id, to, subject مطلوبون' });
+
+    const sup = getSupabase();
+    const { data: account } = await sup.from('email_accounts').select('email').eq('id', parseInt(account_id)).maybeSingle();
+    if (!account) return res.status(404).json({ error: 'Email account not found' });
+
+    const emailService = require('../services/emailService');
+    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body });
+
+    const { data, error } = await sup.from('communications').insert({
+      type: 'email', direction: 'outbound',
+      subject, body: body || '', sender: account.email, recipient: to,
+      message_id: info.messageId,
+      thread_id: info.messageId,
+      created_at: new Date().toISOString(),
+      email_account_id: parseInt(account_id),
+      is_read: true,
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    res.status(201).json({ success: true, data, messageId: info.messageId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PUT /api/inbox/:id/link — Link email to case + agency
 router.put('/inbox/:id/link', requireAuth, async (req, res) => {
   const sup = getSupabase();
