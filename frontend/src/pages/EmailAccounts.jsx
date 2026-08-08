@@ -143,10 +143,15 @@ export default function EmailAccounts() {
         method: 'POST', headers: hdrs(),
         body: JSON.stringify({ to: testEmail.to, subject: testEmail.subject, body: testEmail.body, account_id: parseInt(testEmail.account_id) }),
       });
-      if (!r.ok) {
-        const text = await r.text();
-        let d;
-        try { d = JSON.parse(text); } catch { d = { error: text.substring(0, 200) }; }
+      const text = await r.text();
+      let d;
+      try { d = JSON.parse(text); } catch { d = { error: text.substring(0, 200) }; }
+      // /email/test-compose always answers HTTP 200 and signals failure via
+      // {success:false} in the body (e.g. a real SMTP auth rejection) --
+      // checking only r.ok meant this branch was never reachable, so a
+      // failed send still showed "sent successfully" with no indication
+      // anything was wrong.
+      if (!r.ok || d.success === false) {
         setError(d.error || 'فشل الإرسال'); setSending(false); return;
       }
       setSuccess('تم إرسال الإيميل بنجاح');
