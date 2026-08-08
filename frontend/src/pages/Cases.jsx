@@ -19,6 +19,7 @@ export default function Cases() {
   const [agencies, setAgencies] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [canViewAllCases, setCanViewAllCases] = useState(true);
+  const [fetchError, setFetchError] = useState('');
   const [form, setForm] = useState({
     priority: 'medium',
     defendant_name: '', source_agency_name: '', story_hook: '', article_url: '', case_summary: '',
@@ -29,8 +30,12 @@ export default function Cases() {
   const fetchCases = () => {
     api.getCases().then(d => {
       setCases(Array.isArray(d) ? d : d.data || []);
+      setFetchError('');
       setLoading(false);
-    }).catch(() => setLoading(false));
+    // Previously left `cases` at [] on any failure -- rendered as "لا توجد
+    // قضايا" (no cases exist), indistinguishable from a genuinely empty
+    // caseload.
+    }).catch(() => { setFetchError('تعذر تحميل القضايا — حاول تحديث الصفحة'); setLoading(false); });
   };
 
   const fetchAgencies = () => {
@@ -75,11 +80,12 @@ export default function Cases() {
         case_summary: form.case_summary,
         agencies: form.selectedAgencies.map(id => ({ agency_id: id }))
       });
-      // Auto-classify to pipeline list 1 after creation
-      const newId = res.id;
-      if (newId && form.selectedAgencies.length > 0) {
-        const reqs = await api.get(`/cases/${newId}`);
-        await Promise.all((reqs.requests || []).map(r =>
+      // Auto-classify to pipeline list 1 after creation. POST /cases already
+      // returns the newly-created requests (res.requests) -- re-fetching the
+      // whole case here just to get the same IDs was a redundant round trip
+      // through the case-detail endpoint's six-query load.
+      if (form.selectedAgencies.length > 0) {
+        await Promise.all((res.requests || []).map(r =>
           api.put(`/requests/${r.id}/classification`, { classification_id: 1 })
         ));
       }
@@ -298,7 +304,15 @@ export default function Cases() {
       )}
 
       {/* Cases Table */}
-      {filteredCases.length === 0 ? (
+      {fetchError ? (
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <p className="text-lg" style={{ color: '#ef4444' }}>⚠️ {fetchError}</p>
+          <button onClick={() => { setLoading(true); fetchCases(); }} className="mt-4 px-5 py-2.5 rounded-xl font-semibold"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+            إعادة المحاولة
+          </button>
+        </div>
+      ) : filteredCases.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <p className="text-lg" style={{ color: 'var(--text-secondary)' }}>📂 لا توجد قضايا</p>
           <p className="mt-2" style={{ color: 'var(--text-muted)' }}>أضف قضية جديدة أو ارفع ملف Excel</p>

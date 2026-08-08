@@ -40,12 +40,15 @@ async function checkOverdueDeadlines() {
       const agencyNames = reqs.map(r => r.agencies?.name_ar || r.agencies?.name_en || 'جهة').join('، ');
       const title = reqs.length > 1 ? `⏰ ${reqs.length} جهات تخطّت الموعد المتوقع للرد` : '⏰ تخطّى الموعد المتوقع للرد';
       const body = `القضية "${caseRow?.title || caseId}" — ${agencyNames}`;
-      for (const userId of userIds) {
-        await sup.from('notifications').insert({
-          user_id: userId, type: 'deadline_overdue', title, body,
-          target_type: 'case', target_id: caseId,
-        });
-      }
+      // One insert per assignee, one at a time -- batched into a single
+      // array insert instead. The error was also never checked before: a
+      // failed insert meant that assignee silently never got told their
+      // case's deadline passed, with no sign anything went wrong until the
+      // 20h dedup window (line 31) expired and the cron retried.
+      const { error: notifyErr } = await sup.from('notifications').insert(
+        [...userIds].map(userId => ({ user_id: userId, type: 'deadline_overdue', title, body, target_type: 'case', target_id: caseId }))
+      );
+      if (notifyErr) { console.error(`[deadlineChecker] notification insert failed for case ${caseId}:`, notifyErr.message); continue; }
       notified++;
     } catch (e) {
       console.error(`[deadlineChecker] failed for case ${caseId}:`, e.message);

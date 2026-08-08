@@ -22,8 +22,14 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
       query = query.or(`title.ilike.%${search}%,client_name.ilike.%${search}%,uuid.ilike.%${search}%`);
     }
     if (assigned_to) query = query.eq('assigned_to', assigned_to);
-    if (limit) query = query.limit(limit);
-    if (offset) query = query.range(offset, offset + (limit || 10) - 1);
+    // No caller (Cases.jsx included) passes limit/offset today -- with
+    // neither set, this ran completely uncapped, returning every row in
+    // `cases` on every page load. Not a pagination redesign, just a safety
+    // ceiling generous enough to be a no-op at today's scale (matches the
+    // ?limit=1000 convention already used on /agencies) while capping
+    // future unbounded growth.
+    query = query.limit(limit || 1000);
+    if (offset) query = query.range(offset, offset + (limit || 1000) - 1);
     query = query.order('created_at', { ascending: false });
 
     // Case visibility scope: a role without cases.view_all only sees cases
@@ -85,11 +91,30 @@ router.get('/cases/:id', requirePermission('cases', 'view'), async (req, res) =>
     if (error) throw error;
     if (!caseRow) return res.status(404).json({ error: 'Case not found' });
 
-    const { data: requests } = await sup
-      .from('requests')
-      .select(`*, agencies!left(name_ar, name_en, state, email, phone), pipeline_lists!left(name_ar, name_en, color, list_number), email_accounts!left(email, name)`)
-      .eq('case_id', caseId)
-      .order('created_at', { ascending: false });
+    // Six independent reads keyed only on caseId -- previously six sequential
+    // `await`s, one after another, when none of them depend on the others'
+    // results. dashboard.js and case_detail.routes.js's /dashboard endpoint
+    // both already batch their equivalent queries via Promise.all (with a
+    // comment to that effect); this endpoint was the one left serial.
+    const [
+      { data: requests },
+      { data: communications },
+      { data: documents },
+      { data: comments },
+      { data: phoneLogs },
+      { data: mailLogs },
+    ] = await Promise.all([
+      sup.from('requests')
+        .select(`*, agencies!left(name_ar, name_en, state, email, phone), pipeline_lists!left(name_ar, name_en, color, list_number), email_accounts!left(email, name)`)
+        .eq('case_id', caseId).order('created_at', { ascending: false }),
+      sup.from('communications')
+        .select(`*, requests!left(agencies!inner(name_en))`)
+        .eq('case_id', caseId).order('created_at', { ascending: false }),
+      sup.from('case_documents').select(`*, users!left(name)`).eq('case_id', caseId).order('created_at', { ascending: false }),
+      sup.from('case_comments').select(`*, users!left(name)`).eq('case_id', caseId).order('created_at', { ascending: false }),
+      sup.from('phone_logs').select('*').eq('case_id', caseId).order('created_at', { ascending: false }),
+      sup.from('mail_logs').select('*').eq('case_id', caseId).order('created_at', { ascending: false }),
+    ]);
 
     const requestsMapped = (requests || []).map(r => ({
       ...r,
@@ -109,23 +134,11 @@ router.get('/cases/:id', requirePermission('cases', 'view'), async (req, res) =>
       email_accounts: undefined
     }));
 
-    const { data: communications } = await sup
-      .from('communications')
-      .select(`*, requests!left(agencies!inner(name_en))`)
-      .eq('case_id', caseId)
-      .order('created_at', { ascending: false });
-
     const communicationsMapped = (communications || []).map(c => ({
       ...c,
       agency_name: c.requests?.agencies?.name_en || null,
       requests: undefined
     }));
-
-    const { data: documents } = await sup
-      .from('case_documents')
-      .select(`*, users!left(name)`)
-      .eq('case_id', caseId)
-      .order('created_at', { ascending: false });
 
     const documentsMapped = (documents || []).map(d => ({
       ...d,
@@ -133,29 +146,11 @@ router.get('/cases/:id', requirePermission('cases', 'view'), async (req, res) =>
       users: undefined
     }));
 
-    const { data: comments } = await sup
-      .from('case_comments')
-      .select(`*, users!left(name)`)
-      .eq('case_id', caseId)
-      .order('created_at', { ascending: false });
-
     const commentsMapped = (comments || []).map(c => ({
       ...c,
       user_name: c.users?.name || null,
       users: undefined
     }));
-
-    const { data: phoneLogs } = await sup
-      .from('phone_logs')
-      .select('*')
-      .eq('case_id', caseId)
-      .order('created_at', { ascending: false });
-
-    const { data: mailLogs } = await sup
-      .from('mail_logs')
-      .select('*')
-      .eq('case_id', caseId)
-      .order('created_at', { ascending: false });
 
     res.json({
       ...caseRow,
@@ -218,7 +213,7 @@ router.post('/cases', requirePermission('cases', 'create'), async (req, res) => 
     // 2. Create requests for each agency
     if (agencies && Array.isArray(agencies) && agencies.length > 0) {
       for (const agency of agencies) {
-        await sup
+        const { error: reqErr } = await sup
           .from('requests')
           .insert({
             case_id: caseId,
@@ -229,10 +224,17 @@ router.post('/cases', requirePermission('cases', 'create'), async (req, res) => 
             notes: agency.notes || null,
             created_at: now
           });
+        // Best-effort: the case itself is already created at this point, so
+        // one bad agency_id shouldn't fail the whole request -- but this
+        // was previously never checked at all, meaning the case could end
+        // up with fewer (or zero) attached agencies than requested with no
+        // error anywhere. The response below re-fetches requests fresh, so
+        // it always reflects what actually landed regardless.
+        if (reqErr) console.error(`[cases] request insert failed for agency ${agency.agency_id || agency.id}:`, reqErr.message);
       }
 
       // Add comment about agencies
-      await sup
+      const { error: commentErr } = await sup
         .from('case_comments')
         .insert({
           case_id: caseId,
@@ -240,8 +242,9 @@ router.post('/cases', requirePermission('cases', 'create'), async (req, res) => 
           content: `📋 تم إنشاء القضية وإضافة ${agencies.length} جهة`,
           created_at: now
         });
+      if (commentErr) console.error('[cases] case_comments insert failed:', commentErr.message);
     } else {
-      await sup
+      const { error: commentErr } = await sup
         .from('case_comments')
         .insert({
           case_id: caseId,
@@ -249,6 +252,7 @@ router.post('/cases', requirePermission('cases', 'create'), async (req, res) => 
           content: '📋 تم إنشاء القضية',
           created_at: now
         });
+      if (commentErr) console.error('[cases] case_comments insert failed:', commentErr.message);
     }
 
     // 3. Activity log
@@ -549,14 +553,18 @@ router.post('/cases/upload', requireAuth, uploadCases.single('file'), async (req
           .limit(1);
 
         if (agenciesEn && agenciesEn.length > 0) {
-          await sup.from('requests').insert({
+          const { error: reqErr } = await sup.from('requests').insert({
             case_id: caseId,
             agency_id: agenciesEn[0].id,
             status: 'pending',
             notes: String(row[colMap.notes] || '').trim(),
             created_at: now
           });
-          agencyCount++;
+          // Was never checked -- agencyCount++ and the imported comment
+          // below both ran regardless, so a bad-import summary could
+          // overstate how many agencies actually got attached to the case.
+          if (reqErr) console.error(`[cases/upload] request insert failed for case ${caseId}, agency "${name}":`, reqErr.message);
+          else agencyCount++;
         } else {
           // Try name_ar
           const { data: agenciesAr } = await sup
@@ -566,23 +574,25 @@ router.post('/cases/upload', requireAuth, uploadCases.single('file'), async (req
             .limit(1);
 
           if (agenciesAr && agenciesAr.length > 0) {
-            await sup.from('requests').insert({
+            const { error: reqErr } = await sup.from('requests').insert({
               case_id: caseId,
               agency_id: agenciesAr[0].id,
               status: 'pending',
               notes: String(row[colMap.notes] || '').trim(),
               created_at: now
             });
-            agencyCount++;
+            if (reqErr) console.error(`[cases/upload] request insert failed for case ${caseId}, agency "${name}":`, reqErr.message);
+            else agencyCount++;
           }
         }
       }
 
-      await sup.from('case_comments').insert({
+      const { error: commentErr } = await sup.from('case_comments').insert({
         case_id: caseId,
         content: `📋 تم استيراد القضية عن طريق Excel — ${agencyCount} جهة`,
         created_at: now
       });
+      if (commentErr) console.error(`[cases/upload] case_comments insert failed for case ${caseId}:`, commentErr.message);
       imported++;
     }
 

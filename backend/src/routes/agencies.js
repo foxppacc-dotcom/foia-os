@@ -52,6 +52,7 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
     }
 
     let imported = 0;
+    const importErrors = [];
     for (const row of data) {
       const name_en = String(row[colMap.name_en] || '').trim();
       if (!name_en) continue;
@@ -59,7 +60,7 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
       const { data: exists } = await sup.from('agencies').select('id').eq('name_en', name_en).maybeSingle();
       if (exists) continue;
 
-      await sup.from('agencies').insert({
+      const { error: insertErr } = await sup.from('agencies').insert({
         name_ar: row[colMap.name_ar] ? String(row[colMap.name_ar]).trim() : null,
         name_en,
         state: row[colMap.state] ? String(row[colMap.state]).trim() : null,
@@ -70,6 +71,10 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
         portal_url: row[colMap.portal_url] ? String(row[colMap.portal_url]).trim() : null,
         notes: row[colMap.notes] ? String(row[colMap.notes]).trim() : null
       });
+      // Was never checked -- imported++ ran regardless, so "تم استيراد X
+      // جهة" could overstate what actually landed if a row failed (bad
+      // encoding, a too-long field, etc).
+      if (insertErr) { importErrors.push({ name_en, error: insertErr.message }); continue; }
       imported++;
     }
 
@@ -85,7 +90,8 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
       success: true,
       imported,
       total_rows: data.length,
-      message: `تم استيراد ${imported} جهة من ${data.length}`
+      message: `تم استيراد ${imported} جهة من ${data.length}`,
+      errors: importErrors.length ? importErrors : undefined
     });
   } catch (err) {
     console.error('Upload error:', err);

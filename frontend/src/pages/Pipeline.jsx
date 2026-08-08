@@ -219,10 +219,11 @@ export default function Pipeline() {
     if (idx > -1) newOrder.splice(idx, 1);
     newOrder.splice(toIndex, 0, requestId);
 
-    // Save new order
-    for (let i = 0; i < newOrder.length; i++) {
-      await api.put(`/requests/${newOrder[i]}/sort`, { sort_order: (newOrder.length - i) });
-    }
+    // Save new order -- one PUT per card, but none depend on another, so
+    // run them together instead of one at a time. A 20-30 card list
+    // (a plausible column size) previously blocked the post-drag refresh
+    // on 20-30 sequential round trips.
+    await Promise.all(newOrder.map((id, i) => api.put(`/requests/${id}/sort`, { sort_order: (newOrder.length - i) })));
     fetchPipeline();
   };
 

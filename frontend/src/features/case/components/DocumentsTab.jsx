@@ -61,7 +61,7 @@ function statusInfo(doc) {
 }
 
 export default function DocumentsTab() {
-  const { id, documents, removeDocument, setPreviewFile, refetch } = useCaseContext();
+  const { id, documents, removeDocument, removeDocuments, setPreviewFile, refetch } = useCaseContext();
   const [categories, setCategories] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [catFilter, setCatFilter] = useState('all');
@@ -155,7 +155,11 @@ export default function DocumentsTab() {
   const doBulk = async (action) => {
     if (selected.size === 0) return;
     if (action === 'delete') {
-      for (const id of selected) removeDocument?.(id);
+      // Was calling removeDocument() once per file -- each pops its OWN
+      // blocking confirm() before its first await, so N selected files
+      // meant N sequential dialogs with no combined result. One confirm,
+      // parallel delete, one combined error if any failed.
+      await removeDocuments?.([...selected]);
       setSelected(new Set());
     }
   };

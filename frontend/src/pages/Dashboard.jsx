@@ -29,11 +29,19 @@ const statCards = [
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [timeline, setTimeline] = useState(null);
+  const [error, setError] = useState('');
   const navigate = useNavigate();
 
-  useEffect(() => {
-    api.getDashboard().then(setData).catch(() => {});
-  }, []);
+  const fetchDashboard = () => {
+    setError('');
+    api.getDashboard().then(setData).catch(() => setError('تعذر تحميل لوحة التحكم'));
+  };
+
+  // Previously .catch(() => {}) with no error state at all -- on any
+  // failure (network blip, 500, timeout) `data` stayed null forever and
+  // this is the app's landing page, so it just spun indefinitely with
+  // zero feedback and no way to retry short of a manual page refresh.
+  useEffect(() => { fetchDashboard(); }, []);
 
   // System-wide activity feed -- gated by its own permission (resource
   // 'timeline', action 'view') so an admin decides per-role who sees it,
@@ -44,6 +52,17 @@ export default function Dashboard() {
       if (canView) api.get('/activity?limit=20').then(d => setTimeline(d.data || [])).catch(() => {});
     }).catch(() => {});
   }, []);
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
+        <p className="text-sm" style={{ color: '#ef4444' }}>⚠️ {error}</p>
+        <button onClick={fetchDashboard} className="px-4 py-2 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+          إعادة المحاولة
+        </button>
+      </div>
+    );
+  }
 
   if (!data) {
     return (
