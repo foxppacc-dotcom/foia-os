@@ -17,29 +17,42 @@ const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'appli
 // plain, always-English-digit day/month/year fields sidestep that
 // entirely instead of fighting the native widget's locale rendering.
 function DateField({ value, onChange }) {
-  const [y, m, d] = value ? value.split('-') : ['', '', ''];
-  const set = (day, month, year) => {
-    if (day && month && year && day.length === 2 && month.length === 2 && year.length === 4) {
-      onChange(`${year}-${month}-${day}`);
-    } else if (!day && !month && !year) {
-      onChange('');
-    }
+  // Local buffer, not derived straight from `value` on every render: if the
+  // three segments were parsed from the committed value alone, clearing
+  // just the day (leaving month/year filled) would never form a complete
+  // date, onChange would never fire, the parent's value would stay
+  // unchanged, and the controlled input would immediately snap the
+  // just-cleared digit back on re-render. Local state lets a segment sit
+  // empty mid-edit; only sync FROM the parent when it changes externally
+  // (e.g. the "مسح" clear button), not on every keystroke.
+  const [day, setDay] = useState('');
+  const [month, setMonth] = useState('');
+  const [year, setYear] = useState('');
+  useEffect(() => {
+    const [y, m, d] = value ? value.split('-') : ['', '', ''];
+    setYear(y || ''); setMonth(m || ''); setDay(d || '');
+  }, [value]);
+
+  const commit = (d, m, y) => {
+    if (d.length === 2 && m.length === 2 && y.length === 4) onChange(`${y}-${m}-${d}`);
+    else if (!d && !m && !y) onChange('');
   };
   const numeric = (v) => v.replace(/[^0-9]/g, '');
+
   return (
     <div className="flex items-center gap-0.5" dir="ltr">
-      <input type="text" inputMode="numeric" placeholder="DD" maxLength={2} value={d || ''}
-        onChange={e => set(numeric(e.target.value), m || '', y || '')}
+      <input type="text" inputMode="numeric" placeholder="DD" maxLength={2} value={day}
+        onChange={e => { const v = numeric(e.target.value); setDay(v); commit(v, month, year); }}
         className="w-8 px-1 py-1 rounded text-[11px] text-center"
         style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
       <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>/</span>
-      <input type="text" inputMode="numeric" placeholder="MM" maxLength={2} value={m || ''}
-        onChange={e => set(d || '', numeric(e.target.value), y || '')}
+      <input type="text" inputMode="numeric" placeholder="MM" maxLength={2} value={month}
+        onChange={e => { const v = numeric(e.target.value); setMonth(v); commit(day, v, year); }}
         className="w-8 px-1 py-1 rounded text-[11px] text-center"
         style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
       <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>/</span>
-      <input type="text" inputMode="numeric" placeholder="YYYY" maxLength={4} value={y || ''}
-        onChange={e => set(d || '', m || '', numeric(e.target.value))}
+      <input type="text" inputMode="numeric" placeholder="YYYY" maxLength={4} value={year}
+        onChange={e => { const v = numeric(e.target.value); setYear(v); commit(day, month, v); }}
         className="w-12 px-1 py-1 rounded text-[11px] text-center"
         style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
     </div>
