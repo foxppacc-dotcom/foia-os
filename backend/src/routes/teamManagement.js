@@ -82,6 +82,59 @@ router.post('/roles/:id/duplicate', requireAuth, requireRole('admin'), async (re
 });
 
 // ═══════════════════════════════════════════════
+// CASE TEAM ROLES — job titles offered when assigning an employee to a
+// case's investigation team (case_assignees.role). Complete CRUD.
+// ═══════════════════════════════════════════════
+router.get('/case-team-roles', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const { data, error } = await sup.from('case_team_roles').select('*').order('sort_order');
+  if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (case_team_roles)' : error.message });
+  res.json({ success: true, data: data || [] });
+});
+
+router.post('/case-team-roles', requireAuth, requireRole('admin'), async (req, res) => {
+  const sup = getSupabase();
+  const { value, label, color } = req.body;
+  if (!value || !label) return res.status(400).json({ error: 'القيمة والاسم المعروض مطلوبان' });
+  const { data: maxRow } = await sup.from('case_team_roles').select('sort_order').order('sort_order', { ascending: false }).limit(1).maybeSingle();
+  const { data, error } = await sup.from('case_team_roles').insert({
+    value: value.toLowerCase().trim().replace(/\s+/g, '_'),
+    label, color: color || '#636366',
+    sort_order: (maxRow?.sort_order || 0) + 1,
+  }).select().single();
+  if (error) return res.status(400).json({ error: error.message.includes('duplicate key') ? 'يوجد مسمى وظيفي بهذه القيمة بالفعل' : error.message });
+  res.json({ success: true, data });
+});
+
+// Only label/color/sort_order are editable -- `value` is what's stored on
+// every existing case_assignees.role row, so renaming it would silently
+// orphan every past assignment made under the old value.
+router.put('/case-team-roles/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  const sup = getSupabase();
+  const { label, color, sort_order } = req.body;
+  const updates = { updated_at: new Date().toISOString() };
+  if (label !== undefined) updates.label = label;
+  if (color !== undefined) updates.color = color;
+  if (sort_order !== undefined) updates.sort_order = sort_order;
+  if (Object.keys(updates).length === 1) return res.status(400).json({ error: 'No fields' });
+  const { data, error } = await sup.from('case_team_roles').update(updates).eq('id', parseInt(req.params.id)).select().single();
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ success: true, data });
+});
+
+router.delete('/case-team-roles/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  const sup = getSupabase();
+  const { data: role } = await sup.from('case_team_roles').select('value').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (role) {
+    const { count } = await sup.from('case_assignees').select('id', { count: 'exact', head: true }).eq('role', role.value);
+    if (count > 0) return res.status(409).json({ error: `لا يمكن حذف هذا المسمى — مستخدم في ${count} تعيين حالي ضمن فرق القضايا` });
+  }
+  const { error } = await sup.from('case_team_roles').delete().eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ success: true });
+});
+
+// ═══════════════════════════════════════════════
 // DEPARTMENTS — Complete CRUD
 // ═══════════════════════════════════════════════
 router.get('/departments', requireAuth, async (req, res) => {

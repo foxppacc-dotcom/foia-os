@@ -15,6 +15,11 @@ export default function InboxPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('all');
+  const [direction, setDirection] = useState('all');
+  const [accountId, setAccountId] = useState('all');
+  const [accounts, setAccounts] = useState([]);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
   const [polling, setPolling] = useState(false);
@@ -24,6 +29,10 @@ export default function InboxPage() {
     try {
       const params = new URLSearchParams({ limit: '50' });
       if (status !== 'all') params.set('status', status);
+      if (direction !== 'all') params.set('direction', direction);
+      if (accountId !== 'all') params.set('account_id', accountId);
+      if (dateFrom) params.set('date_from', dateFrom);
+      if (dateTo) params.set('date_to', dateTo);
       if (search) params.set('search', search);
       const r = await fetch(`${BASE}/inbox?${params}`, { headers: hdrs() });
       const d = await r.json();
@@ -31,6 +40,14 @@ export default function InboxPage() {
       setTotal(d.total || 0);
     } catch (e) { console.error('Inbox fetch error:', e); }
     setLoading(false);
+  };
+
+  const fetchAccounts = async () => {
+    try {
+      const r = await fetch(`${BASE}/email-accounts`, { headers: hdrs() });
+      const d = await r.json();
+      setAccounts(d.data || []);
+    } catch {}
   };
 
   const fetchUnread = async () => {
@@ -41,8 +58,8 @@ export default function InboxPage() {
     } catch {}
   };
 
-  useEffect(() => { fetchInbox(); }, [status, search]);
-  useEffect(() => { fetchUnread(); }, []);
+  useEffect(() => { fetchInbox(); }, [status, direction, accountId, dateFrom, dateTo, search]);
+  useEffect(() => { fetchUnread(); fetchAccounts(); }, []);
 
   const handlePoll = async () => {
     setPolling(true);
@@ -58,6 +75,18 @@ export default function InboxPage() {
   const handleLink = async (id, caseId, agencyId) => {
     await fetch(`${BASE}/inbox/${id}/link`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ case_id: caseId, agency_id: agencyId }) });
     fetchInbox();
+  };
+
+  // Expanding a message previously called nothing at all -- it stayed
+  // counted as "unread" forever unless separately linked or archived, which
+  // is part of why the unread badge looked wrong.
+  const handleOpen = (msg) => {
+    setSelected(selected === msg.id ? null : msg.id);
+    if (msg.is_read === false) {
+      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, is_read: true } : m));
+      setUnread(prev => Math.max(0, prev - 1));
+      fetch(`${BASE}/inbox/${msg.id}/read`, { method: 'PUT', headers: hdrs() }).catch(() => {});
+    }
   };
 
   const handleArchive = async (id) => {
@@ -91,8 +120,8 @@ export default function InboxPage() {
         </AppButton>
       </div>
 
-      {/* Status tabs */}
-      <div className="flex gap-1.5 flex-wrap">
+      {/* Status tabs + direction/account filters, all in one row */}
+      <div className="flex gap-1.5 flex-wrap items-center">
         {statusCounts.map(s => (
           <button key={s.key} onClick={() => setStatus(s.key)}
             className="px-3 py-1.5 text-xs rounded-lg ds-transition-colors"
@@ -100,6 +129,46 @@ export default function InboxPage() {
             {s.label}
           </button>
         ))}
+        <div className="w-px h-5 mx-0.5" style={{ background: 'var(--ds-border)' }} />
+        {[
+          { key: 'all', label: 'كل الاتجاهات' },
+          { key: 'inbound', label: 'وارد' },
+          { key: 'outbound', label: 'صادر' },
+        ].map(d => (
+          <button key={d.key} onClick={() => setDirection(d.key)}
+            className="px-2.5 py-1 text-[11px] rounded-lg ds-transition-colors"
+            style={{ background: direction === d.key ? 'var(--ds-accent)' : 'var(--ds-bg-tertiary)', color: direction === d.key ? 'white' : 'var(--ds-text-muted)' }}>
+            {d.label}
+          </button>
+        ))}
+        {accounts.length > 0 && (
+          <select value={accountId} onChange={e => setAccountId(e.target.value)}
+            className="text-[11px] px-2 py-1 rounded-lg"
+            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
+            <option value="all">كل الإيميلات المرتبطة</option>
+            {accounts.map(a => <option key={a.id} value={a.id}>{a.name || a.email}</option>)}
+          </select>
+        )}
+        <div className="w-px h-5 mx-0.5" style={{ background: 'var(--ds-border)' }} />
+        <div className="flex items-center gap-1 text-[11px] shrink-0" style={{ color: 'var(--ds-text-muted)' }}>
+          <span>من</span>
+          {/* dir="ltr" + lang="en-GB" -- a native date input inherits the
+              page's RTL direction otherwise, which mirrors the day/month/year
+              segment order (renders like "yyyy/mm/dd" reversed) instead of
+              the plain dd/mm/yyyy the calendar icon actually opens with. */}
+          <input type="date" dir="ltr" lang="en-GB" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+            className="px-1.5 py-1 rounded-lg text-[11px]"
+            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)', colorScheme: 'light dark' }} />
+          <span>إلى</span>
+          <input type="date" dir="ltr" lang="en-GB" value={dateTo} onChange={e => setDateTo(e.target.value)}
+            className="px-1.5 py-1 rounded-lg text-[11px]"
+            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)', colorScheme: 'light dark' }} />
+          {(dateFrom || dateTo) && (
+            <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-[11px] underline shrink-0" style={{ color: 'var(--ds-accent)' }}>
+              مسح
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Search */}
@@ -117,7 +186,7 @@ export default function InboxPage() {
       ) : (
         <div className="space-y-1">
           {messages.map(msg => (
-            <div key={msg.id} onClick={() => setSelected(selected === msg.id ? null : msg.id)}
+            <div key={msg.id} onClick={() => handleOpen(msg)}
               className="p-3 rounded-lg cursor-pointer ds-transition-colors"
               style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: msg.case_id ? '3px solid #22c55e' : '3px solid #eab308' }}>
               <div className="flex items-start gap-2">

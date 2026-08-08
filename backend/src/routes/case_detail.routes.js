@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requirePermission } = require('../middleware/auth');
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { canAccessCase } = require('../services/caseAccess');
 
 // GET /api/cases/:id/dashboard — combined overview
-router.get('/cases/:id/dashboard', async (req, res) => {
+router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -20,7 +20,7 @@ router.get('/cases/:id/dashboard', async (req, res) => {
     if (caseRow.error) return res.status(404).json({ error: 'Case not found' });
 
     // Fetch all other data independently — failures are non-fatal
-    const [team, requests, checklist, documents, timeline] = await Promise.all([
+    const [team, requests, checklist, documents, timeline, channels] = await Promise.all([
       sup.from('case_assignees').select('*').eq('case_id', caseId).then(r => {
         if (r.error) return [];
         return r.data || [];
@@ -36,23 +36,42 @@ router.get('/cases/:id/dashboard', async (req, res) => {
       sup.from('requests').select('*').eq('case_id', caseId).then(async (r) => {
         if (r.error) return [];
         const reqs = r.data || [];
-        // Batch fetch agencies separately
+        // Batch fetch agencies + overdue-acknowledgment users separately
         const agencyIds = [...new Set(reqs.map(r => r.agency_id).filter(Boolean))];
-        if (!agencyIds.length) return reqs;
-        const { data: ags } = await sup.from('agencies').select('*').in('id', agencyIds);
+        const ackUserIds = [...new Set(reqs.map(r => r.overdue_ack_by).filter(Boolean))];
+        const [{ data: ags }, { data: ackUsers }] = await Promise.all([
+          agencyIds.length ? sup.from('agencies').select('*').in('id', agencyIds) : Promise.resolve({ data: [] }),
+          ackUserIds.length ? sup.from('users').select('id, name').in('id', ackUserIds) : Promise.resolve({ data: [] }),
+        ]);
         const agMap = {};
         (ags || []).forEach(a => agMap[a.id] = a);
-        return reqs.map(r => ({ ...r, agencies: agMap[r.agency_id] || null }));
+        const ackUserMap = {};
+        (ackUsers || []).forEach(u => ackUserMap[u.id] = u);
+        return reqs.map(r => ({
+          ...r,
+          agencies: agMap[r.agency_id] || null,
+          overdue_ack_user: r.overdue_ack_by ? (ackUserMap[r.overdue_ack_by] || null) : null,
+        }));
       }),
       sup.from('case_records_checklist').select('*').eq('case_id', caseId).order('record_type')
         .then(async (r) => r.error ? generateChecklist(sup, caseId) : (r.data?.length > 0 ? r.data : generateChecklist(sup, caseId)))
-        .then(cl => persistChecklist(sup, caseId, cl))
-        .then(cl => mergeChecklistWithLogs(sup, caseId, cl)),
+        // mergeChecklistWithLogs is intentionally NOT run here once rows are
+        // real/persisted (the branch above only falls through to
+        // generateChecklist for genuinely virtual/unpersisted data). It
+        // replays the last activity_logs snapshot over the row's own fields,
+        // so a fresh, successful PUT to case_records_checklist would get
+        // silently overwritten back to whatever was last logged -- e.g.
+        // clicking a status button in "حالة التحقيق" would appear to save,
+        // then instantly revert on the next fetch. persistChecklist below
+        // only inserts missing rows; it never touches existing ones.
+        .then(cl => persistChecklist(sup, caseId, cl)),
       sup.from('case_documents').select('*').eq('case_id', caseId).order('created_at', { ascending: false })
         .then(r => r.error ? [] : (r.data || [])),
       sup.from('activity_logs').select('*')
         .or(`and(target_type.eq.case,target_id.eq.${caseId}),and(target_type.eq.checklist,target_id.eq.${caseId}),and(target_type.eq.document,target_id.eq.${caseId}),and(target_type.eq.request,target_id.eq.${caseId}),and(target_type.eq.team,target_id.eq.${caseId})`)
         .order('created_at', { ascending: false }).limit(50)
+        .then(r => r.error ? [] : (r.data || [])),
+      sup.from('case_agency_channels').select('*').eq('case_id', caseId).order('created_at')
         .then(r => r.error ? [] : (r.data || [])),
     ]);
 
@@ -71,6 +90,7 @@ router.get('/cases/:id/dashboard', async (req, res) => {
       documents: documents || [],
       timeline: timeline || [],
       records_progress: recordsProgress,
+      channels: channels || [],
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -162,7 +182,15 @@ async function generateChecklist(sup, caseId) {
         status: 'pending',
         notes: '',
         evidence_stage: null,
-        _virtual: false,
+        // These rows don't exist in case_records_checklist yet either --
+        // must be marked the same as the hardcoded-fallback branch below so
+        // persistChecklist() actually inserts them and assigns a real id.
+        // Previously false here caused persistChecklist's `!items[0]._virtual`
+        // guard to skip persistence entirely: every item kept id=undefined,
+        // so React's per-item state (case_id keyed by item.id in
+        // ChecklistTab) collapsed onto one shared key -- expanding/collapsing
+        // any one checklist card visibly expanded/collapsed all of them.
+        _virtual: true,
       }));
     }
   } catch (e) {
@@ -275,6 +303,41 @@ router.delete('/cases/:id/team/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ==================== AGENCY COMMUNICATION CHANNELS ====================
+// Per-(case, agency) portal link + email + filter keywords, used to help
+// mailPoller.js auto-match an inbound email to this specific case even when
+// nothing else (thread headers, reference number, agency's own address on
+// file) resolves it -- see services/mailPoller.js tiers 3b/4b.
+
+// POST /api/cases/:id/agencies/:agencyId/channels
+router.post('/cases/:id/agencies/:agencyId/channels', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { portal_link, email, filter_keywords } = req.body;
+    if (!portal_link && !email && !filter_keywords) return res.status(400).json({ error: 'أدخل رابط بوابة أو بريد إلكتروني أو كلمات فلترة على الأقل' });
+    const { data, error } = await sup.from('case_agency_channels').insert({
+      case_id: parseInt(req.params.id),
+      agency_id: parseInt(req.params.agencyId),
+      portal_link: portal_link || null,
+      email: email || null,
+      filter_keywords: filter_keywords || null,
+    }).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/cases/:id/agencies/:agencyId/channels/:channelId
+router.delete('/cases/:id/agencies/:agencyId/channels/:channelId', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { error } = await sup.from('case_agency_channels').delete()
+      .eq('id', parseInt(req.params.channelId)).eq('case_id', parseInt(req.params.id));
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/cases/:id/checklist
 router.get('/cases/:id/checklist', async (req, res) => {
   try {
@@ -283,7 +346,7 @@ router.get('/cases/:id/checklist', async (req, res) => {
     const { data, error } = await sup.from('case_records_checklist').select('*').eq('case_id', caseId).order('record_type');
     if (error || !data || data.length === 0) {
       // Table doesn't exist or empty — return virtual checklist merged with activity_logs
-      const virtual = generateChecklist(sup, caseId).map((item, i) => ({ ...item, id: -(i + 1) }));
+      const virtual = (await generateChecklist(sup, caseId)).map((item, i) => ({ ...item, id: -(i + 1) }));
       const merged = await mergeChecklistWithLogs(sup, caseId, virtual);
       return res.json({ data: merged });
     }
@@ -417,7 +480,8 @@ router.delete('/cases/:id/requests/:reqId', async (req, res) => {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
     const reqId = parseInt(req.params.reqId);
-    await sup.from('requests').delete().eq('id', reqId).eq('case_id', caseId);
+    const { error: delErr } = await sup.from('requests').delete().eq('id', reqId).eq('case_id', caseId);
+    if (delErr) return res.status(400).json({ error: delErr.message });
     await sup.from('activity_logs').insert({
       user_id: req.user.id, user_name: req.user.name,
       action_type: 'delete', target_type: 'request', target_id: reqId,
@@ -550,8 +614,11 @@ router.delete('/cases/:id/documents/:docId', async (req, res) => {
     // Fetch document first to know where its bytes actually live
     const { data: doc } = await sup.from('case_documents').select('storage_key, storage_provider, drive_file_id').eq('id', docId).eq('case_id', caseId).maybeSingle();
 
-    // Delete from database
-    await sup.from('case_documents').delete().eq('id', docId).eq('case_id', caseId);
+    // Delete from database first -- only remove the actual bytes once the DB
+    // row is confirmed gone, so a rejected DB delete can never leave an
+    // orphaned row pointing at bytes that no longer exist.
+    const { error: delErr } = await sup.from('case_documents').delete().eq('id', docId).eq('case_id', caseId);
+    if (delErr) return res.status(400).json({ error: delErr.message });
 
     // Delete the underlying bytes from wherever they're actually stored
     if (doc?.storage_provider === 'google_drive' && doc?.drive_file_id) {

@@ -1,6 +1,7 @@
 import { api } from '../../../api';
 import { useState, useEffect, useMemo } from 'react';
-import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, ChevronDown, ChevronUp, User, UserPlus, XCircle, CheckCircle, AlertTriangle, CalendarClock, History } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, ChevronDown, ChevronUp, UserPlus, XCircle, CheckCircle, AlertTriangle, CalendarClock, History } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import { useRequests } from '../../request/hooks/useRequests';
 import { classifyRequest } from '../../request/services/requestApi';
@@ -28,11 +29,6 @@ const CLASS_OPTIONS = [
   { value: 'both', label: 'قبض وتحقيق' },
 ];
 
-function parseAgencyContacts(notes) {
-  if (!notes) return [];
-  try { const parsed = JSON.parse(notes); return parsed._contacts || []; } catch { return []; }
-}
-
 function formatDateTime(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
@@ -40,14 +36,15 @@ function formatDateTime(dateStr) {
 }
 
 export default function AgenciesTab() {
-  const { id, requests, allAgencies, refetch } = useCaseContext();
+  const navigate = useNavigate();
+  const { id, requests, allAgencies, refetch, channels: caseChannels } = useCaseContext();
   const { showAdd, setShowAdd, selectedAgencyId, setSelectedAgencyId, handleAdd, handleRemove } = useRequests(id, refetch);
   const [extraAgencies, setExtraAgencies] = useState([]);
   const unusedAgencies = filterUnusedAgencies([...(allAgencies || []), ...extraAgencies], requests);
   const [emailAccounts, setEmailAccounts] = useState([]);
   const [expanded, setExpanded] = useState({});
-  const [newContact, setNewContact] = useState({});
-  const [showContactForm, setShowContactForm] = useState({});
+  const [newChannel, setNewChannel] = useState({});
+  const [showChannelForm, setShowChannelForm] = useState({});
   const [showNewAgencyForm, setShowNewAgencyForm] = useState(false);
   const [newAgency, setNewAgency] = useState(BLANK_AGENCY);
   const [savingAgency, setSavingAgency] = useState(false);
@@ -77,6 +74,12 @@ export default function AgenciesTab() {
     return Object.values(map);
   }, [requests]);
 
+  const channels = useMemo(() => {
+    const map = {};
+    (caseChannels || []).forEach(ch => { (map[ch.agency_id] ||= []).push(ch); });
+    return map;
+  }, [caseChannels]);
+
   const toggleExpand = (key) => setExpanded(p => ({ ...p, [key]: !p[key] }));
 
   const createAgencyInline = async () => {
@@ -93,25 +96,30 @@ export default function AgenciesTab() {
     setSavingAgency(false);
   };
 
-  const addContact = async (agencyId) => {
-    const c = newContact[agencyId];
-    if (!c?.name) return;
+  const addChannel = async (agencyId) => {
+    const c = newChannel[agencyId];
+    if (!c?.portal_link && !c?.email && !c?.filter_keywords) return;
     try {
-      await api.post(`/agencies/${agencyId}/contacts`, c);
-      setNewContact(p => ({ ...p, [agencyId]: {} }));
-      setShowContactForm(p => ({ ...p, [agencyId]: false }));
+      await api.post(`/cases/${id}/agencies/${agencyId}/channels`, c);
+      setNewChannel(p => ({ ...p, [agencyId]: {} }));
+      setShowChannelForm(p => ({ ...p, [agencyId]: false }));
       refetch?.(true);
     } catch (e) { alert('❌ ' + e.message); }
   };
 
-  const removeContact = async (agencyId, contactId) => {
-    try { await api.delete(`/agencies/${agencyId}/contacts/${contactId}`); refetch?.(true); }
+  const removeChannel = async (agencyId, channelId) => {
+    try { await api.delete(`/cases/${id}/agencies/${agencyId}/channels/${channelId}`); refetch?.(true); }
     catch (e) { alert('❌ ' + e.message); }
   };
 
   const setClassification = async (reqId, value) => {
     try { await classifyRequest(id, reqId, value); refetch?.(true); }
     catch (e) { alert('❌ ' + e.message); }
+  };
+
+  const acknowledgeOverdue = async (reqId) => {
+    try { await api.post(`/requests/${reqId}/acknowledge-overdue`); refetch?.(true); }
+    catch (e) { alert('❌ فشل تسجيل الاطلاع: ' + e.message); }
   };
 
   const logPortalSubmission = async (reqId, agencyId) => {
@@ -188,7 +196,6 @@ export default function AgenciesTab() {
             const isExpanded = expanded[key];
             const openReqs = reqs.filter(r => r.status !== 'closed').length;
             const closedReqs = reqs.filter(r => r.status === 'closed').length;
-            const agencyContacts = parseAgencyContacts(agency?.notes);
             const defaultAccount = (emailAccounts || []).find(a => String(a.id) === String(agency?.default_email_account_id));
             const location = formatAgencyLocation(agency);
 
@@ -233,45 +240,43 @@ export default function AgenciesTab() {
                       {defaultAccount && <span><Mail className="w-3 h-3 inline" /> حساب الإرسال: {defaultAccount.email}</span>}
                     </div>
 
-                    {/* Contacts */}
+                    {/* Communication channels — portal link + email + filter
+                        keywords used to auto-link an inbound email from this
+                        agency to this case (services/mailPoller.js). */}
                     <div>
                       <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-sm font-semibold" style={{ color: 'var(--ds-text-muted)' }}>جهات الاتصال ({agencyContacts.length})</span>
-                        <button onClick={(e) => { e.stopPropagation(); setShowContactForm(p => ({ ...p, [agency.id]: true })); }}
+                        <span className="text-sm font-semibold" style={{ color: 'var(--ds-text-muted)' }}>بيانات التواصل ({(channels[agency?.id] || []).length})</span>
+                        <button onClick={(e) => { e.stopPropagation(); setShowChannelForm(p => ({ ...p, [agency.id]: true })); }}
                           className="text-xs px-2.5 py-1 rounded" style={{ color: '#3b82f6', background: 'rgba(59,130,246,0.1)' }}>
                           <UserPlus className="w-3.5 h-3.5 inline" /> إضافة</button>
                       </div>
 
-                      {showContactForm[agency?.id] && (
+                      {showChannelForm[agency?.id] && (
                         <div className="p-2.5 mb-1.5 rounded-lg space-y-1.5" style={{ background: 'var(--ds-bg-tertiary)', border: '1px dashed var(--ds-border)' }}>
-                          <div className="grid grid-cols-3 gap-1.5">
-                            <input placeholder="الاسم" value={newContact[agency.id]?.name || ''} onChange={e => setNewContact(p => ({ ...p, [agency.id]: { ...p[agency.id], name: e.target.value } }))}
-                              className="px-2.5 py-1.5 rounded text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-                            <input placeholder="البريد" value={newContact[agency.id]?.email || ''} onChange={e => setNewContact(p => ({ ...p, [agency.id]: { ...p[agency.id], email: e.target.value } }))}
-                              className="px-2.5 py-1.5 rounded text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-                            <input placeholder="الهاتف" value={newContact[agency.id]?.phone || ''} onChange={e => setNewContact(p => ({ ...p, [agency.id]: { ...p[agency.id], phone: e.target.value } }))}
-                              className="px-2.5 py-1.5 rounded text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-                          </div>
-                          <input placeholder="المسمى الوظيفي" value={newContact[agency.id]?.title || ''} onChange={e => setNewContact(p => ({ ...p, [agency.id]: { ...p[agency.id], title: e.target.value } }))}
+                          <input placeholder="رابط البوابة" value={newChannel[agency.id]?.portal_link || ''} onChange={e => setNewChannel(p => ({ ...p, [agency.id]: { ...p[agency.id], portal_link: e.target.value } }))}
                             className="w-full px-2.5 py-1.5 rounded text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+                          <input placeholder="البريد الإلكتروني" value={newChannel[agency.id]?.email || ''} onChange={e => setNewChannel(p => ({ ...p, [agency.id]: { ...p[agency.id], email: e.target.value } }))}
+                            className="w-full px-2.5 py-1.5 rounded text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+                          <textarea placeholder="كلمات أو جمل تساعد الفلتر في جلب الإيميل وربطه بالقضية (افصل بفاصلة أو سطر جديد)"
+                            value={newChannel[agency.id]?.filter_keywords || ''} onChange={e => setNewChannel(p => ({ ...p, [agency.id]: { ...p[agency.id], filter_keywords: e.target.value } }))}
+                            rows={2} className="w-full px-2.5 py-1.5 rounded text-sm resize-none" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
                           <div className="flex gap-1.5 pt-0.5">
-                            <AppButton size="sm" onClick={() => addContact(agency.id)}><CheckCircle className="w-3.5 h-3.5" />حفظ</AppButton>
-                            <AppButton size="sm" variant="secondary" onClick={() => setShowContactForm(p => ({ ...p, [agency.id]: false }))}>إلغاء</AppButton>
+                            <AppButton size="sm" onClick={() => addChannel(agency.id)}><CheckCircle className="w-3.5 h-3.5" />حفظ</AppButton>
+                            <AppButton size="sm" variant="secondary" onClick={() => setShowChannelForm(p => ({ ...p, [agency.id]: false }))}>إلغاء</AppButton>
                           </div>
                         </div>
                       )}
 
                       <div className="space-y-1">
-                        {agencyContacts.filter(c => c.is_active !== false).map(contact => (
-                          <div key={contact.id} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
-                            <User className="w-4 h-4 shrink-0" style={{ color: 'var(--ds-text-muted)' }} />
+                        {(channels[agency?.id] || []).map(ch => (
+                          <div key={ch.id} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
+                            <Mail className="w-4 h-4 shrink-0" style={{ color: 'var(--ds-text-muted)' }} />
                             <div className="flex-1 min-w-0 text-sm">
-                              <span className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{contact.name}</span>
-                              {contact.title && <span className="mr-1" style={{ color: 'var(--ds-text-muted)' }}>· {contact.title}</span>}
-                              {contact.email && <span className="mr-1" style={{ color: 'var(--ds-text-muted)' }}>· {contact.email}</span>}
-                              {contact.phone && <span className="mr-1" style={{ color: 'var(--ds-text-muted)' }}>· {contact.phone}</span>}
+                              {ch.email && <span className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{ch.email}</span>}
+                              {ch.portal_link && <a href={ch.portal_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="mr-1" style={{ color: '#3b82f6' }}>· رابط البوابة</a>}
+                              {ch.filter_keywords && <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--ds-text-muted)' }}>كلمات الفلترة: {ch.filter_keywords}</div>}
                             </div>
-                            <button onClick={() => removeContact(agency.id, contact.id)} className="p-1" style={{ color: 'var(--ds-text-muted)' }}>
+                            <button onClick={() => removeChannel(agency.id, ch.id)} className="p-1" style={{ color: 'var(--ds-text-muted)' }}>
                               <XCircle className="w-4 h-4" />
                             </button>
                           </div>
@@ -292,10 +297,11 @@ export default function AgenciesTab() {
                         const rWaitingDays = req.created_at ? Math.floor((Date.now() - new Date(req.created_at)) / (1000*60*60*24)) : 0;
                         const todayStr = new Date().toISOString().split('T')[0];
                         const isLate = !!(req.expected_response_date && req.expected_response_date < todayStr && !req.response_date);
+                        const isAcked = isLate && !!req.overdue_ack_by;
                         const isPortalFormOpen = showPortalForm[req.id];
                         const reqLog = getRequestLog(req.id, agency?.id);
                         return (
-                          <div key={req.id} className="p-3.5 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: isLate ? '3px solid #ef4444' : '3px solid transparent' }}>
+                          <div key={req.id} className="p-3.5 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: isLate && !isAcked ? '3px solid #ef4444' : '3px solid transparent' }}>
                             <div className="flex items-center gap-2 mb-2">
                               <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: 'var(--ds-accent)', color: 'white' }}>#{req.id}</div>
                               <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--ds-text-muted)' }}>
@@ -315,9 +321,18 @@ export default function AgenciesTab() {
                               </select>
                             </div>
 
-                            {isLate && (
-                              <div className="flex items-center gap-1.5 mb-2 text-xs px-2.5 py-1.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
-                                <AlertTriangle className="w-4 h-4" /> تخطّى الموعد المتوقع للرد ({req.expected_response_date})
+                            {isLate && !isAcked && (
+                              <div className="flex items-center justify-between gap-2 mb-2 text-xs px-2.5 py-1.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
+                                <span className="flex items-center gap-1.5"><AlertTriangle className="w-4 h-4" /> تخطّى الموعد المتوقع للرد ({req.expected_response_date})</span>
+                                <button onClick={() => acknowledgeOverdue(req.id)} className="px-2 py-1 rounded-lg shrink-0" style={{ background: 'var(--ds-bg-secondary)', color: '#ef4444' }}>تم الاطلاع</button>
+                              </div>
+                            )}
+                            {isAcked && (
+                              <div className="flex items-center gap-1.5 mb-2 text-xs px-2.5 py-1.5 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>
+                                <CheckCircle className="w-4 h-4" /> تخطّى الموعد المتوقع للرد — تم الاطلاع من قبل{' '}
+                                <button onClick={() => navigate(`/profile/${req.overdue_ack_user?.id}`)} className="underline" style={{ color: 'var(--ds-accent)' }}>
+                                  {req.overdue_ack_user?.name || 'مستخدم'}
+                                </button>
                               </div>
                             )}
                             {!isLate && req.expected_response_date && (

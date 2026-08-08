@@ -62,36 +62,54 @@ class MailPoller {
       const messages = [];
 
       try {
-        for await (const msg of client.fetch('1:*', { uid: true, envelope: true, bodyStructure: true, source: true, flags: true })) {
-          const parsed = await simpleParser(msg.source);
-          // Some messages (e.g. provider security-alert notices, some
-          // webmail-composed replies) arrive with no Message-ID header at
-          // all. Falling back to `null` here breaks dedup permanently --
-          // `.eq('message_id', null)` never matches an existing NULL row in
-          // SQL (NULL is never equal to NULL), so a message like this gets
-          // re-inserted as a fresh "new" communication on every single poll,
-          // forever. Fall back to a synthetic ID keyed on account+UID, which
-          // is stable across polls of the same mailbox.
-          const messageId = parsed.messageId || msg.envelope.messageId || `imap-${account.id}-${msg.uid}`;
-          messages.push({
-            messageId,
-            inReplyTo: parsed.inReplyTo || '',
-            references: Array.isArray(parsed.references) ? parsed.references.join(' ') : (parsed.references || ''),
-            from: parsed.from?.value?.[0]?.address || '',
-            to: parsed.to?.value?.[0]?.address || '',
-            cc: (parsed.cc?.value || []).map(v => v.address).join(', '),
-            subject: parsed.subject || '(بدون موضوع)',
-            text: parsed.text || parsed.html || '',
-            html: parsed.html || '',
-            date: parsed.date || new Date(),
-            attachments: parsed.attachments?.map(a => ({
-              filename: a.filename, contentType: a.contentType, size: a.size,
-              content: a.content?.toString('base64') || '',
-            })) || [],
-            uid: msg.uid,
-            flags: msg.flags || [],
-          });
-          this.messageIdCache.add(messageId);
+        // '1:*' pulled every message in the mailbox -- full source, every
+        // poll, forever. Fine for a brand-new test inbox with a handful of
+        // messages; on a real, actively-used mailbox (hundreds of emails)
+        // this re-downloads and re-parses the entire history on every
+        // single "جلب الإيميلات" click, which is slow enough to blow past
+        // the platform's request timeout and looks like a hang with no
+        // response at all. Only search for messages since the last
+        // successful poll (or since the account was connected, for the
+        // very first poll) -- IMAP SINCE is date-only, so a same-day
+        // message can be re-seen once, but processMessages' dedup by
+        // message_id already makes that safe.
+        const since = account.last_checked ? new Date(account.last_checked)
+          : account.created_at ? new Date(account.created_at)
+          : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const uids = await client.search({ since }, { uid: true });
+
+        if (uids && uids.length) {
+          for await (const msg of client.fetch(uids, { uid: true, envelope: true, bodyStructure: true, source: true, flags: true }, { uid: true })) {
+            const parsed = await simpleParser(msg.source);
+            // Some messages (e.g. provider security-alert notices, some
+            // webmail-composed replies) arrive with no Message-ID header at
+            // all. Falling back to `null` here breaks dedup permanently --
+            // `.eq('message_id', null)` never matches an existing NULL row in
+            // SQL (NULL is never equal to NULL), so a message like this gets
+            // re-inserted as a fresh "new" communication on every single poll,
+            // forever. Fall back to a synthetic ID keyed on account+UID, which
+            // is stable across polls of the same mailbox.
+            const messageId = parsed.messageId || msg.envelope.messageId || `imap-${account.id}-${msg.uid}`;
+            messages.push({
+              messageId,
+              inReplyTo: parsed.inReplyTo || '',
+              references: Array.isArray(parsed.references) ? parsed.references.join(' ') : (parsed.references || ''),
+              from: parsed.from?.value?.[0]?.address || '',
+              to: parsed.to?.value?.[0]?.address || '',
+              cc: (parsed.cc?.value || []).map(v => v.address).join(', '),
+              subject: parsed.subject || '(بدون موضوع)',
+              text: parsed.text || parsed.html || '',
+              html: parsed.html || '',
+              date: parsed.date || new Date(),
+              attachments: parsed.attachments?.map(a => ({
+                filename: a.filename, contentType: a.contentType, size: a.size,
+                content: a.content?.toString('base64') || '',
+              })) || [],
+              uid: msg.uid,
+              flags: msg.flags || [],
+            });
+            this.messageIdCache.add(messageId);
+          }
         }
       } finally { lock.release(); }
       await client.logout();
@@ -142,6 +160,36 @@ class MailPoller {
         }
       }
 
+      // 2b. By a case-specific communication channel's email -- an admin
+      // can register an exact email address for a given (case, agency) pair
+      // (see case_agency_channels, added from a case's الجهات tab), which is
+      // a direct, unambiguous hit and takes priority over the generic
+      // agency-level tiers below.
+      if (!matchedCaseId && msg.from) {
+        try {
+          const { data: channel } = await sup.from('case_agency_channels').select('case_id, agency_id').eq('email', msg.from).maybeSingle();
+          if (channel) { matchedCaseId = channel.case_id; matchedAgencyId = channel.agency_id; }
+        } catch (e) { /* case_agency_channels may not exist yet */ }
+      }
+
+      // 2c. By a case-specific channel's filter keywords/phrases appearing
+      // in the subject or body -- the last resort before falling back to
+      // the broader agency-name/case-title heuristics below, since these
+      // phrases were deliberately configured by a user for this exact
+      // purpose rather than inferred.
+      if (!matchedCaseId) {
+        const haystack = `${msg.subject || ''} ${msg.text || ''}`.toLowerCase();
+        if (haystack.trim()) {
+          try {
+            const { data: channels } = await sup.from('case_agency_channels').select('case_id, agency_id, filter_keywords').not('filter_keywords', 'is', null);
+            for (const ch of channels || []) {
+              const phrases = (ch.filter_keywords || '').split(/[,\n]+/).map(p => p.trim().toLowerCase()).filter(Boolean);
+              if (phrases.some(p => haystack.includes(p))) { matchedCaseId = ch.case_id; matchedAgencyId = ch.agency_id; break; }
+            }
+          } catch (e) { /* case_agency_channels may not exist yet */ }
+        }
+      }
+
       // 3. By Agency Email -- the agency's own address, or any of its
       // individual contacts' emails (agency_contacts), since replies
       // legitimately come from a named person at the agency, not always
@@ -180,13 +228,20 @@ class MailPoller {
         }
       }
 
-      // 6. By case title appearing in the subject (skip short/generic
-      // titles -- too high a false-positive risk to match on those).
+      // 6. By case title or defendant name appearing in the subject/body
+      // (skip short/generic values -- too high a false-positive risk to
+      // match on those). defendant_name is part of "معلومات تسجيل القضية"
+      // recorded at case creation specifically so it can double as an
+      // email-matching signal, same purpose as case_agency_channels'
+      // filter_keywords.
       if (!matchedCaseId) {
-        const subjectLower = (msg.subject || '').toLowerCase();
-        if (subjectLower) {
-          const { data: openCases } = await sup.from('cases').select('id, title').in('status', ['open', 'in_progress']);
-          const match = (openCases || []).find(c => c.title && c.title.trim().length > 6 && subjectLower.includes(c.title.trim().toLowerCase()));
+        const haystackLower = `${msg.subject || ''} ${msg.text || ''}`.toLowerCase();
+        if (haystackLower.trim()) {
+          const { data: openCases } = await sup.from('cases').select('id, title, defendant_name').in('status', ['open', 'in_progress']);
+          const match = (openCases || []).find(c =>
+            (c.title && c.title.trim().length > 6 && haystackLower.includes(c.title.trim().toLowerCase())) ||
+            (c.defendant_name && c.defendant_name.trim().length > 3 && haystackLower.includes(c.defendant_name.trim().toLowerCase()))
+          );
           if (match) matchedCaseId = match.id;
         }
       }
@@ -279,6 +334,10 @@ class MailPoller {
         thread_id: msg.inReplyTo || msg.messageId,
         created_at: msg.date.toISOString(),
         is_read: false,
+        // Which of our connected accounts this arrived through -- never set
+        // before, so "filter by linked email" in Inbox.jsx would have shown
+        // every fetched (inbound) message as unmatched to any account.
+        email_account_id: accountId,
         metadata: JSON.stringify({ attachments: storedAttachments, flags: msg.flags, cc: msg.cc || '' }),
       };
       if (matchedCaseId) insertData.case_id = matchedCaseId;
@@ -358,6 +417,11 @@ class MailPoller {
         if (count > 0) console.log(`IMAP: ${count} new messages from ${acct.email}`);
         total += count;
         for (const e of msgErrors) errors.push({ account: acct.email, ...e });
+        // Advance the "since" cursor pollAccount reads next run -- without
+        // this, every cron pass re-searched from the same stale timestamp
+        // forever (never past the first successful poll's baseline).
+        const { error: touchErr } = await sup.from('email_accounts').update({ last_checked: new Date().toISOString() }).eq('id', acct.id);
+        if (touchErr) console.warn(`[mailPoller] failed to update last_checked for ${acct.email}:`, touchErr.message);
       } catch (e) {
         console.error(`IMAP error for ${acct.email}:`, e.message);
         errors.push({ account: acct.email, stage: 'connect', error: e.message });

@@ -106,7 +106,8 @@ router.delete('/cases/:id/assignees/:userId', requireAuth, async (req, res) => {
   const caseId = parseInt(req.params.id);
   const userId = parseInt(req.params.userId);
 
-  await sup.from('case_assignees').delete().eq('case_id', caseId).eq('user_id', userId);
+  const { error } = await sup.from('case_assignees').delete().eq('case_id', caseId).eq('user_id', userId);
+  if (error) return res.status(400).json({ error: error.message });
 
   logActivity({
     user_id: req.user?.id, user_name: req.user?.name,

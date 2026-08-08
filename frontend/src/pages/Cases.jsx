@@ -10,6 +10,8 @@ const STATUS_STYLES = {
   closed: { bg: '#10B981', label: '🟢 مغلقة' },
 };
 
+const AGENCY_TYPE_LABELS = { federal: 'فيدرالي', state: 'ولاية', municipal: 'بلدية', sheriff: 'شريف' };
+
 export default function Cases() {
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,7 +20,8 @@ export default function Cases() {
   const [searchTerm, setSearchTerm] = useState('');
   const [canViewAllCases, setCanViewAllCases] = useState(true);
   const [form, setForm] = useState({
-    title: '', description: '', priority: 'medium', client_name: '',
+    priority: 'medium',
+    defendant_name: '', source_agency_name: '', story_hook: '', article_url: '', case_summary: '',
     selectedAgencies: []
   });
   const navigate = useNavigate();
@@ -54,13 +57,22 @@ export default function Cases() {
   };
 
   const createCase = async () => {
-    if (!form.title.trim()) return;
+    if (!form.defendant_name.trim()) return;
     try {
+      // معلومات تسجيل القضية replaced the old عنوان/وصف/عميل fields entirely --
+      // اسم المتهم is now the case's effective title (everything downstream --
+      // the cases list, search, mailPoller's title-matching -- reads
+      // cases.title, so it still needs a meaningful value), and ملخص القضية
+      // doubles as the description.
       const res = await api.post('/cases', {
-        title: form.title,
-        description: form.description,
+        title: form.defendant_name,
+        description: form.case_summary,
         priority: form.priority,
-        client_name: form.client_name,
+        defendant_name: form.defendant_name,
+        source_agency_name: form.source_agency_name,
+        story_hook: form.story_hook,
+        article_url: form.article_url,
+        case_summary: form.case_summary,
         agencies: form.selectedAgencies.map(id => ({ agency_id: id }))
       });
       // Auto-classify to pipeline list 1 after creation
@@ -72,7 +84,7 @@ export default function Cases() {
         ));
       }
       setShowForm(false);
-      setForm({ title: '', description: '', priority: 'medium', client_name: '', selectedAgencies: [] });
+      setForm({ priority: 'medium', defendant_name: '', source_agency_name: '', story_hook: '', article_url: '', case_summary: '', selectedAgencies: [] });
       fetchCases();
     } catch (e) {
       alert('❌ فشل إنشاء القضية: ' + e.message);
@@ -165,31 +177,44 @@ export default function Cases() {
           style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', boxShadow: 'var(--shadow-md)' }}>
           <h2 className="font-semibold mb-4" style={{ color: 'var(--accent)' }}>📝 قضية جديدة</h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div className="space-y-3">
-              <input value={form.title} onChange={e => setForm({...form, title: e.target.value})}
-                placeholder="عنوان القضية *"
-                className="w-full px-4 py-3 rounded-xl border focus:outline-none"
-                style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
-              <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})}
-                placeholder="وصف القضية" rows={3}
-                className="w-full px-4 py-3 rounded-xl border resize-none focus:outline-none"
-                style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
-              <div className="flex gap-3">
-                <input value={form.client_name} onChange={e => setForm({...form, client_name: e.target.value})}
-                  placeholder="اسم العميل"
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+            <div className="space-y-4">
+              {/* معلومات تسجيل القضية -- replaces the old عنوان/وصف/عميل fields;
+                  اسم المتهم is now the case's effective title. Each field has
+                  a persistent label (not just a placeholder) with its own row. */}
+              <div className="flex items-center gap-3">
+                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>اسم المتهم *</label>
+                <input value={form.defendant_name} onChange={e => setForm({...form, defendant_name: e.target.value})}
                   className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
                   style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
-                <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})}
-                  className="px-4 py-3 rounded-xl border"
-                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
-                  <option value="low">🟢 منخفض</option>
-                  <option value="medium">🟡 متوسط</option>
-                  <option value="high">🔴 عاجل</option>
-                </select>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>اسم الوكالة</label>
+                <input value={form.source_agency_name} onChange={e => setForm({...form, source_agency_name: e.target.value})}
+                  className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
+                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>الهوك</label>
+                <input value={form.story_hook} onChange={e => setForm({...form, story_hook: e.target.value})}
+                  className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
+                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>رابط المقال</label>
+                <input value={form.article_url} onChange={e => setForm({...form, article_url: e.target.value})}
+                  className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
+                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+              </div>
+              <div className="flex items-start gap-3">
+                <label className="w-28 shrink-0 text-sm font-medium pt-3" style={{ color: 'var(--text-primary)' }}>ملخص القضية</label>
+                <textarea value={form.case_summary} onChange={e => setForm({...form, case_summary: e.target.value})}
+                  rows={4}
+                  className="flex-1 px-4 py-3 rounded-xl border resize-y focus:outline-none"
+                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)', minHeight: '6rem' }} />
               </div>
             </div>
-            {/* Agencies Selection */}
+            {/* Agencies Selection + Priority */}
             <div>
               <p className="font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
                 اختر الجهات المستهدفه ({form.selectedAgencies.length})
@@ -206,26 +231,53 @@ export default function Cases() {
                   </div>
                 ) : agencies.map(a => (
                   <label key={a.id}
-                    className="flex items-center gap-3 px-3 py-3 border-b cursor-pointer transition-all"
+                    className="flex items-start gap-3 px-3 py-3 border-b cursor-pointer transition-all"
                     style={{ borderColor: 'var(--border)' }}
                     onMouseOver={e => e.currentTarget.style.background = 'var(--bg-elevated)'}
                     onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
                     <input type="checkbox" checked={form.selectedAgencies.includes(a.id)}
                       onChange={() => toggleAgency(a.id)}
-                      className="w-5 h-5 rounded accent-[#D4A843]" />
+                      className="w-5 h-5 rounded accent-[#D4A843] mt-0.5 shrink-0" />
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-                        {a.name_ar || a.name_en}
-                      </p>
-                      {a.state && <p style={{ color: 'var(--text-muted)' }}>{a.state}</p>}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                          {a.name_ar || a.name_en}
+                        </p>
+                        {a.type && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>
+                            {AGENCY_TYPE_LABELS[a.type] || a.type}
+                          </span>
+                        )}
+                      </div>
+                      {a.name_ar && a.name_en && (
+                        <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{a.name_en}</p>
+                      )}
+                      <div className="flex items-center gap-x-3 gap-y-0.5 text-[11px] mt-1 flex-wrap" style={{ color: 'var(--text-muted)' }}>
+                        {(a.city || a.state) && <span>📍 {[a.city, a.state].filter(Boolean).join('، ')}</span>}
+                        {a.email && <span className="truncate">✉️ {a.email}</span>}
+                        {a.phone && <span>☎️ {a.phone}</span>}
+                        {a.average_response_days != null && <span>⏱ متوسط الرد: {a.average_response_days} يوم</span>}
+                      </div>
                     </div>
                     {form.selectedAgencies.includes(a.id) && (
-                      <span className="px-2 py-1 rounded" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>
+                      <span className="px-2 py-1 rounded shrink-0" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>
                         ✅ مختار
                       </span>
                     )}
                   </label>
                 ))}
+              </div>
+
+              {/* الأهمية -- placed below الجهات per request */}
+              <div className="flex items-center gap-3 mt-4">
+                <label className="shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>الأهمية</label>
+                <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})}
+                  className="flex-1 px-4 py-3 rounded-xl border"
+                  style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
+                  <option value="low">🟢 منخفض</option>
+                  <option value="medium">🟡 متوسط</option>
+                  <option value="high">🔴 عاجل</option>
+                </select>
               </div>
             </div>
           </div>

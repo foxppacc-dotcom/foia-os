@@ -1,11 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requirePermission } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 
 // GET /api/pipeline — returns all 7 lists with their tasks grouped
-router.get('/pipeline', async (req, res) => {
+router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { caseId, sort_by } = req.query;
@@ -41,7 +41,7 @@ router.get('/pipeline', async (req, res) => {
     // Also get requests grouped by classification
     let requestsQuery = sup
       .from('requests')
-      .select(`*, pipeline_lists!classification_id!left(name_ar, name_en, color), agencies!left(name_en), cases!left(title)`)
+      .select(`*, pipeline_lists!classification_id!left(name_ar, name_en, color), agencies!left(name_ar, name_en), cases!left(title)`)
       .order('created_at', { ascending: sortOrder === 'oldest' });
 
     if (caseId) {
@@ -56,7 +56,13 @@ router.get('/pipeline', async (req, res) => {
       classification_name_ar: r.pipeline_lists?.name_ar || null,
       classification_name_en: r.pipeline_lists?.name_en || null,
       classification_color: r.pipeline_lists?.color || null,
+      // Pipeline.jsx renders agency_name_ar on each card to distinguish
+      // multiple requests for the same case (e.g. two agencies both landing
+      // in "مطلوب دفع") -- this key was never set, so every card silently
+      // fell back to showing nothing there, making distinct per-agency
+      // cards look like unexplained duplicates of the same case.
       agency_name: r.agencies?.name_en || null,
+      agency_name_ar: r.agencies?.name_ar || r.agencies?.name_en || null,
       case_title: r.cases?.title || null,
       pipeline_lists: undefined,
       agencies: undefined,
@@ -91,7 +97,7 @@ router.get('/pipeline', async (req, res) => {
 });
 
 // PUT /api/pipeline/tasks/:id — update task's list_id (drag-drop)
-router.put('/pipeline/tasks/:id', async (req, res) => {
+router.put('/pipeline/tasks/:id', requirePermission('pipeline', 'move'), async (req, res) => {
   try {
     const sup = getSupabase();
     const taskId = parseInt(req.params.id);
@@ -121,10 +127,11 @@ router.put('/pipeline/tasks/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid list_id' });
     }
 
-    await sup
+    const { error: moveErr } = await sup
       .from('case_tasks')
       .update({ list_id })
       .eq('id', taskId);
+    if (moveErr) return res.status(400).json({ error: moveErr.message });
 
     const { data: updated } = await sup
       .from('case_tasks')

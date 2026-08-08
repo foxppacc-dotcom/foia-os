@@ -25,7 +25,7 @@ const routes = [
   'automation', 'gdrive', 'phoneAndMail', 'portals', 'production',
   'settings', 'activity', 'classifier', 'cleanup', 'migration',
   'case_detail.routes', 'checklist', 'assignees', 'teamManagement', 'team.routes',
-  'teams', 'permissions', 'pipelineLists', 'cron',
+  'teams', 'permissions', 'pipelineLists',
 ];
 
 // Diagnostics and truly-public callbacks (no user Bearer token possible) must be
@@ -36,10 +36,21 @@ const routes = [
 // — including paths that router doesn't itself define. Google's OAuth
 // redirect can never carry our Bearer token, so /gdrive/oauth-callback must
 // resolve here before it can hit one of those routers and 401.
+//
+// cron.js is the same story and was previously listed LAST in `routes` above
+// -- meaning 'cases' (2nd in the list, right after 'auth') intercepted every
+// single /api/cron/* request first with its own blanket requireAuth, and
+// rejected it as 401 before cron.js's own CRON_SECRET check ever ran.
+// Confirmed live: /api/cron/imap-poll and /api/cron/deadline-check both
+// returned "Unauthorized - missing token" even with no test changes to
+// either route -- Vercel's actual scheduled invocations (Authorization:
+// Bearer <CRON_SECRET>, never a valid signed JWT) would have failed the
+// exact same way every single time they fired. Registered here instead so
+// it resolves before any blanket-requireAuth router can shadow it.
 const working = [];
 const failed = [];
 app.get('/api/debug/routes', (req, res) => {
-  res.json({ working, failed, totalRoutes: routes.length + 1 });
+  res.json({ working, failed, totalRoutes: routes.length + 2 });
 });
 try {
   const gdriveRoute = require('./routes/gdrive');
@@ -48,6 +59,12 @@ try {
   }
 } catch (e) {
   console.error('[index] gdrive oauth-callback mount failed:', e.message);
+}
+try {
+  app.use('/api', require('./routes/cron'));
+  working.push('cron');
+} catch (e) {
+  failed.push({ name: 'cron', error: e.message });
 }
 
 // Try each route, skip if it fails

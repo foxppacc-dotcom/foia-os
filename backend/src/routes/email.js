@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { encrypt, decrypt } = require('../services/crypto');
 const emailService = require('../services/emailService');
@@ -24,7 +24,7 @@ router.get('/email-accounts', requireAuth, (req, res) => {
 });
 
 // POST /api/email-accounts — add new (alias)
-router.post('/email-accounts', requireAuth, requireRole('admin'), async (req, res) => {
+router.post('/email-accounts', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   const sup = getSupabase();
   try {
     const { email, name, provider, smtp_host, smtp_port, smtp_user, smtp_pass, imap_host, imap_port, imap_user, imap_pass, daily_limit } = req.body;
@@ -131,7 +131,7 @@ router.put('/accounts/:id', requireAuth, requireRole('admin'), async (req, res) 
 });
 
 // PUT alias — /email-accounts/:id
-router.put('/email-accounts/:id', requireAuth, requireRole('admin'), async (req, res) => {
+router.put('/email-accounts/:id', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   const sup = getSupabase();
   try {
     const id = parseInt(req.params.id);
@@ -165,7 +165,8 @@ router.put('/email-accounts/:id', requireAuth, requireRole('admin'), async (req,
 router.delete('/accounts/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   try {
-    await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    const { error } = await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true, message: '✅ تم حذف الحساب' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -173,10 +174,11 @@ router.delete('/accounts/:id', requireAuth, requireRole('admin'), async (req, re
 });
 
 // DELETE alias — email-accounts/:id
-router.delete('/email-accounts/:id', requireAuth, requireRole('admin'), async (req, res) => {
+router.delete('/email-accounts/:id', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   const sup = getSupabase();
   try {
-    await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    const { error } = await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true, message: '✅ تم حذف الحساب' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -210,7 +212,9 @@ router.post('/send', requireAuth, async (req, res) => {
         recipient: cc || '',
         message_id: result.messageId,
         thread_id: result.messageId,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        email_account_id: parseInt(account_id),
+        is_read: true,
       });
 
       await sup.from('case_comments').insert({

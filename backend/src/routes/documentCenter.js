@@ -125,21 +125,36 @@ router.put('/documents/:id', requireAuth, async (req, res) => {
 
 // GET /api/documents/:id/download — signed URL for download/preview
 router.get('/documents/:id/download', requireAuth, async (req, res) => {
-  const sup = getSupabase();
-  const { data: doc } = await sup.from('case_documents').select('storage_key, file_path, original_name, storage_provider, drive_file_id').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (!doc) return res.status(404).json({ error: 'Document not found' });
+  // Previously had no try/catch: a rejected gdrive.getFileLinks() call (e.g.
+  // an expired/invalid token, or Google's API hanging) was an unhandled
+  // promise rejection in an async Express handler -- neither res.json() nor
+  // res.status() ever ran, so the request hung indefinitely with no error
+  // and no response. The click looked like it "just doesn't work".
+  try {
+    const sup = getSupabase();
+    const { data: doc } = await sup.from('case_documents').select('storage_key, file_path, original_name, storage_provider, drive_file_id').eq('id', parseInt(req.params.id)).maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
 
-  if (doc.storage_provider === 'google_drive' && doc.drive_file_id) {
-    const { downloadUrl, viewUrl } = await gdrive.getFileLinks(doc.drive_file_id);
-    return res.json({ success: true, url: downloadUrl || viewUrl || doc.file_path, filename: doc.original_name });
+    if (doc.storage_provider === 'google_drive' && doc.drive_file_id) {
+      // Bound the Drive call so a hung/slow Google API request surfaces as a
+      // clear timeout error instead of hanging the whole request forever.
+      const withTimeout = (promise, ms) => Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Google Drive لم يستجب في الوقت المناسب')), ms)),
+      ]);
+      const { downloadUrl, viewUrl } = await withTimeout(gdrive.getFileLinks(doc.drive_file_id), 15000);
+      return res.json({ success: true, url: downloadUrl || viewUrl || doc.file_path, filename: doc.original_name });
+    }
+
+    const key = doc.storage_key || doc.file_path;
+    if (!key || !key.includes('/')) return res.status(404).json({ error: 'No storage key on this document' });
+    const [bucket, ...pathParts] = key.split('/');
+    const url = await storage.getSignedUrl(bucket, pathParts.join('/'));
+    if (!url) return res.status(500).json({ error: 'Could not generate download URL' });
+    res.json({ success: true, url, filename: doc.original_name });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  const key = doc.storage_key || doc.file_path;
-  if (!key || !key.includes('/')) return res.status(404).json({ error: 'No storage key on this document' });
-  const [bucket, ...pathParts] = key.split('/');
-  const url = await storage.getSignedUrl(bucket, pathParts.join('/'));
-  if (!url) return res.status(500).json({ error: 'Could not generate download URL' });
-  res.json({ success: true, url, filename: doc.original_name });
 });
 
 // DELETE /api/documents/:id — soft delete
@@ -337,6 +352,11 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
       message_id: info.messageId,
       thread_id: threadId || info.messageId,
       created_at: new Date().toISOString(),
+      email_account_id: parseInt(account_id),
+      // A message we just sent is read by definition -- is_read defaults to
+      // false in the schema, which fed the "unread" badge with our own sent
+      // mail (see /inbox/unread-count).
+      is_read: true,
       metadata: storedAttachments.length ? JSON.stringify({ attachments: storedAttachments }) : null,
     }).select();
 
@@ -464,7 +484,8 @@ router.delete('/communications/:id/attachments/:index', requireAuth, async (req,
     else if (att.storageKey) await storage.deleteByKey(att.storageKey).catch(e => console.warn('Storage delete failed:', e.message));
 
     const updatedAttachments = attachments.filter((_, i) => i !== index);
-    await sup.from('communications').update({ metadata: JSON.stringify({ ...meta, attachments: updatedAttachments }) }).eq('id', commId);
+    const { error: metaErr } = await sup.from('communications').update({ metadata: JSON.stringify({ ...meta, attachments: updatedAttachments }) }).eq('id', commId);
+    if (metaErr) return res.status(400).json({ error: metaErr.message });
 
     try {
       await sup.from('activity_logs').insert({
@@ -484,13 +505,19 @@ router.delete('/communications/:id/attachments/:index', requireAuth, async (req,
 router.get('/inbox', requireAuth, async (req, res) => {
   const sup = getSupabase();
   try {
-    const { status, account_id, search, limit = 50, offset = 0 } = req.query;
+    const { status, account_id, direction, date_from, date_to, search, limit = 50, offset = 0 } = req.query;
     let query = sup.from('communications').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
     if (status === 'unread') query = query.is('is_read', false);
     if (status === 'read') query = query.is('is_read', true);
     if (status === 'unlinked') query = query.is('case_id', null);
     if (status === 'linked') query = query.not('case_id', 'is', null);
     if (account_id) query = query.eq('email_account_id', parseInt(account_id));
+    if (date_from) query = query.gte('created_at', date_from);
+    // date_to is a plain "YYYY-MM-DD" from a <input type="date">, meaning
+    // "through the end of that day" -- compared as-is it would exclude
+    // every message from that day itself (anything after 00:00:00).
+    if (date_to) query = query.lt('created_at', `${date_to}T23:59:59.999`);
+    if (direction === 'inbound' || direction === 'outbound') query = query.eq('direction', direction);
     if (search) query = query.or(`subject.ilike.%${search}%,sender.ilike.%${search}%,body.ilike.%${search}%`);
 
     const { data: messages, count, error } = await query;
@@ -522,10 +549,21 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
   } catch (ex) { res.status(500).json({ error: ex.message }); }
 });
 
+// PUT /api/inbox/:id/read — opening a message in the list previously never
+// called anything at all, so a message the user had actually read stayed
+// counted as "unread" forever unless separately linked or archived.
+router.put('/inbox/:id/read', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const { error } = await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ success: true });
+});
+
 // PUT /api/inbox/:id/archive
 router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
 
@@ -595,7 +633,11 @@ router.get('/imap/raw-fetch/:accountId', requireAuth, async (req, res) => {
 router.get('/inbox/unread-count', requireAuth, async (req, res) => {
   const sup = getSupabase();
   try {
-    const { count, error } = await sup.from('communications').select('*', { count: 'exact', head: true }).is('is_read', false);
+    // Was counting is_read=false across BOTH directions -- every outbound
+    // (sent) message defaults to is_read=false too (no insert path ever set
+    // it), so every email this system ever sent inflated its own "unread"
+    // badge. You don't read your own sent mail; only inbound counts.
+    const { count, error } = await sup.from('communications').select('*', { count: 'exact', head: true }).is('is_read', false).eq('direction', 'inbound');
     if (error) return res.json({ unread: 0 });
     res.json({ unread: count || 0 });
   } catch (ex) { res.json({ unread: 0 }); }

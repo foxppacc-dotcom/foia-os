@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole, bcrypt } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission, bcrypt } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 
 // All routes require auth; mutating routes additionally require admin
@@ -37,7 +37,7 @@ async function getValidRoleNames(sup) {
 }
 
 // POST /api/users — create user
-router.post('/users', requireRole('admin'), async (req, res) => {
+router.post('/users', requirePermission('users', 'invite'), async (req, res) => {
   const { name, email, password, role, team_id } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, password required' });
 
@@ -61,7 +61,7 @@ router.post('/users', requireRole('admin'), async (req, res) => {
 });
 
 // PUT /api/users/:id — update user
-router.put('/users/:id', async (req, res) => {
+router.put('/users/:id', requirePermission('users', 'edit'), async (req, res) => {
   const { name, email, password, role, team_id, is_active } = req.body;
   const sup = getSupabase();
 
@@ -83,25 +83,33 @@ router.put('/users/:id', async (req, res) => {
 
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields to update' });
 
-  await sup.from('users').update(updates).eq('id', parseInt(req.params.id));
+  // supabase-js resolves {data, error} rather than throwing on a DB-level
+  // rejection (e.g. a stale CHECK constraint on users.role) -- ignoring
+  // `error` here meant a rejected update still reported success while the
+  // row silently stayed unchanged. Concretely reproduced with a newly
+  // created custom role: assigning it to a user looked like it worked, but
+  // the role never actually changed.
+  const { error } = await sup.from('users').update(updates).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
 
   res.json({ success: true, message: '✅ تم تحديث المستخدم' });
 });
 
 // POST /api/users/:id/reset-password — admin sets a new password directly
-router.post('/users/:id/reset-password', async (req, res) => {
+router.post('/users/:id/reset-password', requirePermission('users', 'edit'), async (req, res) => {
   const { password } = req.body;
   if (!password || password.length < 6) return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 6 أحرف' });
   const sup = getSupabase();
   const { data: user } = await sup.from('users').select('id').eq('id', parseInt(req.params.id)).maybeSingle();
   if (!user) return res.status(404).json({ error: 'User not found' });
   const hash = bcrypt.hashSync(password, 10);
-  await sup.from('users').update({ password_hash: hash }).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('users').update({ password_hash: hash }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true, message: '✅ تم إعادة تعيين كلمة المرور' });
 });
 
 // DELETE /api/users/:id
-router.delete('/users/:id', async (req, res) => {
+router.delete('/users/:id', requirePermission('users', 'delete'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
   if (id === req.user.id) return res.status(400).json({ error: 'لا يمكن حذف نفسك' });

@@ -122,6 +122,13 @@ class EmailService {
     const mailPoller = require('./mailPoller');
     const messages = await mailPoller.pollAccount(account);
     const { count, errors } = await mailPoller.processMessages(accountId, messages, caseId);
+    // pollAccount uses this to bound its IMAP SEARCH to "since last poll" --
+    // advance the cursor only after a successful poll, so a failed one
+    // (thrown above, never reaching here) doesn't skip past mail it never
+    // actually fetched. Best-effort: supabase-js resolves {error} rather
+    // than throwing, so this can't itself blow up the request either way.
+    const { error: touchErr } = await sup.from('email_accounts').update({ last_checked: new Date().toISOString() }).eq('id', accountId);
+    if (touchErr) console.warn('[emailService] failed to update last_checked:', touchErr.message);
     return { emails_fetched: messages.length, communications_created: count, errors };
   }
 }

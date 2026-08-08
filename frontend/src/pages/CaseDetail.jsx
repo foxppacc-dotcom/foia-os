@@ -34,8 +34,8 @@ export default function CaseDetail() {
       action={<Link to="/cases" className="text-sm hover:underline" style={{ color: 'var(--accent)' }}>العودة للقضايا</Link>} />
   );
 
-  const { case: c, team, requests, checklist, documents, timeline, records_progress } = data;
-  const ctx = { id, c, team, requests, checklist, documents, timeline, records_progress, users, specializedUsers, allAgencies, refetch, updateChecklist, debouncedSaveNote, newDoc, setNewDoc, addDocument, removeDocument, detectFileType, previewFile, setPreviewFile, handleAddTeam, handleRemoveTeam, getFilteredUsers, activeTab, setActiveTab };
+  const { case: c, team, requests, checklist, documents, timeline, records_progress, channels } = data;
+  const ctx = { id, c, team, requests, checklist, documents, timeline, records_progress, channels, users, specializedUsers, allAgencies, refetch, updateChecklist, debouncedSaveNote, newDoc, setNewDoc, addDocument, removeDocument, detectFileType, previewFile, setPreviewFile, handleAddTeam, handleRemoveTeam, getFilteredUsers, activeTab, setActiveTab };
 
   return (
     <CaseProvider value={ctx}>

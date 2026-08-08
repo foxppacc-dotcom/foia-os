@@ -88,6 +88,26 @@ export default function EmailAccounts() {
     } catch { setError('فشل تغيير حالة الحساب'); }
   };
 
+  const [editingLimitId, setEditingLimitId] = useState(null);
+  const [editingLimitValue, setEditingLimitValue] = useState('');
+
+  // daily_limit was only ever settable when creating a new account -- there
+  // was no way to raise (or effectively remove) it for an existing one
+  // afterward short of deleting and recreating it. The backend already
+  // accepts daily_limit on PUT; this was purely a missing table affordance.
+  const saveDailyLimit = async (id) => {
+    const value = parseInt(editingLimitValue, 10);
+    if (!value || value < 1) { setEditingLimitId(null); return; }
+    try {
+      await fetch(`${BASE}/email-accounts/${id}`, {
+        method: 'PUT', headers: hdrs(),
+        body: JSON.stringify({ daily_limit: value }),
+      });
+      setEditingLimitId(null);
+      fetchAccounts();
+    } catch { setError('فشل تحديث الحد اليومي'); }
+  };
+
   const deleteAccount = async (id) => {
     if (!confirm('متأكد من حذف هذا الحساب؟')) return;
     clearFeedback();
@@ -123,10 +143,15 @@ export default function EmailAccounts() {
         method: 'POST', headers: hdrs(),
         body: JSON.stringify({ to: testEmail.to, subject: testEmail.subject, body: testEmail.body, account_id: parseInt(testEmail.account_id) }),
       });
-      if (!r.ok) {
-        const text = await r.text();
-        let d;
-        try { d = JSON.parse(text); } catch { d = { error: text.substring(0, 200) }; }
+      const text = await r.text();
+      let d;
+      try { d = JSON.parse(text); } catch { d = { error: text.substring(0, 200) }; }
+      // /email/test-compose always answers HTTP 200 and signals failure via
+      // {success:false} in the body (e.g. a real SMTP auth rejection) --
+      // checking only r.ok meant this branch was never reachable, so a
+      // failed send still showed "sent successfully" with no indication
+      // anything was wrong.
+      if (!r.ok || d.success === false) {
         setError(d.error || 'فشل الإرسال'); setSending(false); return;
       }
       setSuccess('تم إرسال الإيميل بنجاح');
@@ -178,7 +203,21 @@ export default function EmailAccounts() {
                 <Td className="font-medium" style={{ color: 'var(--text-primary)' }}>{acc.email}</Td>
                 <Td>{acc.name}</Td>
                 <Td>{acc.provider || '—'}</Td>
-                <Td>{acc.daily_limit ?? '—'}</Td>
+                <Td>
+                  {editingLimitId === acc.id ? (
+                    <input type="number" min="1" autoFocus value={editingLimitValue}
+                      onChange={e => setEditingLimitValue(e.target.value)}
+                      onBlur={() => saveDailyLimit(acc.id)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveDailyLimit(acc.id); if (e.key === 'Escape') setEditingLimitId(null); }}
+                      className="w-20 px-1.5 py-0.5 rounded text-xs"
+                      style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-strong)', color: 'var(--text-primary)' }} />
+                  ) : (
+                    <button onClick={() => { setEditingLimitId(acc.id); setEditingLimitValue(String(acc.daily_limit ?? 100)); }}
+                      className="underline decoration-dashed" title="اضغط للتعديل" style={{ color: 'var(--text-primary)' }}>
+                      {acc.daily_limit ?? '—'}
+                    </button>
+                  )}
+                </Td>
                 <Td>
                   <span className="font-medium" style={{ color: (acc.sent_today || 0) >= (acc.daily_limit || 100) ? 'var(--danger)' : 'var(--success)' }}>{acc.sent_today ?? 0}</span>
                 </Td>

@@ -6,7 +6,7 @@ const { getSupabase } = require('../supabase');
 // ============ PRODUCTION / MONTAGE QUEUE ============
 
 // GET /api/production — list all production queue items
-router.get('/production', requireAuth, async (req, res) => {
+router.get('/production', requireAuth, requirePermission('production', 'view'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { status } = req.query;
@@ -127,7 +127,7 @@ router.put('/production/:id', requireAuth, requirePermission('production', 'edit
 });
 
 // DELETE /api/production/:id — remove from queue
-router.delete('/production/:id', requireAuth, requireRole('admin'), async (req, res) => {
+router.delete('/production/:id', requireAuth, requirePermission('production', 'edit'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data: item } = await sup.from('production_queue').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();

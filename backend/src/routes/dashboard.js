@@ -53,16 +53,27 @@ router.get('/dashboard', async (req, res) => {
 
     // Deadlines — includes overdue (deadline already passed) so the
     // "متأخرة" stat below isn't always zero; ordered soonest/most-overdue first.
+    const todayStr = new Date().toISOString().split('T')[0];
     const [
       { data: upcomingDeadlines },
       { count: totalAgencies },
       { count: totalRequests },
       { data: pipelineLists },
+      { data: overdueResponses },
     ] = await Promise.all([
       sup.from('cases').select(`id, uuid, title, deadline, status, priority, agencies!left(name_en), users!left(name)`).not('deadline', 'is', null).neq('status', 'closed').order('deadline', { ascending: true }).limit(10),
       sup.from('agencies').select('*', { count: 'exact', head: true }),
       sup.from('requests').select('*', { count: 'exact', head: true }),
       sup.from('pipeline_lists').select('id, name_ar, name_en, color, list_number').order('list_number', { ascending: true }),
+      // Requests whose agency never responded by the expected date -- same
+      // "تخطّى الموعد المتوقع للرد" concept the deadline-overdue notification
+      // cron alerts on (services/deadlineChecker.js), surfaced here as its
+      // own visible dashboard section instead of only a background alert.
+      sup.from('requests')
+        .select(`id, case_id, expected_response_date, cases!left(title), agencies!left(name_ar, name_en)`)
+        .lt('expected_response_date', todayStr).is('response_date', null).neq('status', 'closed')
+        .is('overdue_ack_by', null)
+        .order('expected_response_date', { ascending: true }),
     ]);
 
     const upcomingDeadlinesMapped = (upcomingDeadlines || []).map(c => ({
@@ -90,6 +101,15 @@ router.get('/dashboard', async (req, res) => {
       ...pl, task_count: taskCountByList[pl.id] || 0, request_count: requestCountByList[pl.id] || 0,
     }));
 
+    const overdueResponsesMapped = (overdueResponses || []).map(r => ({
+      id: r.id,
+      case_id: r.case_id,
+      case_title: r.cases?.title || null,
+      agency_name: r.agencies?.name_ar || r.agencies?.name_en || null,
+      expected_response_date: r.expected_response_date,
+      days_overdue: Math.floor((new Date(todayStr) - new Date(r.expected_response_date)) / (1000 * 60 * 60 * 24)),
+    }));
+
     res.json({
       totalCases: totalCases || 0,
       byStatus: byStatus || [],
@@ -99,7 +119,8 @@ router.get('/dashboard', async (req, res) => {
       upcomingDeadlines: upcomingDeadlinesMapped,
       totalAgencies: totalAgencies || 0,
       totalRequests: totalRequests || 0,
-      pipelineCounts
+      pipelineCounts,
+      overdueResponses: overdueResponsesMapped,
     });
   } catch (err) {
     console.error('Error getting dashboard:', err);

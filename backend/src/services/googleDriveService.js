@@ -23,6 +23,13 @@ class GoogleDriveService {
 
   newOAuthClient() {
     const { google } = require('googleapis');
+    // Applies to every request every Google API client makes from here on --
+    // without it, a stalled connection to Google (as opposed to a fast
+    // rejection like invalid_grant) has no bound and a route can hang
+    // forever even inside a try/catch, since try/catch only catches
+    // rejections, not requests that never settle. Set once; safe to call
+    // repeatedly (idempotent global default).
+    google.options({ timeout: 20000 });
     return new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,

@@ -44,4 +44,33 @@ router.get('/cron/deadline-check', async (req, res) => {
   }
 });
 
+// GET /api/cron/reset-email-counters — Vercel Cron target, same auth pattern
+// as imap-poll/deadline-check. email_accounts.sent_today is meant to be a
+// per-day sending cap (daily_limit), but nothing advanced it automatically --
+// the only way to zero it was an admin manually pressing "تصفير العدادات"
+// in the Email Accounts page. Left alone, "sent_today" is really a running
+// total since the last manual reset (which may never happen), so accounts
+// would hit "Daily limit reached" errors well before an actual day's worth
+// of sends. Runs once daily so the counter genuinely means "today".
+router.get('/cron/reset-email-counters', async (req, res) => {
+  const configuredSecret = process.env.CRON_SECRET;
+  if (configuredSecret) {
+    const auth = req.headers.authorization || '';
+    if (auth !== `Bearer ${configuredSecret}`) {
+      return res.status(401).json({ error: 'Unauthorized cron request' });
+    }
+  }
+
+  try {
+    const { getSupabase } = require('../supabase');
+    const sup = getSupabase();
+    const { error } = await sup.from('email_accounts').update({ sent_today: 0 }).not('id', 'is', null);
+    if (error) return res.status(500).json({ success: false, error: error.message });
+    res.json({ success: true, resetAt: new Date().toISOString() });
+  } catch (ex) {
+    console.error('Cron email counter reset error:', ex.message);
+    res.status(500).json({ success: false, error: ex.message });
+  }
+});
+
 module.exports = router;
