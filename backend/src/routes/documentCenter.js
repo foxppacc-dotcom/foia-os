@@ -538,7 +538,7 @@ router.get('/inbox', requireAuth, async (req, res) => {
 // tied to any case. The only compose path before this was /cases/:caseId/compose,
 // which hard-requires a case; general correspondence unrelated to any
 // investigation had nowhere to go through this system's own accounts.
-router.post('/inbox/compose', requireAuth, async (req, res) => {
+router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10), async (req, res) => {
   try {
     const { account_id, to, cc, bcc, subject, body } = req.body;
     if (!account_id || !to || !subject) return res.status(400).json({ error: 'account_id, to, subject مطلوبون' });
@@ -547,8 +547,14 @@ router.post('/inbox/compose', requireAuth, async (req, res) => {
     const { data: account } = await sup.from('email_accounts').select('email').eq('id', parseInt(account_id)).maybeSingle();
     if (!account) return res.status(404).json({ error: 'Email account not found' });
 
+    // Attached straight to the outgoing email only -- there's no case here
+    // to file a Drive copy under (unlike /cases/:id/compose), so just the
+    // filename/size get recorded for display, not the bytes themselves.
+    const mailAttachments = (req.files || []).map(f => ({ filename: f.originalname, content: f.buffer }));
+    const storedAttachments = (req.files || []).map(f => ({ filename: f.originalname, size: f.size, mimeType: f.mimetype }));
+
     const emailService = require('../services/emailService');
-    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body });
+    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, attachments: mailAttachments });
 
     const { data, error } = await sup.from('communications').insert({
       type: 'email', direction: 'outbound',
@@ -558,6 +564,7 @@ router.post('/inbox/compose', requireAuth, async (req, res) => {
       created_at: new Date().toISOString(),
       email_account_id: parseInt(account_id),
       is_read: true,
+      metadata: storedAttachments.length ? JSON.stringify({ attachments: storedAttachments }) : null,
     }).select().single();
     if (error) return res.status(500).json({ error: error.message });
 

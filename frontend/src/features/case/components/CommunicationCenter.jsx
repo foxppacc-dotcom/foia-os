@@ -65,10 +65,11 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
   const fileInputRef = useRef(null);
   const [expectedDays, setExpectedDays] = useState(!isForward && !replyTo ? '14' : '');
   const [customDays, setCustomDays] = useState('');
+  const [sendError, setSendError] = useState('');
 
   const send = async () => {
     if (!to || !subject || !body) return;
-    setSending(true);
+    setSending(true); setSendError('');
     try {
       const fd = new FormData();
       fd.append('to', to);
@@ -85,9 +86,15 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
       files.forEach(f => fd.append('attachments', f));
 
       const r = await fetch(`${API}/cases/${caseId}/compose`, { method: 'POST', headers: authHdrs(), body: fd });
-      const d = await r.json();
-      if (d.success) { onSent?.(d); onClose?.(); }
-    } catch(e) { console.error(e); }
+      const d = await r.json().catch(() => ({}));
+      // Previously only checked `if (d.success)` with no else -- a failed
+      // send (bad credentials, daily limit reached, etc.) just left the
+      // composer sitting open with zero feedback, indistinguishable from
+      // the request still being in flight.
+      if (!r.ok || !d.success) { setSendError(d.error || 'فشل الإرسال'); setSending(false); return; }
+      onSent?.(d, subject);
+      onClose?.();
+    } catch(e) { setSendError('خطأ: ' + (e.message || '')); }
     setSending(false);
   };
 
@@ -150,6 +157,9 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
               </span>
             ))}
           </div>
+        )}
+        {sendError && (
+          <div className="text-[11px] px-2 py-1.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>{sendError}</div>
         )}
         <div className="flex items-center justify-between">
           <input ref={fileInputRef} type="file" multiple hidden onChange={e => setFiles([...files, ...Array.from(e.target.files || [])])} />
@@ -282,6 +292,7 @@ export default function CommunicationCenter({ caseId }) {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('date');
+  const [sendSuccess, setSendSuccess] = useState('');
 
   useEffect(() => {
     if (!caseId) return;
@@ -304,6 +315,11 @@ export default function CommunicationCenter({ caseId }) {
 
   return (
     <div className="space-y-3">
+      {sendSuccess && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium" style={{ background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
+          {sendSuccess}
+        </div>
+      )}
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="relative flex-1 min-w-[150px]">
@@ -331,7 +347,11 @@ export default function CommunicationCenter({ caseId }) {
       {/* Composer */}
       {showComposer && (
         <EmailComposer caseId={caseId} onClose={() => { setShowComposer(false); setReplyTo(null); }} accounts={accounts} agencies={agencies} replyTo={replyTo} mode={composerMode}
-          onSent={() => fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []))} />
+          onSent={(d, subject) => {
+            fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []));
+            setSendSuccess(`تم إرسال "${subject || ''}" بنجاح ✓`);
+            setTimeout(() => setSendSuccess(''), 4000);
+          }} />
       )}
 
       {/* Thread list */}

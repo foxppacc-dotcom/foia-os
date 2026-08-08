@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, getApiBase } from '../api';
-import { Mail, Search, Inbox, Archive, Link2, Eye, ChevronDown, RefreshCw, Loader2, ExternalLink, Trash2, Send, X } from 'lucide-react';
+import { Mail, Search, Inbox, Archive, Link2, Eye, ChevronDown, RefreshCw, Loader2, ExternalLink, Trash2, Send, X, Paperclip } from 'lucide-react';
 import AppSection from '../components/ds/AppSection';
 import AppButton from '../components/ds/AppButton';
 import AppBadge from '../components/ds/AppBadge';
@@ -9,6 +9,42 @@ import AppEmptyState from '../components/ds/AppEmptyState';
 const BASE = getApiBase();
 const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
+
+// Native <input type="date"> renders its numerals/segment order from the
+// BROWSER'S OWN locale, not the page's dir/lang attributes -- Chrome in
+// particular keeps showing Arabic-Indic digits and a reversed-looking
+// order regardless of dir="ltr"/lang="en-GB" on the element itself. Three
+// plain, always-English-digit day/month/year fields sidestep that
+// entirely instead of fighting the native widget's locale rendering.
+function DateField({ value, onChange }) {
+  const [y, m, d] = value ? value.split('-') : ['', '', ''];
+  const set = (day, month, year) => {
+    if (day && month && year && day.length === 2 && month.length === 2 && year.length === 4) {
+      onChange(`${year}-${month}-${day}`);
+    } else if (!day && !month && !year) {
+      onChange('');
+    }
+  };
+  const numeric = (v) => v.replace(/[^0-9]/g, '');
+  return (
+    <div className="flex items-center gap-0.5" dir="ltr">
+      <input type="text" inputMode="numeric" placeholder="DD" maxLength={2} value={d || ''}
+        onChange={e => set(numeric(e.target.value), m || '', y || '')}
+        className="w-8 px-1 py-1 rounded text-[11px] text-center"
+        style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+      <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>/</span>
+      <input type="text" inputMode="numeric" placeholder="MM" maxLength={2} value={m || ''}
+        onChange={e => set(d || '', numeric(e.target.value), y || '')}
+        className="w-8 px-1 py-1 rounded text-[11px] text-center"
+        style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+      <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>/</span>
+      <input type="text" inputMode="numeric" placeholder="YYYY" maxLength={4} value={y || ''}
+        onChange={e => set(d || '', m || '', numeric(e.target.value))}
+        className="w-12 px-1 py-1 rounded text-[11px] text-center"
+        style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+    </div>
+  );
+}
 
 export default function InboxPage() {
   const [messages, setMessages] = useState([]);
@@ -26,8 +62,17 @@ export default function InboxPage() {
   const [unread, setUnread] = useState(0);
   const [showComposer, setShowComposer] = useState(false);
   const [composeForm, setComposeForm] = useState({ account_id: '', to: '', cc: '', subject: '', body: '' });
+  const [composeFiles, setComposeFiles] = useState([]);
   const [composing, setComposing] = useState(false);
   const [composeError, setComposeError] = useState('');
+  const [sendSuccess, setSendSuccess] = useState('');
+
+  const closeComposer = () => {
+    setShowComposer(false);
+    setComposeForm({ account_id: '', to: '', cc: '', subject: '', body: '' });
+    setComposeFiles([]);
+    setComposeError('');
+  };
 
   const fetchInbox = async () => {
     try {
@@ -100,14 +145,18 @@ export default function InboxPage() {
     if (!composeForm.account_id || !composeForm.to || !composeForm.subject) return;
     setComposing(true); setComposeError('');
     try {
+      const fd = new FormData();
+      Object.entries(composeForm).forEach(([k, v]) => fd.append(k, v));
+      composeFiles.forEach(f => fd.append('attachments', f));
       const r = await fetch(`${BASE}/inbox/compose`, {
-        method: 'POST', headers: hdrs(),
-        body: JSON.stringify(composeForm),
+        method: 'POST', headers: { Authorization: `Bearer ${tok()}` },
+        body: fd,
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.success === false) { setComposeError(d.error || 'فشل الإرسال'); setComposing(false); return; }
-      setShowComposer(false);
-      setComposeForm({ account_id: '', to: '', cc: '', subject: '', body: '' });
+      closeComposer();
+      setSendSuccess('تم إرسال الرسالة بنجاح ✓');
+      setTimeout(() => setSendSuccess(''), 4000);
       fetchInbox();
     } catch (e) { setComposeError('خطأ: ' + (e.message || '')); }
     setComposing(false);
@@ -134,6 +183,11 @@ export default function InboxPage() {
 
   return (
     <div className="max-w-6xl mx-auto p-4 space-y-4">
+      {sendSuccess && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium" style={{ background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
+          {sendSuccess}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Inbox className="w-5 h-5" style={{ color: 'var(--ds-accent)' }} />
@@ -151,12 +205,12 @@ export default function InboxPage() {
 
       {/* Standalone composer -- not tied to any case */}
       {showComposer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.4)' }} onClick={() => !composing && setShowComposer(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.4)' }} onClick={() => !composing && closeComposer()}>
           <div className="w-full max-w-lg rounded-2xl p-5 max-h-[85vh] overflow-y-auto"
             style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold" style={{ color: 'var(--ds-text-primary)' }}>رسالة جديدة</h3>
-              <button onClick={() => setShowComposer(false)} style={{ color: 'var(--ds-text-muted)' }}><X className="w-4 h-4" /></button>
+              <button onClick={closeComposer} style={{ color: 'var(--ds-text-muted)' }}><X className="w-4 h-4" /></button>
             </div>
             <div className="space-y-2">
               <select value={composeForm.account_id} onChange={e => setComposeForm({ ...composeForm, account_id: e.target.value })}
@@ -172,9 +226,27 @@ export default function InboxPage() {
                 className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
               <textarea value={composeForm.body} onChange={e => setComposeForm({ ...composeForm, body: e.target.value })} placeholder="نص الرسالة..." rows={6}
                 className="w-full px-2 py-1.5 rounded-lg text-xs resize-none" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+
+              {composeFiles.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {composeFiles.map((f, i) => (
+                    <span key={i} className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-secondary)' }}>
+                      {f.name}
+                      <button onClick={() => setComposeFiles(composeFiles.filter((_, fi) => fi !== i))} style={{ color: 'var(--ds-text-muted)' }}><X className="w-3 h-3" /></button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-1 text-[11px] cursor-pointer" style={{ color: 'var(--ds-accent)' }}>
+                  <Paperclip className="w-3.5 h-3.5" />مرفقات
+                  <input type="file" multiple hidden onChange={e => setComposeFiles([...composeFiles, ...Array.from(e.target.files || [])])} />
+                </label>
+              </div>
+
               {composeError && <div className="text-[11px] p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>{composeError}</div>}
               <div className="flex justify-end gap-2 pt-1">
-                <AppButton size="sm" variant="secondary" onClick={() => setShowComposer(false)} disabled={composing}>إلغاء</AppButton>
+                <AppButton size="sm" variant="secondary" onClick={closeComposer} disabled={composing}>إلغاء</AppButton>
                 <AppButton size="sm" onClick={sendCompose} disabled={composing || !composeForm.account_id || !composeForm.to || !composeForm.subject}>
                   {composing ? 'جارٍ الإرسال...' : 'إرسال'}
                 </AppButton>
@@ -214,19 +286,11 @@ export default function InboxPage() {
           </select>
         )}
         <div className="w-px h-5 mx-0.5" style={{ background: 'var(--ds-border)' }} />
-        <div className="flex items-center gap-1 text-[11px] shrink-0" style={{ color: 'var(--ds-text-muted)' }}>
+        <div className="flex items-center gap-1.5 text-[11px] shrink-0" style={{ color: 'var(--ds-text-muted)' }}>
           <span>من</span>
-          {/* dir="ltr" + lang="en-GB" -- a native date input inherits the
-              page's RTL direction otherwise, which mirrors the day/month/year
-              segment order (renders like "yyyy/mm/dd" reversed) instead of
-              the plain dd/mm/yyyy the calendar icon actually opens with. */}
-          <input type="date" dir="ltr" lang="en-GB" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-            className="px-1.5 py-1 rounded-lg text-[11px]"
-            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)', colorScheme: 'light dark' }} />
+          <DateField value={dateFrom} onChange={setDateFrom} />
           <span>إلى</span>
-          <input type="date" dir="ltr" lang="en-GB" value={dateTo} onChange={e => setDateTo(e.target.value)}
-            className="px-1.5 py-1 rounded-lg text-[11px]"
-            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)', colorScheme: 'light dark' }} />
+          <DateField value={dateTo} onChange={setDateTo} />
           {(dateFrom || dateTo) && (
             <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-[11px] underline shrink-0" style={{ color: 'var(--ds-accent)' }}>
               مسح
