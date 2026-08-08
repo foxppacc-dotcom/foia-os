@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, getApiBase } from '../api';
-import { Mail, Plus, Trash2, RefreshCw, Send, Power, PowerOff, Loader2, X, CheckCircle, AlertCircle } from 'lucide-react';
+import { Mail, Plus, Trash2, RefreshCw, Send, Power, PowerOff, Loader2, X, CheckCircle, AlertCircle, Pencil } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -90,6 +90,49 @@ export default function EmailAccounts() {
 
   const [editingLimitId, setEditingLimitId] = useState(null);
   const [editingLimitValue, setEditingLimitValue] = useState('');
+
+  const [editingAccount, setEditingAccount] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+
+  // Credentials (smtp_pass/imap_pass) were only ever settable when creating
+  // a brand-new account -- updating a wrong or expired password (e.g. after
+  // generating a new Google App Password) required deleting and recreating
+  // the whole account. The backend already accepts these fields on PUT.
+  const startEditAccount = (acc) => {
+    setEditingAccount(acc);
+    setEditForm({
+      name: acc.name || '', provider: acc.provider || '',
+      smtp_host: acc.smtp_host || '', smtp_port: String(acc.smtp_port || 587), smtp_user: acc.smtp_user || acc.email || '', smtp_pass: '',
+      imap_host: acc.imap_host || '', imap_port: String(acc.imap_port || 993), imap_user: acc.imap_user || acc.email || '', imap_pass: '',
+    });
+    clearFeedback();
+  };
+
+  const saveEditedAccount = async () => {
+    if (!editingAccount) return;
+    setSaving(true);
+    try {
+      const payload = {
+        name: editForm.name, provider: editForm.provider,
+        smtp_host: editForm.smtp_host, smtp_port: parseInt(editForm.smtp_port) || 587, smtp_user: editForm.smtp_user,
+        imap_host: editForm.imap_host, imap_port: parseInt(editForm.imap_port) || 993, imap_user: editForm.imap_user,
+      };
+      // Blank password fields mean "keep the existing one" -- only send them
+      // if the admin actually typed a replacement.
+      if (editForm.smtp_pass) payload.smtp_pass = editForm.smtp_pass;
+      if (editForm.imap_pass) payload.imap_pass = editForm.imap_pass;
+      const r = await fetch(`${BASE}/email-accounts/${editingAccount.id}`, { method: 'PUT', headers: hdrs(), body: JSON.stringify(payload) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setError(d.error || 'فشل تحديث الحساب'); setSaving(false); return; }
+      setSuccess(`تم تحديث حساب ${editingAccount.email} بنجاح`);
+      setTimeout(() => setSuccess(''), 3000);
+      setEditingAccount(null);
+      fetchAccounts();
+    } catch (e) {
+      setError('خطأ في الاتصال: ' + (e.message || ''));
+    }
+    setSaving(false);
+  };
 
   // daily_limit was only ever settable when creating a new account -- there
   // was no way to raise (or effectively remove) it for an existing one
@@ -224,6 +267,11 @@ export default function EmailAccounts() {
                 <Td className="text-xs" style={{ color: 'var(--text-muted)' }}>{acc.created_at ? new Date(acc.created_at).toLocaleDateString('ar-SA') : '—'}</Td>
                 <Td align="center">
                   <div className="flex items-center justify-center gap-1">
+                    <button onClick={() => startEditAccount(acc)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                      onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}
+                      title="تعديل الإعدادات وكلمات المرور">
+                      <Pencil className="w-4 h-4" />
+                    </button>
                     <button onClick={() => toggleActive(acc)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
                       onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}
                       title={acc.is_active ? 'تعطيل' : 'تفعيل'}>
@@ -290,6 +338,50 @@ export default function EmailAccounts() {
               <Button variant="secondary" onClick={() => setShowForm(false)} disabled={saving}>إلغاء</Button>
               <Button onClick={createAccount} disabled={saving}>
                 {saving ? <><Loader2 className="w-4 h-4 animate-spin" />جارٍ الحفظ...</> : 'إضافة'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Account Modal -- host/port/user/provider + optional password replacement */}
+      {editingAccount && editForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fadeIn" style={{ background: 'var(--bg-overlay)' }} onClick={() => !saving && setEditingAccount(null)}>
+          <div className="w-full max-w-2xl rounded-2xl border p-6 animate-scaleIn max-h-[85vh] overflow-y-auto"
+            style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', boxShadow: 'var(--shadow-lg)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>تعديل حساب: {editingAccount.email}</h3>
+              <button onClick={() => !saving && setEditingAccount(null)} className="p-1 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Input containerClassName="col-span-2" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} placeholder="اسم الحساب" />
+              <Input containerClassName="col-span-2" value={editForm.provider} onChange={(e) => setEditForm({ ...editForm, provider: e.target.value })} placeholder="المزود (مثل Gmail, Outlook)" />
+
+              <h4 className="col-span-2 text-xs font-semibold mt-2" style={{ color: 'var(--text-muted)' }}>إعدادات SMTP (إرسال)</h4>
+              <Input value={editForm.smtp_host} onChange={(e) => setEditForm({ ...editForm, smtp_host: e.target.value })} placeholder="SMTP Host" />
+              <Input value={editForm.smtp_port} onChange={(e) => setEditForm({ ...editForm, smtp_port: e.target.value })} placeholder="SMTP Port" type="number" />
+              <Input value={editForm.smtp_user} onChange={(e) => setEditForm({ ...editForm, smtp_user: e.target.value })} placeholder="SMTP User" />
+              <Input value={editForm.smtp_pass} onChange={(e) => setEditForm({ ...editForm, smtp_pass: e.target.value })} placeholder="SMTP Password (اتركه فارغًا لعدم التغيير)" type="password" />
+
+              <h4 className="col-span-2 text-xs font-semibold mt-2" style={{ color: 'var(--text-muted)' }}>إعدادات IMAP (استقبال)</h4>
+              <Input value={editForm.imap_host} onChange={(e) => setEditForm({ ...editForm, imap_host: e.target.value })} placeholder="IMAP Host" />
+              <Input value={editForm.imap_port} onChange={(e) => setEditForm({ ...editForm, imap_port: e.target.value })} placeholder="IMAP Port" type="number" />
+              <Input value={editForm.imap_user} onChange={(e) => setEditForm({ ...editForm, imap_user: e.target.value })} placeholder="IMAP User" />
+              <Input value={editForm.imap_pass} onChange={(e) => setEditForm({ ...editForm, imap_pass: e.target.value })} placeholder="IMAP Password (اتركه فارغًا لعدم التغيير)" type="password" />
+            </div>
+
+            {error && editingAccount && (
+              <div className="flex items-center gap-1 mt-3 p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)' }}>
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" style={{ color: '#ef4444' }} />
+                <span className="text-[11px]" style={{ color: '#ef4444' }}>{error}</span>
+              </div>
+            )}
+
+            <div className="flex gap-2 justify-end mt-4">
+              <Button variant="secondary" onClick={() => setEditingAccount(null)} disabled={saving}>إلغاء</Button>
+              <Button onClick={saveEditedAccount} disabled={saving}>
+                {saving ? <><Loader2 className="w-4 h-4 animate-spin" />جارٍ الحفظ...</> : 'حفظ التعديلات'}
               </Button>
             </div>
           </div>
