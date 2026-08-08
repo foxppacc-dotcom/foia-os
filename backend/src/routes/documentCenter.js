@@ -352,6 +352,7 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
       message_id: info.messageId,
       thread_id: threadId || info.messageId,
       created_at: new Date().toISOString(),
+      email_account_id: parseInt(account_id),
       metadata: storedAttachments.length ? JSON.stringify({ attachments: storedAttachments }) : null,
     }).select();
 
@@ -500,13 +501,14 @@ router.delete('/communications/:id/attachments/:index', requireAuth, async (req,
 router.get('/inbox', requireAuth, async (req, res) => {
   const sup = getSupabase();
   try {
-    const { status, account_id, search, limit = 50, offset = 0 } = req.query;
+    const { status, account_id, direction, search, limit = 50, offset = 0 } = req.query;
     let query = sup.from('communications').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
     if (status === 'unread') query = query.is('is_read', false);
     if (status === 'read') query = query.is('is_read', true);
     if (status === 'unlinked') query = query.is('case_id', null);
     if (status === 'linked') query = query.not('case_id', 'is', null);
     if (account_id) query = query.eq('email_account_id', parseInt(account_id));
+    if (direction === 'inbound' || direction === 'outbound') query = query.eq('direction', direction);
     if (search) query = query.or(`subject.ilike.%${search}%,sender.ilike.%${search}%,body.ilike.%${search}%`);
 
     const { data: messages, count, error } = await query;

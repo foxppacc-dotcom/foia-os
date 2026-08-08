@@ -15,6 +15,9 @@ export default function InboxPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('all');
+  const [direction, setDirection] = useState('all');
+  const [accountId, setAccountId] = useState('all');
+  const [accounts, setAccounts] = useState([]);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
   const [polling, setPolling] = useState(false);
@@ -24,6 +27,8 @@ export default function InboxPage() {
     try {
       const params = new URLSearchParams({ limit: '50' });
       if (status !== 'all') params.set('status', status);
+      if (direction !== 'all') params.set('direction', direction);
+      if (accountId !== 'all') params.set('account_id', accountId);
       if (search) params.set('search', search);
       const r = await fetch(`${BASE}/inbox?${params}`, { headers: hdrs() });
       const d = await r.json();
@@ -31,6 +36,14 @@ export default function InboxPage() {
       setTotal(d.total || 0);
     } catch (e) { console.error('Inbox fetch error:', e); }
     setLoading(false);
+  };
+
+  const fetchAccounts = async () => {
+    try {
+      const r = await fetch(`${BASE}/email-accounts`, { headers: hdrs() });
+      const d = await r.json();
+      setAccounts(d.data || []);
+    } catch {}
   };
 
   const fetchUnread = async () => {
@@ -41,8 +54,8 @@ export default function InboxPage() {
     } catch {}
   };
 
-  useEffect(() => { fetchInbox(); }, [status, search]);
-  useEffect(() => { fetchUnread(); }, []);
+  useEffect(() => { fetchInbox(); }, [status, direction, accountId, search]);
+  useEffect(() => { fetchUnread(); fetchAccounts(); }, []);
 
   const handlePoll = async () => {
     setPolling(true);
@@ -108,6 +121,31 @@ export default function InboxPage() {
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث في البريد..."
           className="w-full text-xs p-2 pl-8 rounded-lg ds-transition-colors"
           style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+      </div>
+
+      {/* Direction + linked-account filters */}
+      <div className="flex gap-1.5 flex-wrap items-center">
+        <div className="flex gap-1">
+          {[
+            { key: 'all', label: 'كل الاتجاهات' },
+            { key: 'inbound', label: 'وارد' },
+            { key: 'outbound', label: 'صادر' },
+          ].map(d => (
+            <button key={d.key} onClick={() => setDirection(d.key)}
+              className="px-2.5 py-1 text-[11px] rounded-lg ds-transition-colors"
+              style={{ background: direction === d.key ? 'var(--ds-accent)' : 'var(--ds-bg-tertiary)', color: direction === d.key ? 'white' : 'var(--ds-text-muted)' }}>
+              {d.label}
+            </button>
+          ))}
+        </div>
+        {accounts.length > 0 && (
+          <select value={accountId} onChange={e => setAccountId(e.target.value)}
+            className="text-[11px] px-2 py-1 rounded-lg"
+            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
+            <option value="all">كل الإيميلات المرتبطة</option>
+            {accounts.map(a => <option key={a.id} value={a.id}>{a.name || a.email}</option>)}
+          </select>
+        )}
       </div>
 
       {loading ? (

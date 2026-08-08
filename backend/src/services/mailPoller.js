@@ -334,6 +334,10 @@ class MailPoller {
         thread_id: msg.inReplyTo || msg.messageId,
         created_at: msg.date.toISOString(),
         is_read: false,
+        // Which of our connected accounts this arrived through -- never set
+        // before, so "filter by linked email" in Inbox.jsx would have shown
+        // every fetched (inbound) message as unmatched to any account.
+        email_account_id: accountId,
         metadata: JSON.stringify({ attachments: storedAttachments, flags: msg.flags, cc: msg.cc || '' }),
       };
       if (matchedCaseId) insertData.case_id = matchedCaseId;
