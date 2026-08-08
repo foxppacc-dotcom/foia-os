@@ -62,36 +62,54 @@ class MailPoller {
       const messages = [];
 
       try {
-        for await (const msg of client.fetch('1:*', { uid: true, envelope: true, bodyStructure: true, source: true, flags: true })) {
-          const parsed = await simpleParser(msg.source);
-          // Some messages (e.g. provider security-alert notices, some
-          // webmail-composed replies) arrive with no Message-ID header at
-          // all. Falling back to `null` here breaks dedup permanently --
-          // `.eq('message_id', null)` never matches an existing NULL row in
-          // SQL (NULL is never equal to NULL), so a message like this gets
-          // re-inserted as a fresh "new" communication on every single poll,
-          // forever. Fall back to a synthetic ID keyed on account+UID, which
-          // is stable across polls of the same mailbox.
-          const messageId = parsed.messageId || msg.envelope.messageId || `imap-${account.id}-${msg.uid}`;
-          messages.push({
-            messageId,
-            inReplyTo: parsed.inReplyTo || '',
-            references: Array.isArray(parsed.references) ? parsed.references.join(' ') : (parsed.references || ''),
-            from: parsed.from?.value?.[0]?.address || '',
-            to: parsed.to?.value?.[0]?.address || '',
-            cc: (parsed.cc?.value || []).map(v => v.address).join(', '),
-            subject: parsed.subject || '(بدون موضوع)',
-            text: parsed.text || parsed.html || '',
-            html: parsed.html || '',
-            date: parsed.date || new Date(),
-            attachments: parsed.attachments?.map(a => ({
-              filename: a.filename, contentType: a.contentType, size: a.size,
-              content: a.content?.toString('base64') || '',
-            })) || [],
-            uid: msg.uid,
-            flags: msg.flags || [],
-          });
-          this.messageIdCache.add(messageId);
+        // '1:*' pulled every message in the mailbox -- full source, every
+        // poll, forever. Fine for a brand-new test inbox with a handful of
+        // messages; on a real, actively-used mailbox (hundreds of emails)
+        // this re-downloads and re-parses the entire history on every
+        // single "جلب الإيميلات" click, which is slow enough to blow past
+        // the platform's request timeout and looks like a hang with no
+        // response at all. Only search for messages since the last
+        // successful poll (or since the account was connected, for the
+        // very first poll) -- IMAP SINCE is date-only, so a same-day
+        // message can be re-seen once, but processMessages' dedup by
+        // message_id already makes that safe.
+        const since = account.last_checked ? new Date(account.last_checked)
+          : account.created_at ? new Date(account.created_at)
+          : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const uids = await client.search({ since }, { uid: true });
+
+        if (uids && uids.length) {
+          for await (const msg of client.fetch(uids, { uid: true, envelope: true, bodyStructure: true, source: true, flags: true }, { uid: true })) {
+            const parsed = await simpleParser(msg.source);
+            // Some messages (e.g. provider security-alert notices, some
+            // webmail-composed replies) arrive with no Message-ID header at
+            // all. Falling back to `null` here breaks dedup permanently --
+            // `.eq('message_id', null)` never matches an existing NULL row in
+            // SQL (NULL is never equal to NULL), so a message like this gets
+            // re-inserted as a fresh "new" communication on every single poll,
+            // forever. Fall back to a synthetic ID keyed on account+UID, which
+            // is stable across polls of the same mailbox.
+            const messageId = parsed.messageId || msg.envelope.messageId || `imap-${account.id}-${msg.uid}`;
+            messages.push({
+              messageId,
+              inReplyTo: parsed.inReplyTo || '',
+              references: Array.isArray(parsed.references) ? parsed.references.join(' ') : (parsed.references || ''),
+              from: parsed.from?.value?.[0]?.address || '',
+              to: parsed.to?.value?.[0]?.address || '',
+              cc: (parsed.cc?.value || []).map(v => v.address).join(', '),
+              subject: parsed.subject || '(بدون موضوع)',
+              text: parsed.text || parsed.html || '',
+              html: parsed.html || '',
+              date: parsed.date || new Date(),
+              attachments: parsed.attachments?.map(a => ({
+                filename: a.filename, contentType: a.contentType, size: a.size,
+                content: a.content?.toString('base64') || '',
+              })) || [],
+              uid: msg.uid,
+              flags: msg.flags || [],
+            });
+            this.messageIdCache.add(messageId);
+          }
         }
       } finally { lock.release(); }
       await client.logout();
@@ -395,6 +413,11 @@ class MailPoller {
         if (count > 0) console.log(`IMAP: ${count} new messages from ${acct.email}`);
         total += count;
         for (const e of msgErrors) errors.push({ account: acct.email, ...e });
+        // Advance the "since" cursor pollAccount reads next run -- without
+        // this, every cron pass re-searched from the same stale timestamp
+        // forever (never past the first successful poll's baseline).
+        const { error: touchErr } = await sup.from('email_accounts').update({ last_checked: new Date().toISOString() }).eq('id', acct.id);
+        if (touchErr) console.warn(`[mailPoller] failed to update last_checked for ${acct.email}:`, touchErr.message);
       } catch (e) {
         console.error(`IMAP error for ${acct.email}:`, e.message);
         errors.push({ account: acct.email, stage: 'connect', error: e.message });
