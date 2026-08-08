@@ -166,10 +166,24 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
   );
 }
 
-function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted }) {
+function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted, onRead }) {
   const acct = (accounts || []).find(a => a.id === thread.email_account_id);
   const daysWaiting = thread.created_at ? Math.floor((Date.now() - new Date(thread.created_at)) / (1000*60*60*24)) : 0;
   const attachments = thread.metadata?.attachments || [];
+  const [expanded, setExpanded] = useState(false);
+
+  // Opening a message here previously called nothing at all -- the card
+  // just showed a truncated preview with no expand/read interaction, so a
+  // message read only from inside a case's الاتصالات tab stayed "unread" in
+  // the main صندوق الوارد forever (same is_read column, shared everywhere).
+  const toggleExpand = () => {
+    setExpanded(e => !e);
+    if (!expanded && thread.is_read === false) {
+      fetch(`${API}/inbox/${thread.id}/read`, { method: 'PUT', headers: authHdrs() })
+        .then(() => onRead?.(thread.id))
+        .catch(() => {});
+    }
+  };
 
   const download = async (index) => {
     const r = await fetch(`${API}/communications/${thread.id}/attachments/${index}/download`, { headers: authHdrs() });
@@ -190,7 +204,8 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted 
   };
 
   return (
-    <div className="rounded-lg p-3 ds-transition-colors cursor-pointer" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: thread.direction === 'inbound' ? '3px solid #22c55e' : '3px solid #3b82f6' }}
+    <div className="rounded-lg p-3 ds-transition-colors cursor-pointer" onClick={toggleExpand}
+      style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: thread.direction === 'inbound' ? '3px solid #22c55e' : '3px solid #3b82f6' }}
       onMouseEnter={e => e.currentTarget.style.background = 'var(--ds-bg-tertiary)'}
       onMouseLeave={e => e.currentTarget.style.background = 'var(--ds-bg-secondary)'}>
       <div className="flex items-start justify-between gap-2 mb-1">
@@ -216,12 +231,16 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted 
         </div>
       </div>
 
-      {/* Thread body preview */}
-      <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--ds-text-secondary)' }}>{thread.body?.substring(0, 150)}</div>
+      {/* Thread body -- truncated preview, or full text once expanded */}
+      {expanded ? (
+        <div className="text-[11px] mt-1 whitespace-pre-wrap" style={{ color: 'var(--ds-text-secondary)' }}>{thread.body || '(لا يوجد محتوى)'}</div>
+      ) : (
+        <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--ds-text-secondary)' }}>{thread.body?.substring(0, 150)}</div>
+      )}
 
       {/* Attachments */}
       {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-1.5">
+        <div className="flex flex-wrap gap-1.5 mt-1.5" onClick={e => e.stopPropagation()}>
           {attachments.map((att, i) => (
             <span key={i} className="flex items-center gap-1 text-[9px] px-2 py-1 rounded" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-secondary)' }}>
               <Paperclip className="w-3 h-3" />{att.filename} {att.size != null && `(${formatSize(att.size)})`}
@@ -233,7 +252,7 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted 
       )}
 
       {/* Quick actions */}
-      <div className="flex items-center gap-1.5 mt-2">
+      <div className="flex items-center gap-1.5 mt-2" onClick={e => e.stopPropagation()}>
         <button onClick={() => onReply(thread, 'reply')} className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded" style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6' }}>
           <Reply className="w-3 h-3" />رد
         </button>
@@ -327,7 +346,8 @@ export default function CommunicationCenter({ caseId }) {
             <div className="text-[10px] font-medium px-1 mb-1" style={{ color: 'var(--ds-text-muted)' }}>{filtered.length} محادثة</div>
             {filtered.map(t => <ThreadCard key={t.id} thread={t} accounts={accounts} onReply={openComposer}
               onAttachmentDeleted={() => fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []))}
-              onDeleted={() => setThreads(prev => prev.filter(x => x.id !== t.id))} />)}
+              onDeleted={() => setThreads(prev => prev.filter(x => x.id !== t.id))}
+              onRead={id => setThreads(prev => prev.map(x => x.id === id ? { ...x, is_read: true } : x))} />)}
           </>
         )}
       </div>

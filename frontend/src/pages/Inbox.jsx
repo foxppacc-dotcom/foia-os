@@ -18,6 +18,8 @@ export default function InboxPage() {
   const [direction, setDirection] = useState('all');
   const [accountId, setAccountId] = useState('all');
   const [accounts, setAccounts] = useState([]);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
   const [polling, setPolling] = useState(false);
@@ -29,6 +31,8 @@ export default function InboxPage() {
       if (status !== 'all') params.set('status', status);
       if (direction !== 'all') params.set('direction', direction);
       if (accountId !== 'all') params.set('account_id', accountId);
+      if (dateFrom) params.set('date_from', dateFrom);
+      if (dateTo) params.set('date_to', dateTo);
       if (search) params.set('search', search);
       const r = await fetch(`${BASE}/inbox?${params}`, { headers: hdrs() });
       const d = await r.json();
@@ -54,7 +58,7 @@ export default function InboxPage() {
     } catch {}
   };
 
-  useEffect(() => { fetchInbox(); }, [status, direction, accountId, search]);
+  useEffect(() => { fetchInbox(); }, [status, direction, accountId, dateFrom, dateTo, search]);
   useEffect(() => { fetchUnread(); fetchAccounts(); }, []);
 
   const handlePoll = async () => {
@@ -145,6 +149,22 @@ export default function InboxPage() {
             {accounts.map(a => <option key={a.id} value={a.id}>{a.name || a.email}</option>)}
           </select>
         )}
+        <div className="w-px h-5 mx-0.5" style={{ background: 'var(--ds-border)' }} />
+        <div className="flex items-center gap-1 text-[11px]" style={{ color: 'var(--ds-text-muted)' }}>
+          <span>من</span>
+          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+            className="px-1.5 py-1 rounded-lg text-[11px]"
+            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+          <span>إلى</span>
+          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+            className="px-1.5 py-1 rounded-lg text-[11px]"
+            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+          {(dateFrom || dateTo) && (
+            <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-[11px] underline" style={{ color: 'var(--ds-accent)' }}>
+              مسح
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Search */}
