@@ -240,6 +240,8 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted,
             <div className="text-[10px]" style={{ color: daysWaiting > 14 ? '#ef4444' : daysWaiting > 7 ? '#eab308' : 'var(--ds-text-muted)' }}>{daysWaiting} يوم</div>
             <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(thread.created_at)}</div>
           </div>
+          <button onClick={e => { e.stopPropagation(); window.open(`/inbox/message/${thread.id}`, '_blank', 'noopener,noreferrer'); }}
+            title="فتح في تاب جديد (للمراجعة/النسخ/الرد)" style={{ color: 'var(--ds-text-muted)' }}><ExternalLink className="w-3.5 h-3.5" /></button>
           <button onClick={deleteMessage} title="حذف الرسالة" style={{ color: '#ef4444' }}><Trash2 className="w-3.5 h-3.5" /></button>
         </div>
       </div>

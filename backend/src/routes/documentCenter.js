@@ -549,12 +549,28 @@ router.get('/inbox', requireAuth, async (req, res) => {
 // investigation had nowhere to go through this system's own accounts.
 router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10), async (req, res) => {
   try {
-    const { account_id, to, cc, bcc, subject, body } = req.body;
+    const { account_id, to, cc, bcc, subject, body, case_id, reply_to_id } = req.body;
     if (!account_id || !to || !subject) return res.status(400).json({ error: 'account_id, to, subject مطلوبون' });
 
     const sup = getSupabase();
     const { data: account } = await sup.from('email_accounts').select('email').eq('id', parseInt(account_id)).maybeSingle();
     if (!account) return res.status(404).json({ error: 'Email account not found' });
+
+    // Replying/forwarding from the standalone message tab: thread against
+    // the original so both our own matching (thread_id) and the
+    // recipient's mail client (In-Reply-To/References) group it into the
+    // same conversation, and keep the same case link if the original had one.
+    let inReplyTo, references, threadId, linkedCaseId = case_id ? parseInt(case_id) : null, linkedAgencyId = null;
+    if (reply_to_id) {
+      const { data: original } = await sup.from('communications').select('message_id, thread_id, case_id, agency_id').eq('id', parseInt(reply_to_id)).maybeSingle();
+      if (original) {
+        inReplyTo = original.message_id;
+        references = original.message_id;
+        threadId = original.thread_id || original.message_id;
+        if (!linkedCaseId) linkedCaseId = original.case_id || null;
+        linkedAgencyId = original.agency_id || null;
+      }
+    }
 
     // Attached straight to the outgoing email only -- there's no case here
     // to file a Drive copy under (unlike /cases/:id/compose), so just the
@@ -563,16 +579,18 @@ router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10
     const storedAttachments = (req.files || []).map(f => ({ filename: f.originalname, size: f.size, mimeType: f.mimetype }));
 
     const emailService = require('../services/emailService');
-    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, attachments: mailAttachments });
+    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, inReplyTo, references, attachments: mailAttachments });
 
     const { data, error } = await sup.from('communications').insert({
       type: 'email', direction: 'outbound',
       subject, body: body || '', sender: account.email, recipient: to,
       message_id: info.messageId,
-      thread_id: info.messageId,
+      thread_id: threadId || info.messageId,
       created_at: new Date().toISOString(),
       email_account_id: parseInt(account_id),
       is_read: true,
+      case_id: linkedCaseId,
+      agency_id: linkedAgencyId,
       metadata: storedAttachments.length ? JSON.stringify({ attachments: storedAttachments }) : null,
     }).select().single();
     if (error) return res.status(500).json({ error: error.message });
@@ -614,6 +632,18 @@ router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   const { error } = await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
+});
+
+// GET /api/communications/:id — a single message's full detail, for
+// opening one in a standalone tab (صندوق البريد "فتح في تاب جديد").
+router.get('/communications/:id', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('communications').select('*').eq('id', parseInt(req.params.id)).maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Message not found' });
+    res.json({ success: true, data: { ...data, metadata: parseMetadata(data.metadata) } });
+  } catch (ex) { res.status(500).json({ error: ex.message }); }
 });
 
 // DELETE /api/communications/:id — delete a single email (inbound or

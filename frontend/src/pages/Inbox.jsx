@@ -370,6 +370,10 @@ export default function InboxPage() {
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
+                  <button onClick={e => { e.stopPropagation(); window.open(`/inbox/message/${msg.id}`, '_blank', 'noopener,noreferrer'); }}
+                    className="p-1 rounded" title="فتح في تاب جديد (للمراجعة/النسخ/الرد)" style={{ color: 'var(--ds-text-muted)' }}>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
                   {!msg.case_id && (
                     <button onClick={e => { e.stopPropagation(); const cid = prompt('رقم التحقيق:'); if(cid) handleLink(msg.id, parseInt(cid), null); }}
                       className="p-1 rounded" title="ربط بتحقيق" style={{ color: 'var(--ds-text-muted)' }}>

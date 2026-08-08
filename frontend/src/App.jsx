@@ -40,6 +40,7 @@ const EmailAccounts = lazy(() => import('./pages/EmailAccounts'));
 const Profile = lazy(() => import('./pages/Profile'));
 const ListDetail = lazy(() => import('./pages/ListDetail'));
 const Inbox = lazy(() => import('./pages/Inbox'));
+const MessageView = lazy(() => import('./pages/MessageView'));
 const TeamPermissions = lazy(() => import('./components/TeamPermissions'));
 
 function AppFallback() { return <div style={{padding:"20px",color:"var(--ds-text-muted)"}}>جاري التحميل...</div>; }
@@ -114,6 +115,21 @@ function App() {
 
   if (!user) {
     return <LoginPage onLogin={(u) => setUser(u)} />;
+  }
+
+  // A message opened "في تاب خارجية" (window.open, a genuine new page load
+  // -- not client-side SPA navigation) is meant to sit on its own for
+  // review/copying, not inside the normal sidebar/topbar shell. Checked
+  // here, before the shell renders, since this path is never reached via
+  // in-app <Link>/navigate -- only by opening a fresh tab at this URL.
+  if (window.location.pathname.startsWith('/inbox/message/')) {
+    return (
+      <Suspense fallback={<AppFallback />}>
+        <ErrorBoundary>
+          <Routes><Route path="/inbox/message/:id" element={<MessageView />} /></Routes>
+        </ErrorBoundary>
+      </Suspense>
+    );
   }
 
   return (
