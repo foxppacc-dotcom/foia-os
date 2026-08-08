@@ -150,17 +150,21 @@ export default function InboxPage() {
           </select>
         )}
         <div className="w-px h-5 mx-0.5" style={{ background: 'var(--ds-border)' }} />
-        <div className="flex items-center gap-1 text-[11px]" style={{ color: 'var(--ds-text-muted)' }}>
+        <div className="flex items-center gap-1 text-[11px] shrink-0" style={{ color: 'var(--ds-text-muted)' }}>
           <span>من</span>
-          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+          {/* dir="ltr" + lang="en-GB" -- a native date input inherits the
+              page's RTL direction otherwise, which mirrors the day/month/year
+              segment order (renders like "yyyy/mm/dd" reversed) instead of
+              the plain dd/mm/yyyy the calendar icon actually opens with. */}
+          <input type="date" dir="ltr" lang="en-GB" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
             className="px-1.5 py-1 rounded-lg text-[11px]"
-            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)', colorScheme: 'light dark' }} />
           <span>إلى</span>
-          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+          <input type="date" dir="ltr" lang="en-GB" value={dateTo} onChange={e => setDateTo(e.target.value)}
             className="px-1.5 py-1 rounded-lg text-[11px]"
-            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+            style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)', colorScheme: 'light dark' }} />
           {(dateFrom || dateTo) && (
-            <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-[11px] underline" style={{ color: 'var(--ds-accent)' }}>
+            <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-[11px] underline shrink-0" style={{ color: 'var(--ds-accent)' }}>
               مسح
             </button>
           )}
