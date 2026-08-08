@@ -73,6 +73,18 @@ export default function InboxPage() {
     fetchInbox();
   };
 
+  // Expanding a message previously called nothing at all -- it stayed
+  // counted as "unread" forever unless separately linked or archived, which
+  // is part of why the unread badge looked wrong.
+  const handleOpen = (msg) => {
+    setSelected(selected === msg.id ? null : msg.id);
+    if (msg.is_read === false) {
+      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, is_read: true } : m));
+      setUnread(prev => Math.max(0, prev - 1));
+      fetch(`${BASE}/inbox/${msg.id}/read`, { method: 'PUT', headers: hdrs() }).catch(() => {});
+    }
+  };
+
   const handleArchive = async (id) => {
     await fetch(`${BASE}/inbox/${id}/archive`, { method: 'PUT', headers: hdrs() });
     fetchInbox();
@@ -104,8 +116,8 @@ export default function InboxPage() {
         </AppButton>
       </div>
 
-      {/* Status tabs */}
-      <div className="flex gap-1.5 flex-wrap">
+      {/* Status tabs + direction/account filters, all in one row */}
+      <div className="flex gap-1.5 flex-wrap items-center">
         {statusCounts.map(s => (
           <button key={s.key} onClick={() => setStatus(s.key)}
             className="px-3 py-1.5 text-xs rounded-lg ds-transition-colors"
@@ -113,31 +125,18 @@ export default function InboxPage() {
             {s.label}
           </button>
         ))}
-      </div>
-
-      {/* Search */}
-      <div className="relative">
-        <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--ds-text-muted)' }} />
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث في البريد..."
-          className="w-full text-xs p-2 pl-8 rounded-lg ds-transition-colors"
-          style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-      </div>
-
-      {/* Direction + linked-account filters */}
-      <div className="flex gap-1.5 flex-wrap items-center">
-        <div className="flex gap-1">
-          {[
-            { key: 'all', label: 'كل الاتجاهات' },
-            { key: 'inbound', label: 'وارد' },
-            { key: 'outbound', label: 'صادر' },
-          ].map(d => (
-            <button key={d.key} onClick={() => setDirection(d.key)}
-              className="px-2.5 py-1 text-[11px] rounded-lg ds-transition-colors"
-              style={{ background: direction === d.key ? 'var(--ds-accent)' : 'var(--ds-bg-tertiary)', color: direction === d.key ? 'white' : 'var(--ds-text-muted)' }}>
-              {d.label}
-            </button>
-          ))}
-        </div>
+        <div className="w-px h-5 mx-0.5" style={{ background: 'var(--ds-border)' }} />
+        {[
+          { key: 'all', label: 'كل الاتجاهات' },
+          { key: 'inbound', label: 'وارد' },
+          { key: 'outbound', label: 'صادر' },
+        ].map(d => (
+          <button key={d.key} onClick={() => setDirection(d.key)}
+            className="px-2.5 py-1 text-[11px] rounded-lg ds-transition-colors"
+            style={{ background: direction === d.key ? 'var(--ds-accent)' : 'var(--ds-bg-tertiary)', color: direction === d.key ? 'white' : 'var(--ds-text-muted)' }}>
+            {d.label}
+          </button>
+        ))}
         {accounts.length > 0 && (
           <select value={accountId} onChange={e => setAccountId(e.target.value)}
             className="text-[11px] px-2 py-1 rounded-lg"
@@ -148,6 +147,14 @@ export default function InboxPage() {
         )}
       </div>
 
+      {/* Search */}
+      <div className="relative">
+        <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--ds-text-muted)' }} />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث في البريد..."
+          className="w-full text-xs p-2 pl-8 rounded-lg ds-transition-colors"
+          style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+      </div>
+
       {loading ? (
         <div className="flex items-center justify-center p-8"><Loader2 className="w-5 h-5 animate-spin" style={{ color: 'var(--ds-accent)' }} /></div>
       ) : messages.length === 0 ? (
@@ -155,7 +162,7 @@ export default function InboxPage() {
       ) : (
         <div className="space-y-1">
           {messages.map(msg => (
-            <div key={msg.id} onClick={() => setSelected(selected === msg.id ? null : msg.id)}
+            <div key={msg.id} onClick={() => handleOpen(msg)}
               className="p-3 rounded-lg cursor-pointer ds-transition-colors"
               style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: msg.case_id ? '3px solid #22c55e' : '3px solid #eab308' }}>
               <div className="flex items-start gap-2">

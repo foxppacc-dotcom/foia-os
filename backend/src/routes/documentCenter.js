@@ -353,6 +353,10 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
       thread_id: threadId || info.messageId,
       created_at: new Date().toISOString(),
       email_account_id: parseInt(account_id),
+      // A message we just sent is read by definition -- is_read defaults to
+      // false in the schema, which fed the "unread" badge with our own sent
+      // mail (see /inbox/unread-count).
+      is_read: true,
       metadata: storedAttachments.length ? JSON.stringify({ attachments: storedAttachments }) : null,
     }).select();
 
@@ -540,6 +544,16 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
   } catch (ex) { res.status(500).json({ error: ex.message }); }
 });
 
+// PUT /api/inbox/:id/read — opening a message in the list previously never
+// called anything at all, so a message the user had actually read stayed
+// counted as "unread" forever unless separately linked or archived.
+router.put('/inbox/:id/read', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const { error } = await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ success: true });
+});
+
 // PUT /api/inbox/:id/archive
 router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   const sup = getSupabase();
@@ -614,7 +628,11 @@ router.get('/imap/raw-fetch/:accountId', requireAuth, async (req, res) => {
 router.get('/inbox/unread-count', requireAuth, async (req, res) => {
   const sup = getSupabase();
   try {
-    const { count, error } = await sup.from('communications').select('*', { count: 'exact', head: true }).is('is_read', false);
+    // Was counting is_read=false across BOTH directions -- every outbound
+    // (sent) message defaults to is_read=false too (no insert path ever set
+    // it), so every email this system ever sent inflated its own "unread"
+    // badge. You don't read your own sent mail; only inbound counts.
+    const { count, error } = await sup.from('communications').select('*', { count: 'exact', head: true }).is('is_read', false).eq('direction', 'inbound');
     if (error) return res.json({ unread: 0 });
     res.json({ unread: count || 0 });
   } catch (ex) { res.json({ unread: 0 }); }

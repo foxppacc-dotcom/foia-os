@@ -212,7 +212,9 @@ router.post('/send', requireAuth, async (req, res) => {
         recipient: cc || '',
         message_id: result.messageId,
         thread_id: result.messageId,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        email_account_id: parseInt(account_id),
+        is_read: true,
       });
 
       await sup.from('case_comments').insert({
