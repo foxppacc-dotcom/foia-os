@@ -419,9 +419,19 @@ class MailPoller {
         for (const e of msgErrors) errors.push({ account: acct.email, ...e });
         // Advance the "since" cursor pollAccount reads next run -- without
         // this, every cron pass re-searched from the same stale timestamp
-        // forever (never past the first successful poll's baseline).
-        const { error: touchErr } = await sup.from('email_accounts').update({ last_checked: new Date().toISOString() }).eq('id', acct.id);
-        if (touchErr) console.warn(`[mailPoller] failed to update last_checked for ${acct.email}:`, touchErr.message);
+        // forever (never past the first successful poll's baseline). Only
+        // when every message this pass actually processed cleanly: IMAP
+        // SEARCH SINCE is day-granular, so once the cursor crosses past
+        // today into tomorrow, anything dated today that failed to insert
+        // (e.g. a transient DB error) would drop out of every future
+        // search's range and never be retried. Message-ID dedup already
+        // makes re-searching the same day free on a clean run.
+        if (!msgErrors.length) {
+          const { error: touchErr } = await sup.from('email_accounts').update({ last_checked: new Date().toISOString() }).eq('id', acct.id);
+          if (touchErr) console.warn(`[mailPoller] failed to update last_checked for ${acct.email}:`, touchErr.message);
+        } else {
+          console.warn(`[mailPoller] not advancing last_checked for ${acct.email} -- ${msgErrors.length} message(s) failed to process`);
+        }
       } catch (e) {
         console.error(`IMAP error for ${acct.email}:`, e.message);
         errors.push({ account: acct.email, stage: 'connect', error: e.message });

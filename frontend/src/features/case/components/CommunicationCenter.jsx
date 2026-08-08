@@ -189,8 +189,11 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted,
   const toggleExpand = () => {
     setExpanded(e => !e);
     if (!expanded && thread.is_read === false) {
+      // fetch()'s promise resolves for ANY http status, including 4xx/5xx --
+      // .then() alone isn't a success check, so a rejected update still
+      // marked the thread read in local state with the real row untouched.
       fetch(`${API}/inbox/${thread.id}/read`, { method: 'PUT', headers: authHdrs() })
-        .then(() => onRead?.(thread.id))
+        .then(r => { if (r.ok) onRead?.(thread.id); })
         .catch(() => {});
     }
   };
@@ -347,10 +350,11 @@ export default function CommunicationCenter({ caseId }) {
       {/* Composer */}
       {showComposer && (
         <EmailComposer caseId={caseId} onClose={() => { setShowComposer(false); setReplyTo(null); }} accounts={accounts} agencies={agencies} replyTo={replyTo} mode={composerMode}
-          onSent={(d, subject) => {
-            fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []));
-            setSendSuccess(`تم إرسال "${subject || ''}" بنجاح ✓`);
-            setTimeout(() => setSendSuccess(''), 4000);
+          onSent={(sentData, subject) => {
+            fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(t => setThreads(t.threads || []));
+            const warningNote = sentData?.warnings?.length ? ` (تنبيه: ${sentData.warnings.join(' — ')})` : '';
+            setSendSuccess(`تم إرسال "${subject || ''}" بنجاح ✓${warningNote}`);
+            setTimeout(() => setSendSuccess(''), 6000);
           }} />
       )}
 

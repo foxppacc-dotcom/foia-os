@@ -34,8 +34,14 @@ function DateField({ value, onChange }) {
   }, [value]);
 
   const commit = (d, m, y) => {
-    if (d.length === 2 && m.length === 2 && y.length === 4) onChange(`${y}-${m}-${d}`);
-    else if (!d && !m && !y) onChange('');
+    if (d.length === 2 && m.length === 2 && y.length === 4) {
+      // Length-only checks let e.g. day=99 or month=13 through to the
+      // backend as a query param -- Postgres rejects the resulting date
+      // string, but the frontend never surfaced that (see fetchInbox),
+      // so it looked exactly like "no messages in range."
+      const dn = parseInt(d, 10), mn = parseInt(m, 10);
+      if (dn >= 1 && dn <= 31 && mn >= 1 && mn <= 12) onChange(`${y}-${m}-${d}`);
+    } else if (!d && !m && !y) onChange('');
   };
   const numeric = (v) => v.replace(/[^0-9]/g, '');
 
@@ -63,6 +69,7 @@ export default function InboxPage() {
   const [messages, setMessages] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState('');
   const [status, setStatus] = useState('all');
   const [direction, setDirection] = useState('all');
   const [accountId, setAccountId] = useState('all');
@@ -97,10 +104,16 @@ export default function InboxPage() {
       if (dateTo) params.set('date_to', dateTo);
       if (search) params.set('search', search);
       const r = await fetch(`${BASE}/inbox?${params}`, { headers: hdrs() });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
+      // A 500 (e.g. an invalid date range Postgres rejects) still resolves
+      // here with d.data undefined -- rendering as an empty list, identical
+      // to "genuinely no messages in range" with zero indication the query
+      // itself never ran.
+      if (!r.ok) { setFetchError(d.error || 'فشل تحميل الرسائل'); setMessages([]); setTotal(0); setLoading(false); return; }
+      setFetchError('');
       setMessages(d.data || []);
       setTotal(d.total || 0);
-    } catch (e) { console.error('Inbox fetch error:', e); }
+    } catch (e) { setFetchError('خطأ في الاتصال'); console.error('Inbox fetch error:', e); }
     setLoading(false);
   };
 
@@ -147,7 +160,16 @@ export default function InboxPage() {
     if (msg.is_read === false) {
       setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, is_read: true } : m));
       setUnread(prev => Math.max(0, prev - 1));
-      fetch(`${BASE}/inbox/${msg.id}/read`, { method: 'PUT', headers: hdrs() }).catch(() => {});
+      // fetch() resolves for ANY http status, including 4xx/5xx -- only
+      // .catch() here meant a server-side rejection still left the UI
+      // showing "read" with the badge decremented, out of sync with the
+      // real row until the next full refetch silently flipped it back.
+      fetch(`${BASE}/inbox/${msg.id}/read`, { method: 'PUT', headers: hdrs() }).then(r => {
+        if (!r.ok) { setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, is_read: false } : m)); setUnread(prev => prev + 1); }
+      }).catch(() => {
+        setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, is_read: false } : m));
+        setUnread(prev => prev + 1);
+      });
     }
   };
 
@@ -322,6 +344,8 @@ export default function InboxPage() {
 
       {loading ? (
         <div className="flex items-center justify-center p-8"><Loader2 className="w-5 h-5 animate-spin" style={{ color: 'var(--ds-accent)' }} /></div>
+      ) : fetchError ? (
+        <AppEmptyState icon={Mail} title="تعذر تحميل الرسائل" description={fetchError} />
       ) : messages.length === 0 ? (
         <AppEmptyState icon={Mail} title="لا توجد رسائل" description="اضغط على 'جلب الإيميلات' لاستقبال الرسائل" />
       ) : (

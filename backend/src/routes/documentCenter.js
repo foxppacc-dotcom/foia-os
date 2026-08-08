@@ -318,7 +318,7 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
       const fileType = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext.toLowerCase()) ? 'image'
         : ['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext.toLowerCase()) ? 'video'
         : ['.mp3', '.wav', '.ogg', '.flac'].includes(ext.toLowerCase()) ? 'audio' : 'document';
-      mailAttachments.push({ filename: file.originalname, content: file.buffer });
+      mailAttachments.push({ filename: file.originalname, content: file.buffer, contentType: file.mimetype });
 
       try {
         const driveFields = await caseFileStorage.saveCaseFile({
@@ -344,8 +344,11 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
     const emailService = require('../services/emailService');
     const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, inReplyTo, references, attachments: mailAttachments });
 
-    // Create communication record (insert only — .select() may not return on all Supabase versions)
-    await sup.from('communications').insert({
+    // Create communication record. The email is already sent at this point
+    // (SMTP accepted it) -- an unchecked error here would mean the message
+    // reached the recipient but silently never showed up in the case's own
+    // thread view, with the API still reporting success either way.
+    const { error: commErr } = await sup.from('communications').insert({
       case_id: caseId,
       type: 'email', direction: 'outbound',
       subject, body: body || '', sender: account.email, recipient: to,
@@ -358,7 +361,8 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
       // mail (see /inbox/unread-count).
       is_read: true,
       metadata: storedAttachments.length ? JSON.stringify({ attachments: storedAttachments }) : null,
-    }).select();
+    });
+    if (commErr) console.error('[compose] communications insert failed (email was still sent):', commErr.message);
 
     // Create timeline event (best-effort)
     try {
@@ -390,7 +394,12 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
       } catch (dlErr) { console.error('Deadline tracking update failed:', dlErr.message); }
     }
 
-    res.json({ success: true, messageId: info.messageId });
+    // Attachment archival failures (Drive upload / case_documents insert)
+    // were only ever console.error'd -- the email itself still sends fine
+    // (mailAttachments was built before this), but the admin had no way to
+    // know a specific file never made it into the case's own Files tab.
+    const attachmentWarnings = storedAttachments.filter(a => a.uploadError).map(a => `تعذر أرشفة "${a.filename}": ${a.uploadError}`);
+    res.json({ success: true, messageId: info.messageId, warnings: attachmentWarnings.length ? attachmentWarnings : undefined });
   } catch (ex) {
     res.json({ success: false, error: ex.message });
   }
@@ -550,7 +559,7 @@ router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10
     // Attached straight to the outgoing email only -- there's no case here
     // to file a Drive copy under (unlike /cases/:id/compose), so just the
     // filename/size get recorded for display, not the bytes themselves.
-    const mailAttachments = (req.files || []).map(f => ({ filename: f.originalname, content: f.buffer }));
+    const mailAttachments = (req.files || []).map(f => ({ filename: f.originalname, content: f.buffer, contentType: f.mimetype }));
     const storedAttachments = (req.files || []).map(f => ({ filename: f.originalname, size: f.size, mimeType: f.mimetype }));
 
     const emailService = require('../services/emailService');
@@ -681,6 +690,21 @@ router.get('/inbox/unread-count', requireAuth, async (req, res) => {
     if (error) return res.json({ unread: 0 });
     res.json({ unread: count || 0 });
   } catch (ex) { res.json({ unread: 0 }); }
+});
+
+// composeUpload (multer) throws inside its own middleware layer, BEFORE any
+// route handler's try/catch runs -- an oversized file or too many files
+// produced Express's default non-JSON error page instead of this app's
+// normal {error: "..."} shape. Registered last so it only intercepts errors
+// from this router's own middleware/routes.
+router.use((err, req, res, next) => {
+  if (err && err.name === 'MulterError') {
+    const message = err.code === 'LIMIT_FILE_SIZE' ? 'حجم الملف أكبر من الحد المسموح (25 ميجابايت)'
+      : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE' ? 'عدد الملفات أكبر من الحد المسموح'
+      : err.message;
+    return res.status(400).json({ error: message });
+  }
+  next(err);
 });
 
 module.exports = router;

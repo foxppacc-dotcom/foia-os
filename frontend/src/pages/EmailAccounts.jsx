@@ -142,10 +142,14 @@ export default function EmailAccounts() {
     const value = parseInt(editingLimitValue, 10);
     if (!value || value < 1) { setEditingLimitId(null); return; }
     try {
-      await fetch(`${BASE}/email-accounts/${id}`, {
+      const r = await fetch(`${BASE}/email-accounts/${id}`, {
         method: 'PUT', headers: hdrs(),
         body: JSON.stringify({ daily_limit: value }),
       });
+      // fetch() doesn't reject on a 4xx/5xx -- without this check, a denied
+      // or failed update still closed the editor and re-rendered the OLD
+      // value with no error at all, silently looking like it saved.
+      if (!r.ok) { const d = await r.json().catch(() => ({})); setError(d.error || 'فشل تحديث الحد اليومي'); setEditingLimitId(null); return; }
       setEditingLimitId(null);
       fetchAccounts();
     } catch { setError('فشل تحديث الحد اليومي'); }
@@ -166,8 +170,14 @@ export default function EmailAccounts() {
   const handleFetchAll = async () => {
     setFetching(true); clearFeedback();
     try {
-      const r = await fetch(`${BASE}/email/imap-poll`, { method: 'POST', headers: hdrs() });
-      if (!r.ok) { setError('فشل جلب الإيميلات'); }
+      // Was posting to /email/imap-poll, which is registered nowhere --
+      // the real route (also used by صندوق البريد's "جلب الإيميلات" and
+      // the imap-poll cron job) is /imap/poll. This button 404'd every time.
+      const r = await fetch(`${BASE}/imap/poll`, { method: 'POST', headers: hdrs() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { setError(d.error || 'فشل جلب الإيميلات'); setFetching(false); return; }
+      setSuccess(`تم الجلب — ${d.newMessages || 0} رسالة جديدة`);
+      setTimeout(() => setSuccess(''), 3000);
     } catch { setError('خطأ في الاتصال'); }
     setFetching(false);
   };
