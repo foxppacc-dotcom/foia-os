@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
+const { notifyUsers, getCaseRecipients } = require('../services/notificationService');
+const { canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
 
 // ============ PRODUCTION / MONTAGE QUEUE ============
 
@@ -11,10 +13,20 @@ router.get('/production', requireAuth, requirePermission('production', 'view'), 
     const sup = getSupabase();
     const { status } = req.query;
 
+    // Same case-visibility rule GET /cases already enforces -- a role
+    // restricted to its own assigned cases could otherwise see every OTHER
+    // case's title/status on the production queue too, since
+    // requirePermission('production','view') only confirms the role can see
+    // the queue at all, not which cases' entries belong on it.
+    const restricted = !(await canViewAllCases(sup, req.user.role));
+    const visibleCaseIds = restricted ? await getVisibleCaseIds(sup, req.user.id) : null;
+    if (restricted && !visibleCaseIds.length) return res.json({ success: true, data: [] });
+
     let query = sup.from('production_queue')
       .select('*, cases!inner(title, uuid, status), users!left(name)')
       .order('created_at', { ascending: false });
     if (status) query = query.eq('status', status);
+    if (restricted) query = query.in('case_id', visibleCaseIds);
 
     const { data, error } = await query;
     if (error) throw error;
@@ -79,6 +91,15 @@ router.post('/production/add', requireAuth, requirePermission('production', 'edi
       });
     } catch (e) { console.error('[production] activity_logs insert failed:', e.message); }
 
+    if (created.assigned_to && created.assigned_to !== req.user?.id) {
+      try {
+        await notifyUsers(sup, [created.assigned_to], {
+          type: 'production_assigned', title: '🎬 تم تعيينك للمونتاج', body: `${req.user?.name || 'أحد الموظفين'} عيّنك لإنتاج القضية "${caseRow.title}"`,
+          target_type: 'case', target_id: caseId,
+        });
+      } catch (e) { console.error('[production] add notification failed:', e.message); }
+    }
+
     res.status(201).json({ success: true, id: created.id, drive_folder_link: driveLink });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -108,9 +129,16 @@ router.put('/production/:id', requireAuth, requirePermission('production', 'edit
             target_title: '✅ تم الانتهاء من الإنتاج والمونتاج',
           });
         } catch (e) { console.error('[production] activity_logs insert failed:', e.message); }
+        try {
+          const recipients = await getCaseRecipients(sup, existing.case_id, { excludeUserId: req.user?.id });
+          await notifyUsers(sup, recipients, {
+            type: 'production_completed', title: '✅ اكتمل الإنتاج', body: 'تم الانتهاء من الإنتاج والمونتاج للقضية',
+            target_type: 'case', target_id: existing.case_id,
+          });
+        } catch (e) { console.error('[production] completed notification failed:', e.message); }
       }
     }
-    if (assigned_to !== undefined) updates.assigned_to = assigned_to || null;
+    if (assigned_to !== undefined) updates.assigned_to = assigned_to ? parseInt(assigned_to) : null;
     if (priority) updates.priority = priority;
     if (notes !== undefined) updates.notes = notes;
     if (drive_folder_link !== undefined) updates.drive_folder_link = drive_folder_link;
@@ -119,6 +147,15 @@ router.put('/production/:id', requireAuth, requirePermission('production', 'edit
 
     const { error } = await sup.from('production_queue').update(updates).eq('id', id);
     if (error) throw error;
+
+    if (updates.assigned_to && updates.assigned_to !== existing.assigned_to && updates.assigned_to !== req.user?.id) {
+      try {
+        await notifyUsers(sup, [updates.assigned_to], {
+          type: 'production_assigned', title: '🎬 تم تعيينك للمونتاج', body: `تم تعيينك لإنتاج القضية #${existing.case_id}`,
+          target_type: 'case', target_id: existing.case_id,
+        });
+      } catch (e) { console.error('[production] reassign notification failed:', e.message); }
+    }
 
     res.json({ success: true, message: '✅ تم تحديث حالة الإنتاج' });
   } catch (err) {
@@ -146,8 +183,13 @@ router.delete('/production/:id', requireAuth, requirePermission('production', 'e
 router.post('/production/auto-check', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const sup = getSupabase();
-    // Find cases where ALL requests are classified as "Records Received" (list_id=1)
-    // and not already in production queue
+    // Find cases where ALL requests are classified as "Records Received"
+    // and not already in production queue. Was hardcoded to
+    // classification_id === 1 -- pipeline_lists ids are seeded, not fixed at
+    // 1 (this environment's "Records Received" list has a completely
+    // different real id), so this check silently never matched anything.
+    const { data: receivedList } = await sup.from('pipeline_lists').select('id').eq('name_en', 'Records Received').maybeSingle();
+    if (!receivedList) return res.json({ success: true, added_count: 0, candidates: [] });
     const { data: openCases } = await sup.from('cases').select('id, title, uuid').in('status', ['open', 'in_progress']);
     const { data: queued } = await sup.from('production_queue').select('case_id');
     const queuedIds = new Set((queued || []).map(q => q.case_id));
@@ -156,7 +198,7 @@ router.post('/production/auto-check', requireAuth, requireRole('admin'), async (
     for (const c of (openCases || []).filter(c => !queuedIds.has(c.id))) {
       const { data: reqs } = await sup.from('requests').select('classification_id').eq('case_id', c.id);
       if (!reqs || reqs.length === 0) continue;
-      const allReceived = reqs.every(r => r.classification_id === 1);
+      const allReceived = reqs.every(r => r.classification_id === receivedList.id);
       if (!allReceived) continue;
 
       await sup.from('cases').update({ status: 'in_production', updated_at: new Date().toISOString() }).eq('id', c.id);

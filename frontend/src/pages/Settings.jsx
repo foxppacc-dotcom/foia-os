@@ -11,7 +11,18 @@ export default function Settings() {
 
   useEffect(() => {
     setLayoutLoading(true);
-    api.get('/nav-layout').then(d => setNavLayout(d.data || [])).catch(() => {}).finally(() => setLayoutLoading(false));
+    api.get('/nav-layout').then(d => {
+      // The backend's NAV_ITEMS catalog (permissions.js) includes a
+      // synthetic 'settings' key for /nav-layout's own bookkeeping, but the
+      // Settings button in Sidebar.jsx is deliberately hardcoded/pinned and
+      // never actually reads nav_layout for its position or visibility.
+      // Showing it here made this list display the raw, untranslated
+      // string "settings" (NAV_CATALOG has no matching label) and let an
+      // admin reorder/toggle it with zero real effect -- filtered out
+      // rather than left as a dead, confusing row.
+      const real = (d.data || []).filter(item => NAV_CATALOG.some(n => n.key === item.nav_key));
+      setNavLayout(real);
+    }).catch(() => {}).finally(() => setLayoutLoading(false));
   }, []);
 
   // ===== SIDEBAR LAYOUT (global order + sidebar/settings placement) =====

@@ -22,7 +22,10 @@ export default function PhoneLogs() {
 
   const fetchLogs = (caseId) => {
     if (!caseId) { setLogs([]); return; }
-    api.get(`/api/cases/${caseId}/phone-logs`)
+    // api.js's request() already prepends /api -- passing '/api/cases/...'
+    // here doubled the prefix to /api/api/cases/..., which 404s. Same bug
+    // in createLog/deleteLog below.
+    api.get(`/cases/${caseId}/phone-logs`)
       .then(d => setLogs(Array.isArray(d) ? d : d.data || []))
       .catch(() => setLogs([]));
   };
@@ -34,21 +37,25 @@ export default function PhoneLogs() {
 
   const createLog = async () => {
     if (!form.caller_name.trim() || !form.caller_number.trim()) return;
-    await api.post('/api/cases/' + selectedCaseId + '/phone-logs', {
-      case_id: parseInt(selectedCaseId), direction: form.direction,
-      caller_name: form.caller_name, caller_number: form.caller_number,
-      duration_seconds: form.duration_seconds ? parseInt(form.duration_seconds) : null,
-      summary: form.summary || null, notes: form.notes || null,
-    });
-    setShowForm(false);
-    setForm({ case_id: '', direction: 'inbound', caller_name: '', caller_number: '', duration_seconds: '', summary: '', notes: '' });
-    fetchLogs(selectedCaseId);
+    try {
+      await api.post('/cases/' + selectedCaseId + '/phone-logs', {
+        case_id: parseInt(selectedCaseId), direction: form.direction,
+        caller_name: form.caller_name, caller_number: form.caller_number,
+        duration_seconds: form.duration_seconds ? parseInt(form.duration_seconds) : null,
+        summary: form.summary || null, notes: form.notes || null,
+      });
+      setShowForm(false);
+      setForm({ case_id: '', direction: 'inbound', caller_name: '', caller_number: '', duration_seconds: '', summary: '', notes: '' });
+      fetchLogs(selectedCaseId);
+    } catch (err) { alert('فشل إضافة المكالمة: ' + err.message); }
   };
 
   const deleteLog = async (id) => {
     if (!confirm('هل أنت متأكد من حذف هذه المكالمة؟')) return;
-    await api.delete(`/api/cases/${selectedCaseId}/phone-logs/${id}`);
-    fetchLogs(selectedCaseId);
+    try {
+      await api.delete(`/cases/${selectedCaseId}/phone-logs/${id}`);
+      fetchLogs(selectedCaseId);
+    } catch (err) { alert('فشل حذف المكالمة: ' + err.message); }
   };
 
   const formatDuration = (secs) => {

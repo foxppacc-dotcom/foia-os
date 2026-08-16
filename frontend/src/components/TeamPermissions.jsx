@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api, getCurrentUser } from '../api';
-import { Plus, Trash2, KeyRound, Search, UserCog, ShieldCheck, Pencil, Check, X, Save, Undo2, Briefcase } from 'lucide-react';
+import { Plus, Trash2, KeyRound, Search, UserCog, ShieldCheck, Pencil, Check, X, Save, Undo2, Briefcase, UserCircle } from 'lucide-react';
 import { useToast } from './ui/Toast';
 import Button from './ui/Button';
 import Input from './ui/Input';
@@ -13,7 +14,13 @@ import EmptyState from './ui/EmptyState';
 import Spinner from './ui/Spinner';
 import { TableShell, Thead, Th, Td, Tr } from './ui/Table';
 
-const ACTION_LABEL = { view: 'عرض', view_all: 'عرض كل القضايا (وليس المسندة فقط)', create: 'إنشاء', edit: 'تعديل', delete: 'حذف', move: 'نقل', export: 'تصدير', manage: 'إدارة', invite: 'دعوة' };
+const ACTION_LABEL = {
+  view: 'عرض', view_all: 'عرض كل القضايا (وليس المسندة فقط)', create: 'إنشاء', edit: 'تعديل', delete: 'حذف',
+  move: 'نقل', export: 'تصدير', manage: 'إدارة', invite: 'دعوة',
+  delete_any: 'حذف أي تعليق/موضوع (بغض النظر عن الكاتب)', create_topic: 'إنشاء موضوع جديد',
+  comment: 'التعليق', pin: 'تثبيت الإعلانات المهمة',
+  promote: 'اعتماد ونقل القضية للقضايا الجاهزة', manage_criteria: 'إدارة معايير الفرز',
+};
 
 export default function TeamPermissions() {
   const toast = useToast();
@@ -58,6 +65,7 @@ export default function TeamPermissions() {
 }
 
 function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
+  const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -136,7 +144,7 @@ function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
         <EmptyState icon={UserCog} title="لا يوجد أعضاء" />
       ) : (
         <TableShell>
-          <Thead><Th>العضو</Th><Th>الدور</Th><Th>الحالة</Th>{isAdmin && <Th align="center">إجراءات</Th>}</Thead>
+          <Thead><Th>العضو</Th><Th>الدور</Th><Th>الحالة</Th><Th align="center">إجراءات</Th></Thead>
           <tbody>
             {filtered.map(u => (
               <Tr key={u.id}>
@@ -164,20 +172,31 @@ function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
                     <Badge variant={u.is_active === false ? 'neutral' : 'success'} dot>{u.is_active === false ? 'معطّل' : 'نشط'}</Badge>
                   )}
                 </Td>
-                {isAdmin && (
-                  <Td align="center">
-                    <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => setResetTarget(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
-                        onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'} title="إعادة تعيين كلمة المرور">
-                        <KeyRound className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => setConfirmDelete(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
-                        onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </Td>
-                )}
+                <Td align="center">
+                  <div className="flex items-center justify-center gap-1">
+                    {/* Full task/case history + KPI for this employee --
+                        viewing your own is always allowed; viewing someone
+                        else's is gated server-side by the
+                        employee_performance permission (a manager evaluating
+                        performance), not by isAdmin here. */}
+                    <button onClick={() => navigate(`/profile/${u.id}`)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                      onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'} title="عرض الملف الشخصي وتقييم الأداء">
+                      <UserCircle className="w-4 h-4" />
+                    </button>
+                    {isAdmin && (
+                      <>
+                        <button onClick={() => setResetTarget(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                          onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'} title="إعادة تعيين كلمة المرور">
+                          <KeyRound className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => setConfirmDelete(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                          onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </Td>
               </Tr>
             ))}
           </tbody>

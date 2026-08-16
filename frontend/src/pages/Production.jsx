@@ -21,6 +21,7 @@ export default function Production() {
   const prefilledCaseId = searchParams.get('case_id') || '';
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [users, setUsers] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
   const [showForm, setShowForm] = useState(!!prefilledCaseId);
@@ -39,8 +40,15 @@ export default function Production() {
   const fetchProduction = () => {
     api.get('/production').then(d => {
       setItems(Array.isArray(d) ? d : d.data || []);
+      setLoadError('');
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(e => {
+      // A failed load used to render the same empty state as "genuinely no
+      // items yet" -- no way to tell "the board is empty" apart from "it
+      // failed to load" (e.g. a permission change, a transient DB error).
+      setLoadError(e.message || 'تعذر تحميل قائمة المونتاج');
+      setLoading(false);
+    });
   };
 
   const fetchUsers = () => {
@@ -114,6 +122,11 @@ export default function Production() {
 
   return (
     <div className="space-y-5 animate-fadeIn" dir="rtl">
+      {loadError && (
+        <div className="px-4 py-3 rounded-xl text-sm" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#EF4444' }}>
+          ❌ تعذر تحميل قائمة المونتاج: {loadError}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>

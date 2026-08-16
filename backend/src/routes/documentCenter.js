@@ -1,12 +1,19 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const multer = require('multer');
 const storage = require('../services/storage');
 const caseFileStorage = require('../services/caseFileStorage');
 const gdrive = require('../services/googleDriveService');
 const composeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+const { requireCaseAccess, canAccessCase } = require('../services/caseAccess');
+const { notifyUsers, getCaseRecipients, getCaseActivityRecipients } = require('../services/notificationService');
+// /cases/:caseId/documents, /upload, /compose, /portal-log previously had no
+// per-case access check -- a role restricted to its own assigned cases
+// could list/upload documents, SEND A REAL OUTBOUND EMAIL as, or log a
+// portal submission on ANY case just by knowing its id.
+const caseGate = requireCaseAccess('caseId');
 
 // communications.metadata is a plain TEXT column (not jsonb) — must stringify/parse manually.
 function parseMetadata(raw) {
@@ -54,19 +61,27 @@ router.get('/documents/:id', requireAuth, async (req, res) => {
   const sup = getSupabase();
   const { data, error } = await sup.from('case_documents').select('*').eq('id', parseInt(req.params.id)).single();
   if (error) return res.status(404).json({ error: error.message });
+  // Scoped by the DOCUMENT's own id, not a case id in the URL -- still owned
+  // by a case, so still has to check that case's visibility.
+  if (data && !(await canAccessCase(sup, req.user, data.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
   res.json({ document: data });
 });
 
 // GET /api/cases/:caseId/documents — list documents for a case
-router.get('/cases/:caseId/documents', requireAuth, async (req, res) => {
+router.get('/cases/:caseId/documents', requireAuth, caseGate, async (req, res) => {
   const sup = getSupabase();
   const { data, error } = await sup.from('case_documents').select('*').eq('case_id', parseInt(req.params.caseId)).order('created_at', { ascending: false });
   if (error) return res.status(400).json({ error: error.message });
   res.json({ documents: data });
 });
 
-// POST /api/cases/:caseId/upload — upload a document
-router.post('/cases/:caseId/upload', requireAuth, async (req, res) => {
+// POST /api/cases/:caseId/upload — register an already-hosted file (a URL,
+// not real bytes) as a case_documents row. Kept as-is for whatever calls it
+// with a pre-existing file_url; NOT what the Documents tab's own upload
+// widget uses (see below).
+router.post('/cases/:caseId/upload', requireAuth, caseGate, async (req, res) => {
   const sup = getSupabase();
   const { file_name, file_type, file_url, file_size, category_id, notes } = req.body;
   const user = res.locals.user;
@@ -85,6 +100,10 @@ router.post('/cases/:caseId/upload', requireAuth, async (req, res) => {
 router.post('/documents/:id/verify', requireAuth, async (req, res) => {
   const sup = getSupabase();
   const user = res.locals.user;
+  const { data: docRow } = await sup.from('case_documents').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (docRow && !(await canAccessCase(sup, req.user, docRow.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
   const { data, error } = await sup.from('case_documents').update({
     verification_status: 'verified', verified_by: user.id,
     verified_at: new Date().toISOString(),
@@ -105,6 +124,9 @@ router.put('/documents/:id', requireAuth, async (req, res) => {
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields to update' });
 
   const { data: before } = await sup.from('case_documents').select('case_id, original_name, storage_provider, drive_file_id').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (before && !(await canAccessCase(sup, req.user, before.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
   const { data, error } = await sup.from('case_documents').update(updates).eq('id', parseInt(req.params.id)).select().single();
   if (error) return res.status(400).json({ error: error.message });
 
@@ -132,8 +154,11 @@ router.get('/documents/:id/download', requireAuth, async (req, res) => {
   // and no response. The click looked like it "just doesn't work".
   try {
     const sup = getSupabase();
-    const { data: doc } = await sup.from('case_documents').select('storage_key, file_path, original_name, storage_provider, drive_file_id').eq('id', parseInt(req.params.id)).maybeSingle();
+    const { data: doc } = await sup.from('case_documents').select('case_id, storage_key, file_path, original_name, storage_provider, drive_file_id').eq('id', parseInt(req.params.id)).maybeSingle();
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canAccessCase(sup, req.user, doc.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     if (doc.storage_provider === 'google_drive' && doc.drive_file_id) {
       // Bound the Drive call so a hung/slow Google API request surfaces as a
@@ -160,6 +185,10 @@ router.get('/documents/:id/download', requireAuth, async (req, res) => {
 // DELETE /api/documents/:id — soft delete
 router.delete('/documents/:id', requireAuth, async (req, res) => {
   const sup = getSupabase();
+  const { data: docRow } = await sup.from('case_documents').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (docRow && !(await canAccessCase(sup, req.user, docRow.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
   const { error } = await sup.from('case_documents').update({ is_deleted: true }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
@@ -283,7 +312,7 @@ router.post('/imap/fix-credentials/:accountId', requireAuth, async (req, res) =>
     res.json({ success: true, result });
   } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
 });
-router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachments', 10), async (req, res) => {
+router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array('attachments', 10), async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
@@ -408,7 +437,7 @@ router.post('/cases/:caseId/compose', requireAuth, composeUpload.array('attachme
 // POST /api/cases/:caseId/portal-log — log a correspondence event submitted
 // through the agency's own portal (no SMTP send, just a record + deadline),
 // mirrors the deadline-tracking block in /compose above.
-router.post('/cases/:caseId/portal-log', requireAuth, async (req, res) => {
+router.post('/cases/:caseId/portal-log', requireAuth, caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
@@ -459,7 +488,13 @@ router.post('/cases/:caseId/portal-log', requireAuth, async (req, res) => {
 router.get('/communications/:id/attachments/:index/download', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data: comm } = await sup.from('communications').select('metadata').eq('id', parseInt(req.params.id)).maybeSingle();
+    const { data: comm } = await sup.from('communications').select('case_id, metadata').eq('id', parseInt(req.params.id)).maybeSingle();
+    // A standalone inbox message (case_id null) isn't case-scoped -- the
+    // org-wide inbox itself has no per-case visibility boundary to enforce
+    // here. One that IS linked to a case must respect that case's scope.
+    if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
     const attachments = parseMetadata(comm?.metadata).attachments || [];
     const att = attachments[parseInt(req.params.index)];
     if (!att) return res.status(404).json({ error: 'Attachment not found' });
@@ -483,7 +518,10 @@ router.delete('/communications/:id/attachments/:index', requireAuth, async (req,
     const sup = getSupabase();
     const commId = parseInt(req.params.id);
     const index = parseInt(req.params.index);
-    const { data: comm } = await sup.from('communications').select('metadata').eq('id', commId).maybeSingle();
+    const { data: comm } = await sup.from('communications').select('case_id, metadata').eq('id', commId).maybeSingle();
+    if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
     const meta = parseMetadata(comm?.metadata);
     const attachments = meta.attachments || [];
     const att = attachments[index];
@@ -515,31 +553,97 @@ router.get('/inbox', requireAuth, async (req, res) => {
   const sup = getSupabase();
   try {
     const { status, account_id, direction, date_from, date_to, search, limit = 50, offset = 0 } = req.query;
-    let query = sup.from('communications').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
-    if (status === 'unread') query = query.is('is_read', false);
-    if (status === 'read') query = query.is('is_read', true);
-    if (status === 'unlinked') query = query.is('case_id', null);
-    if (status === 'linked') query = query.not('case_id', 'is', null);
-    if (account_id) query = query.eq('email_account_id', parseInt(account_id));
-    if (date_from) query = query.gte('created_at', date_from);
-    // date_to is a plain "YYYY-MM-DD" from a <input type="date">, meaning
-    // "through the end of that day" -- compared as-is it would exclude
-    // every message from that day itself (anything after 00:00:00).
-    if (date_to) query = query.lt('created_at', `${date_to}T23:59:59.999`);
-    if (direction === 'inbound' || direction === 'outbound') query = query.eq('direction', direction);
-    if (search) query = query.or(`subject.ilike.%${search}%,sender.ilike.%${search}%,body.ilike.%${search}%`);
 
-    const { data: messages, count, error } = await query;
+    // Resolve free-text search to a set of matching ids via 3 separate
+    // single-column ilike queries instead of a hand-rolled
+    // .or("subject.ilike.%x%,sender.ilike.%x%,...") string -- PostgREST
+    // parses that string's own commas/parens as ITS filter-grammar syntax,
+    // so a search term that happens to contain either (a sender "Smith,
+    // John", a subject with "(Re:)") broke the ENTIRE query with a 500
+    // instead of just not matching. A plain .ilike() call passes the value
+    // as a normal parameter -- nothing hand-rolled, nothing to break.
+    let searchIds = null;
+    if (search) {
+      const [bySubject, bySender, byBody] = await Promise.all([
+        sup.from('communications').select('id').ilike('subject', `%${search}%`),
+        sup.from('communications').select('id').ilike('sender', `%${search}%`),
+        sup.from('communications').select('id').ilike('body', `%${search}%`),
+      ]);
+      searchIds = new Set([...(bySubject.data || []), ...(bySender.data || []), ...(byBody.data || [])].map(r => r.id));
+    }
+
+    // migrations/012 (is_archived/reviewed_by) may not have been run yet in
+    // this environment -- build the query with archive support, but if it
+    // fails specifically because that column doesn't exist, retry once
+    // without it rather than hard-failing the entire inbox (every tab, not
+    // just أرشيف) until the migration lands.
+    const buildQuery = (withArchiveSupport) => {
+      let q = sup.from('communications').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+      if (status === 'archived') {
+        if (withArchiveSupport) q = q.eq('is_archived', true);
+      } else {
+        // Archived messages have their own tab -- every other tab
+        // (all/unread/unlinked/linked) should exclude them, otherwise
+        // "أرشفة" would keep a message showing up in the main list forever,
+        // identical to before this migration when it was just an is_read
+        // alias. .not(col, 'is', true) rather than .eq(col, false) so a row
+        // that somehow has NULL here still counts as "not archived" instead
+        // of silently vanishing.
+        if (withArchiveSupport) q = q.not('is_archived', 'is', true);
+        if (status === 'unread') q = q.is('is_read', false);
+        if (status === 'read') q = q.is('is_read', true);
+        if (status === 'unlinked') q = q.is('case_id', null);
+        if (status === 'linked') q = q.not('case_id', 'is', null);
+      }
+      if (account_id) q = q.eq('email_account_id', parseInt(account_id));
+      if (date_from) q = q.gte('created_at', date_from);
+      // date_to is a plain "YYYY-MM-DD" from a <input type="date">, meaning
+      // "through the end of that day" -- compared as-is it would exclude
+      // every message from that day itself (anything after 00:00:00).
+      if (date_to) q = q.lt('created_at', `${date_to}T23:59:59.999`);
+      if (direction === 'inbound' || direction === 'outbound') q = q.eq('direction', direction);
+      if (searchIds) q = q.in('id', searchIds.size ? [...searchIds] : [-1]);
+      return q;
+    };
+
+    let archiveSupported = true;
+    let { data: messages, count, error } = await buildQuery(true);
+    if (error && /is_archived/.test(error.message)) {
+      archiveSupported = false;
+      ({ data: messages, count, error } = await buildQuery(false));
+    }
     if (error) return res.status(500).json({ error: error.message });
+
+    // Batch-resolve reviewer names ("تم الفحص") -- no reliance on a
+    // PostgREST embedded-relationship join (see portals.js's earlier fix for
+    // why that's fragile), just a second query keyed by the distinct ids.
+    const reviewerIds = [...new Set((messages || []).map(m => m.reviewed_by).filter(Boolean))];
+    let reviewerNames = {};
+    if (reviewerIds.length) {
+      const { data: reviewers } = await sup.from('users').select('id, name').in('id', reviewerIds);
+      reviewerNames = Object.fromEntries((reviewers || []).map(u => [u.id, u.name]));
+    }
+
     const parsed = (messages || []).map(m => {
       let metadata = {};
       if (m.metadata) {
         if (typeof m.metadata !== 'string') metadata = m.metadata;
         else { try { metadata = JSON.parse(m.metadata); } catch { metadata = {}; } }
       }
-      return { ...m, metadata };
+      return { ...m, metadata, reviewed_by_name: m.reviewed_by ? (reviewerNames[m.reviewed_by] || null) : null };
     });
-    res.json({ success: true, data: parsed, total: count || 0 });
+
+    // If searching outside the archive, tell the user whether the same
+    // search also has hits INSIDE the archive -- otherwise an archived
+    // match is invisible with no indication it exists at all.
+    let archivedMatches = 0;
+    if (archiveSupported && search && status !== 'archived') {
+      const { count: archCount } = await sup.from('communications').select('id', { count: 'exact', head: true })
+        .eq('is_archived', true).in('id', searchIds.size ? [...searchIds] : [-1]);
+      archivedMatches = archCount || 0;
+    }
+
+    res.json({ success: true, data: parsed, total: count || 0, archivedMatches });
   } catch (ex) { res.status(500).json({ error: ex.message }); }
 });
 
@@ -610,8 +714,37 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
     if (case_id) updates.case_id = parseInt(case_id);
     if (agency_id) updates.agency_id = parseInt(agency_id);
     updates.is_read = true;
+
+    // A manual link resolves whatever ambiguity the automatic matcher
+    // flagged (see mailPoller.js's possibleMatches) -- clear it so a
+    // resolved message doesn't keep showing a stale "might also be case X/Y"
+    // hint after the user already picked one.
+    const { data: existing } = await sup.from('communications').select('metadata, subject, sender').eq('id', parseInt(req.params.id)).maybeSingle();
+    if (existing) {
+      let meta = {};
+      try { meta = existing.metadata ? JSON.parse(existing.metadata) : {}; } catch { meta = {}; }
+      if (meta.possible_matches) { delete meta.possible_matches; updates.metadata = JSON.stringify(meta); }
+    }
+
     const { error } = await sup.from('communications').update(updates).eq('id', parseInt(req.params.id));
     if (error) return res.status(400).json({ error: error.message });
+
+    // A manually-linked email is exactly the same "email arrived on this
+    // case" event the automatic matcher already notifies for in
+    // mailPoller.js -- this route just never fired it, so linking an email
+    // by hand was invisible on the case's activity badge even though the
+    // automatic path for the same outcome wasn't.
+    if (updates.case_id) {
+      try {
+        const recipients = await getCaseActivityRecipients(sup, updates.case_id, { excludeUserId: req.user?.id });
+        await notifyUsers(sup, recipients, {
+          type: 'email_received', title: '📩 بريد مرتبط بالقضية',
+          body: `${req.user?.name || 'أحد الموظفين'} ربط بريدًا (${existing?.sender || ''}: ${existing?.subject || ''}) بالقضية`,
+          target_type: 'case', target_id: updates.case_id,
+        });
+      } catch (e) { console.error('[inbox] link notification failed:', e.message); }
+    }
+
     res.json({ success: true });
   } catch (ex) { res.status(500).json({ error: ex.message }); }
 });
@@ -626,10 +759,47 @@ router.put('/inbox/:id/read', requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
-// PUT /api/inbox/:id/archive
+// PUT /api/inbox/:id/archive -- previously just an is_read alias with no
+// real archived state at all (see the migration note in
+// migrations/012_communications_review_archive.sql); this now actually
+// removes the message from the main inbox tabs into its own أرشيف tab.
 router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { error } = await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('communications').update({ is_archived: true, archived_at: new Date().toISOString() }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ success: true });
+});
+
+// PUT /api/inbox/:id/unarchive -- restore a message back to the main inbox.
+router.put('/inbox/:id/unarchive', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const { error } = await sup.from('communications').update({ is_archived: false, archived_at: null }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ success: true });
+});
+
+// PUT /api/inbox/:id/review -- "تم الفحص": records which employee reviewed
+// this message. Distinct from is_read (which just means "opened") -- a
+// message can be opened without anyone having actually verified its content.
+router.put('/inbox/:id/review', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const { error } = await sup.from('communications')
+    .update({ reviewed_by: req.user.id, reviewed_at: new Date().toISOString() })
+    .eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ success: true, reviewed_by: req.user.id, reviewed_by_name: req.user.name, reviewed_at: new Date().toISOString() });
+});
+
+// PUT /api/inbox/:id/unlink -- detach a message from whatever case/agency
+// it's currently linked to, without deleting it, so it can be manually
+// relinked to a DIFFERENT case that actually matches (e.g. after the
+// automatic matcher's fuzzy tiers guessed wrong, or flagged more than one
+// plausible case as `possible_matches` in metadata).
+router.put('/inbox/:id/unlink', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const { error } = await sup.from('communications')
+    .update({ case_id: null, agency_id: null, request_id: null })
+    .eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
@@ -642,6 +812,11 @@ router.get('/communications/:id', requireAuth, async (req, res) => {
     const { data, error } = await sup.from('communications').select('*').eq('id', parseInt(req.params.id)).maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Message not found' });
+    // Standalone inbox messages (case_id null) have no case boundary to
+    // enforce; a message linked to a case must respect that case's scope.
+    if (data.case_id && !(await canAccessCase(sup, req.user, data.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
     res.json({ success: true, data: { ...data, metadata: parseMetadata(data.metadata) } });
   } catch (ex) { res.status(500).json({ error: ex.message }); }
 });
@@ -654,8 +829,11 @@ router.delete('/communications/:id', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
     const commId = parseInt(req.params.id);
-    const { data: comm } = await sup.from('communications').select('metadata, subject').eq('id', commId).maybeSingle();
+    const { data: comm } = await sup.from('communications').select('case_id, metadata, subject').eq('id', commId).maybeSingle();
     if (!comm) return res.status(404).json({ error: 'Message not found' });
+    if (comm.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     const meta = parseMetadata(comm.metadata);
     for (const att of meta.attachments || []) {
@@ -690,6 +868,19 @@ router.post('/imap/poll', requireAuth, async (req, res) => {
   } catch (ex) { res.json({ success: false, error: ex.message }); }
 });
 
+// POST /api/imap/backfill-html — one-time enrichment for emails that
+// arrived before body_html existed. Admin-only: re-fetches each account's
+// mailbox from before its earliest still-missing message, which can be
+// slow (a real IMAP round trip per account, potentially many messages) and
+// isn't something to trigger from a regular user action.
+router.post('/imap/backfill-html', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const mailPoller = require('../services/mailPoller');
+    const results = await mailPoller.backfillHtmlBodies();
+    res.json({ success: true, results });
+  } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
+});
+
 // TEMP DIAGNOSTIC — GET /api/imap/raw-fetch/:accountId
 // Calls pollAccount directly (no insert) and returns exactly what IMAP
 // fetch returned, to compare against what should be there.
@@ -716,7 +907,19 @@ router.get('/inbox/unread-count', requireAuth, async (req, res) => {
     // (sent) message defaults to is_read=false too (no insert path ever set
     // it), so every email this system ever sent inflated its own "unread"
     // badge. You don't read your own sent mail; only inbound counts.
-    const { count, error } = await sup.from('communications').select('*', { count: 'exact', head: true }).is('is_read', false).eq('direction', 'inbound');
+    //
+    // Also was missing the same archive exclusion GET /inbox's own "unread"
+    // tab already applies -- an unread message that gets archived without
+    // ever being opened (archiving doesn't require reading first) stayed
+    // counted in this badge forever, while never appearing under the
+    // "غير مقروء" tab itself (excluded there because archived), only under
+    // "الأرشيف". Badge and tab permanently disagreed on the same message.
+    let { count, error } = await sup.from('communications').select('*', { count: 'exact', head: true })
+      .is('is_read', false).eq('direction', 'inbound').not('is_archived', 'is', true);
+    if (error && /is_archived/.test(error.message)) {
+      ({ count, error } = await sup.from('communications').select('*', { count: 'exact', head: true })
+        .is('is_read', false).eq('direction', 'inbound'));
+    }
     if (error) return res.json({ unread: 0 });
     res.json({ unread: count || 0 });
   } catch (ex) { res.json({ unread: 0 }); }

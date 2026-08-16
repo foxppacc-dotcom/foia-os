@@ -122,6 +122,17 @@ export default function AgenciesTab() {
     catch (e) { alert('❌ فشل تسجيل الاطلاع: ' + e.message); }
   };
 
+  const [rescanning, setRescanning] = useState(false);
+  const runRescan = async () => {
+    setRescanning(true);
+    try {
+      const r = await api.post('/cases/rescan-unmatched');
+      alert(r.linked > 0 ? `✅ تم ربط ${r.linked} رسالة من أصل ${r.scanned} رسالة غير مرتبطة تمت مراجعتها` : `لم يتم العثور على تطابقات جديدة (تمت مراجعة ${r.scanned} رسالة غير مرتبطة)`);
+      if (r.linked > 0) refetch?.(true);
+    } catch (e) { alert('❌ ' + e.message); }
+    setRescanning(false);
+  };
+
   const logPortalSubmission = async (reqId, agencyId) => {
     const form = portalForm[reqId] || {};
     const days = Math.min(30, Math.max(1, parseInt(form.expected_response_days) || 20));
@@ -139,7 +150,12 @@ export default function AgenciesTab() {
 
   return (
     <AppSection title={'الجهات (' + (grouped?.length || 0) + ')'}
-      actions={<AppButton size="sm" icon={<Plus className="w-3.5 h-3.5" />} onClick={() => setShowAdd(!showAdd)}>إضافة</AppButton>}>
+      actions={<>
+        <AppButton size="sm" variant="secondary" disabled={rescanning} onClick={runRescan} title="إعادة فحص الرسائل الواردة غير المرتبطة بناءً على بيانات القضية والجهات الحالية">
+          {rescanning ? 'جارٍ الفحص...' : 'إعادة فحص الرسائل غير المرتبطة'}
+        </AppButton>
+        <AppButton size="sm" icon={<Plus className="w-3.5 h-3.5" />} onClick={() => setShowAdd(!showAdd)}>إضافة</AppButton>
+      </>}>
       {showAdd && (
         <div className="space-y-2 mb-3 p-2.5 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)', border: '1px dashed var(--ds-border)' }}>
           <div className="flex items-center gap-2">
@@ -328,11 +344,16 @@ export default function AgenciesTab() {
                               </div>
                             )}
                             {isAcked && (
-                              <div className="flex items-center gap-1.5 mb-2 text-xs px-2.5 py-1.5 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>
+                              <div className="flex items-center gap-1.5 mb-2 text-xs px-2.5 py-1.5 rounded-lg flex-wrap" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>
                                 <CheckCircle className="w-4 h-4" /> تخطّى الموعد المتوقع للرد — تم الاطلاع من قبل{' '}
                                 <button onClick={() => navigate(`/profile/${req.overdue_ack_user?.id}`)} className="underline" style={{ color: 'var(--ds-accent)' }}>
                                   {req.overdue_ack_user?.name || 'مستخدم'}
                                 </button>
+                                {req.overdue_ack_at && (
+                                  <span>
+                                    ({new Date(req.overdue_ack_at).toLocaleDateString('ar-EG')} — {new Date(req.overdue_ack_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })})
+                                  </span>
+                                )}
                               </div>
                             )}
                             {!isLate && req.expected_response_date && (

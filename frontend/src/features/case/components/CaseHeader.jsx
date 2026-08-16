@@ -50,6 +50,20 @@ export default memo(function CaseHeader() {
   const unacknowledgedOverdue = overdueList.filter(r => !r.overdue_ack_by);
   const overdueReqs = unacknowledgedOverdue.length;
 
+  // Same classification-badge logic as Cases.jsx's list view -- a case's
+  // "classification" is really per-request (which pipeline list each agency
+  // request sits in), so this shows the single classification when every
+  // request agrees, "لم يبدأ بعد" as the default when nothing's classified
+  // yet, or a distinct "mixed" badge when requests disagree, rather than
+  // arbitrarily picking the first request's value.
+  const classifiedReqs = (requests || []).filter(r => r.classification_id != null);
+  const distinctClassNames = [...new Set(classifiedReqs.map(r => r.classification_name_ar))];
+  const caseClassification = distinctClassNames.length === 1
+    ? { name: distinctClassNames[0], color: classifiedReqs[0]?.classification_color || '#6B7280' }
+    : distinctClassNames.length > 1
+      ? { name: 'تصنيفات متعددة', color: '#8B5CF6' }
+      : { name: 'لم يبدأ بعد', color: '#6B7280' };
+
   const acknowledgeOverdue = async (requestId) => {
     try {
       await fetch(`${API}/requests/${requestId}/acknowledge-overdue`, { method: 'POST', headers: hdrs() });
@@ -129,6 +143,10 @@ export default memo(function CaseHeader() {
           <h1 className="text-xl font-bold truncate" style={{ color: 'var(--ds-text-primary)' }}>{c.title}</h1>
           <AppBadge variant={stageInfo.variant}>{stageInfo.label}</AppBadge>
           <AppBadge variant={pBadge}>{c.priority === 'urgent' ? 'عاجل جدًا' : c.priority === 'high' ? 'عاجل' : c.priority === 'medium' ? 'متوسط' : 'عادي'}</AppBadge>
+          <span className="px-2 py-0.5 rounded-full text-[11px] font-medium"
+            style={{ background: caseClassification.color + '15', color: caseClassification.color }}>
+            🏷️ {caseClassification.name}
+          </span>
         </div>
         <div className="flex items-center gap-3 text-xs flex-wrap" style={{ color: 'var(--ds-text-muted)' }}>
           <span>#{c.id}</span>
@@ -184,6 +202,15 @@ export default memo(function CaseHeader() {
                       <button onClick={() => navigate(`/profile/${r.overdue_ack_user?.id}`)} className="underline" style={{ color: 'var(--ds-accent)' }}>
                         {r.overdue_ack_user?.name || 'مستخدم'}
                       </button>
+                      {/* WHO was already shown here, but WHEN only lived in
+                          the Timeline tab -- a permanent record you can't
+                          see is barely better than none, so surface the
+                          acknowledgment date right on the card too. */}
+                      {r.overdue_ack_at && (
+                        <span className="block mt-0.5" style={{ color: 'var(--ds-text-muted)' }}>
+                          {new Date(r.overdue_ack_at).toLocaleDateString('ar-EG')} — {new Date(r.overdue_ack_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-2">

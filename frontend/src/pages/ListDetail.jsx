@@ -2,16 +2,14 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 
-const LIST_COLORS = {
-  1: '#10B981', 2: '#F59E0B', 3: '#6B7280', 4: '#EF4444',
-  5: '#8B5CF6', 6: '#F97316', 7: '#EC4899',
-};
-
-const LIST_NAMES = {
-  1: '✅ تم استلام السجلات', 2: '💰 مطلوب دفع', 3: '🚫 مفيش سجلات متوفرة',
-  4: '⛔ تم الرفض بموجب القانون', 5: '⚖️ القضية مفتوحة في المحكمة',
-  6: '📷 الوكالة لا تستخدم البودي كام', 7: '🆔 محتاج تأكيد مواطنة',
-};
+// pipeline_lists ids are seeded/inserted per environment, not guaranteed to
+// be 1-7 in a fixed order -- a hardcoded id->color/name fallback map here
+// would show an arbitrary, unrelated color/name for whichever list actually
+// happens to hold that id (same bug class already fixed in
+// cases.js/production.js/classifier.js/automation.js this session). The
+// real `data.color`/`data.name_ar` from the API is always correct; a
+// neutral, data-independent default covers the rare case those are unset.
+const DEFAULT_LIST_COLOR = '#6B7280';
 
 export default function ListDetail() {
   const { id } = useParams();
@@ -32,8 +30,8 @@ export default function ListDetail() {
     </div>
   );
 
-  const color = data.color || LIST_COLORS[id] || '#6B7280';
-  const listName = data.name_ar || LIST_NAMES[id] || 'قائمة';
+  const color = data.color || DEFAULT_LIST_COLOR;
+  const listName = data.name_ar || 'قائمة';
 
   return (
     <div className="space-y-6 animate-fadeIn max-w-6xl mx-auto">

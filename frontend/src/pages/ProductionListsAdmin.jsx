@@ -40,16 +40,19 @@ export default function ProductionListsAdmin() {
       await api.delete(`/pipeline-lists/${id}`);
       const d = await api.get('/pipeline-lists');
       setPipelineLists(d.data || []);
-    } catch {}
+    } catch (e) { alert('❌ فشل حذف القائمة: ' + e.message); }
   };
 
+  // Both silently swallowed any failure before (empty catch) -- the arrow
+  // buttons would just appear to do nothing, with zero indication whether
+  // the request even reached the server, let alone why it failed.
   const moveListUp = async (list, index) => {
     if (index === 0) return;
     try {
       await api.put(`/pipeline-lists/${list.id}/reorder`, { list_number: list.list_number - 1 });
       const d = await api.get('/pipeline-lists');
       setPipelineLists(d.data || []);
-    } catch {}
+    } catch (e) { alert('❌ فشل تغيير الترتيب: ' + e.message); }
   };
 
   const moveListDown = async (list, index) => {
@@ -58,7 +61,7 @@ export default function ProductionListsAdmin() {
       await api.put(`/pipeline-lists/${list.id}/reorder`, { list_number: list.list_number + 1 });
       const d = await api.get('/pipeline-lists');
       setPipelineLists(d.data || []);
-    } catch {}
+    } catch (e) { alert('❌ فشل تغيير الترتيب: ' + e.message); }
   };
 
   const updateListAssignees = async (listId, userIds) => {
@@ -66,7 +69,7 @@ export default function ProductionListsAdmin() {
       await api.post(`/pipeline/lists/${listId}/assignees`, { user_ids: userIds });
       const a = await api.get(`/pipeline/lists/${listId}/assignees`);
       setListAssignees(prev => ({ ...prev, [listId]: a.data || [] }));
-    } catch {}
+    } catch (e) { alert('❌ فشل تحديث فريق القائمة: ' + e.message); }
   };
 
   const updateListColor = async (id, color) => {
@@ -74,7 +77,7 @@ export default function ProductionListsAdmin() {
       await api.put(`/pipeline-lists/${id}`, { color });
       const d = await api.get('/pipeline-lists');
       setPipelineLists(d.data || []);
-    } catch {}
+    } catch (e) { alert('❌ فشل تغيير اللون: ' + e.message); }
   };
 
   return (
@@ -141,7 +144,7 @@ export default function ProductionListsAdmin() {
                     api.put(`/pipeline-lists/${list.id}`, { name_ar: newNameAr.trim(), name_en: newNameEn.trim() })
                       .then(() => api.get('/pipeline-lists'))
                       .then(d => setPipelineLists(d.data || []))
-                      .catch(() => {});
+                      .catch(e => alert('❌ فشل تعديل الاسم: ' + e.message));
                   }
                 }
               }}

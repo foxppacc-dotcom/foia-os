@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api, getApiBase } from '../api';
+import { api, getApiBase, getCurrentUser } from '../api';
 import { Mail, Plus, Trash2, RefreshCw, Send, Power, PowerOff, Loader2, X, CheckCircle, AlertCircle, Pencil } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
@@ -20,6 +20,7 @@ export default function EmailAccounts() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [fetching, setFetching] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testEmail, setTestEmail] = useState({ account_id: '', to: '', subject: '', body: '' });
@@ -182,6 +183,23 @@ export default function EmailAccounts() {
     setFetching(false);
   };
 
+  // One-time enrichment for emails received before body_html existed. Runs
+  // through the CURRENT browser session's real token -- IMAP passwords are
+  // encrypted with a server-side key, and this can only be exercised from a
+  // properly authenticated request against the real deployed backend, not
+  // simulated locally.
+  const handleBackfillHtml = async () => {
+    setBackfilling(true); clearFeedback();
+    try {
+      const r = await fetch(`${BASE}/imap/backfill-html`, { method: 'POST', headers: hdrs() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { setError(d.error || 'فشل الاسترجاع'); setBackfilling(false); return; }
+      const summary = (d.results || []).map(r => r.error ? `${r.account}: ${r.error}` : `${r.account}: ${r.stillMissingBefore ?? '?'} → ${r.stillMissingAfter ?? '?'}`).join(' | ');
+      setSuccess(`تم الاسترجاع — ${summary}`);
+    } catch { setError('خطأ في الاتصال'); }
+    setBackfilling(false);
+  };
+
   const handleResetCounters = async () => {
     setResetting(true);
     try { await api.post('/reset-counters', {}); } catch {}
@@ -227,6 +245,11 @@ export default function EmailAccounts() {
           {success && <div className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>{success}</div>}
           <Button variant="secondary" size="sm" icon={RefreshCw} onClick={handleResetCounters} disabled={resetting}>تصفير العدادات</Button>
           <Button variant="secondary" size="sm" icon={Loader2} onClick={handleFetchAll} disabled={fetching}>جلب الإيميلات</Button>
+          {getCurrentUser()?.role === 'admin' && (
+            <Button variant="secondary" size="sm" icon={RefreshCw} onClick={handleBackfillHtml} disabled={backfilling} title="جلب نسخة HTML كاملة للإيميلات القديمة التي وصلت قبل إضافة هذه الميزة">
+              {backfilling ? 'جارٍ الاسترجاع...' : 'استرجاع HTML للإيميلات القديمة'}
+            </Button>
+          )}
           <Button icon={Plus} onClick={() => { setShowForm(true); clearFeedback(); }}>إضافة حساب</Button>
         </>} />
 

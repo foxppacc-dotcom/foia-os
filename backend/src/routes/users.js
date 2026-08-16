@@ -18,9 +18,21 @@ router.get('/users', async (req, res) => {
     .select(`id, name, email, role, team_id, teams!left(name), created_at`)
     .order('created_at', { ascending: false });
 
+  // Users.jsx's "التخصصات" column reads u.specialties as an array of
+  // specialty ids -- never populated here before, so it always fell back to
+  // showing "—" for every user regardless of what was actually assigned via
+  // the create-user form (see the matching fix in POST /users below).
+  const userIds = (users || []).map(u => u.id);
+  const specIdsByUser = {};
+  if (userIds.length) {
+    const { data: links } = await sup.from('user_specialties').select('user_id, specialty_id').in('user_id', userIds);
+    for (const l of links || []) (specIdsByUser[l.user_id] ||= []).push(l.specialty_id);
+  }
+
   const mapped = (users || []).map(u => ({
     ...u,
     team_name: u.teams?.name || null,
+    specialties: specIdsByUser[u.id] || [],
     teams: undefined
   }));
 
@@ -38,7 +50,7 @@ async function getValidRoleNames(sup) {
 
 // POST /api/users — create user
 router.post('/users', requirePermission('users', 'invite'), async (req, res) => {
-  const { name, email, password, role, team_id } = req.body;
+  const { name, email, password, role, team_id, specialties } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, password required' });
 
   const sup = getSupabase();
@@ -56,6 +68,15 @@ router.post('/users', requirePermission('users', 'invite'), async (req, res) => 
     .single();
 
   if (error) throw error;
+
+  // Users.jsx's create-user form lets an admin pick specialties up front,
+  // but this was silently dropped -- the checkboxes did nothing.
+  if (Array.isArray(specialties) && specialties.length) {
+    const { error: specErr } = await sup.from('user_specialties').insert(
+      specialties.map(specialty_id => ({ user_id: created.id, specialty_id }))
+    );
+    if (specErr) console.error(`[users] user_specialties insert failed for user ${created.id}:`, specErr.message);
+  }
 
   res.json({ success: true, id: created.id, message: `✅ تم إضافة ${name}` });
 });

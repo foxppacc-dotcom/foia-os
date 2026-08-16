@@ -42,6 +42,7 @@ const ListDetail = lazy(() => import('./pages/ListDetail'));
 const Inbox = lazy(() => import('./pages/Inbox'));
 const MessageView = lazy(() => import('./pages/MessageView'));
 const TeamPermissions = lazy(() => import('./components/TeamPermissions'));
+const Forum = lazy(() => import('./pages/Forum'));
 
 function AppFallback() { return <div style={{padding:"20px",color:"var(--ds-text-muted)"}}>جاري التحميل...</div>; }
 
@@ -151,6 +152,7 @@ function App() {
             <Route path="/portals" element={<Portals />} />
             <Route path="/email-accounts" element={<EmailAccounts />} />
             <Route path="/inbox" element={<Inbox />} />
+            <Route path="/forum" element={<Forum />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/production-lists" element={<ProductionListsAdmin />} />
             <Route path="/theme-settings" element={<ThemeSettings />} />

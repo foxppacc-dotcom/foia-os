@@ -107,7 +107,20 @@ router.get('/agencies', requireAuth, requirePermission('agencies', 'view'), asyn
   let query = sup.from('agencies').select('*', { count: 'exact' });
 
   if (search) {
-    query = query.or(`name_ar.ilike.%${search}%,name_en.ilike.%${search}%,state.ilike.%${search}%,city.ilike.%${search}%`);
+    // Resolved via 4 separate single-column ilike queries instead of a
+    // hand-rolled .or("name_ar.ilike.%x%,...") string -- PostgREST parses
+    // that string's own commas/parens as ITS filter-grammar syntax, so a
+    // search term that happens to contain either broke the ENTIRE query
+    // with a 500 instead of just not matching.
+    const [byNameAr, byNameEn, byState, byCity] = await Promise.all([
+      sup.from('agencies').select('id').ilike('name_ar', `%${search}%`),
+      sup.from('agencies').select('id').ilike('name_en', `%${search}%`),
+      sup.from('agencies').select('id').ilike('state', `%${search}%`),
+      sup.from('agencies').select('id').ilike('city', `%${search}%`),
+    ]);
+    const matchedIds = [...new Set([...(byNameAr.data || []), ...(byNameEn.data || []), ...(byState.data || []), ...(byCity.data || [])].map(r => r.id))];
+    if (!matchedIds.length) return res.json({ success: true, data: [], total: 0, page: parseInt(page), limit: parseInt(limit) });
+    query = query.in('id', matchedIds);
   }
   if (type) query = query.eq('type', type);
   if (status === 'active') query = query.eq('is_active', true);
@@ -193,7 +206,8 @@ router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), 
   const { data: existing } = await sup.from('agencies').select('id').eq('id', id).single();
   if (!existing) return res.status(404).json({ error: 'Not found' });
 
-  const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, is_active, reply_to, default_email_account_id, website, tracking_portal_url } = req.body;
+  const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, is_active, reply_to, default_email_account_id, website, tracking_portal_url,
+    primary_email, secondary_emails, preferred_contact, assigned_email_account_id, average_response_days, last_communication } = req.body;
 
   const updates = {};
   if (name_ar !== undefined) updates.name_ar = name_ar;
@@ -211,6 +225,19 @@ router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), 
   if (default_email_account_id !== undefined) updates.default_email_account_id = default_email_account_id || null;
   if (website !== undefined) updates.website = website || null;
   if (tracking_portal_url !== undefined) updates.tracking_portal_url = tracking_portal_url || null;
+  // These 6 used to only be handled by a second, duplicate PUT /agencies/:id
+  // registered in teamManagement.js -- which mounts AFTER this router in
+  // index.js's routes array, so Express always dispatched here first and
+  // that duplicate handler never actually ran. Nothing could ever set these
+  // fields even though Cases.jsx already displays average_response_days when
+  // present. Merged in here (the one route that's actually live) instead of
+  // leaving a dead, unreachable copy elsewhere.
+  if (primary_email !== undefined) updates.primary_email = primary_email;
+  if (secondary_emails !== undefined) updates.secondary_emails = secondary_emails;
+  if (preferred_contact !== undefined) updates.preferred_contact = preferred_contact;
+  if (assigned_email_account_id !== undefined) updates.assigned_email_account_id = assigned_email_account_id || null;
+  if (average_response_days !== undefined) updates.average_response_days = average_response_days;
+  if (last_communication !== undefined) updates.last_communication = last_communication;
 
   let { error } = await sup.from('agencies').update(updates).eq('id', id);
   let skipped = [];

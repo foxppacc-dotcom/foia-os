@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Users } from 'lucide-react';
+import { useToast } from '../components/ui/Toast';
 
 const LIST_STYLES_BY_ID = {
   1: { bg: '#10B981', label: '✅ تم استلام السجلات', emoji: '✅' },
@@ -104,6 +105,7 @@ function ListAssignees({ listId, listColor, assignees, allUsers, isOpen, onToggl
 }
 
 export default function Pipeline() {
+  const toast = useToast();
   const [lists, setLists] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draggedItem, setDraggedItem] = useState(null);
@@ -156,7 +158,7 @@ export default function Pipeline() {
     try {
       const d = await api.post(`/pipeline/lists/${listId}/assignees`, { user_ids: userIds });
       setAssigneesByList(prev => ({ ...prev, [listId]: d.data || [] }));
-    } catch {}
+    } catch (e) { toast.error('فشل حفظ المسؤولين: ' + e.message); }
   };
 
   const saveOpenLists = (newSet) => {
@@ -192,7 +194,7 @@ export default function Pipeline() {
     try {
       await api.put(`/requests/${requestId}/classification`, { classification_id: toListId });
       fetchPipeline();
-    } catch {}
+    } catch (e) { toast.error('فشل نقل الطلب: ' + e.message); }
   };
 
   // ترتيب البطاقات داخل القائمة — Drag & Drop internally
@@ -223,7 +225,11 @@ export default function Pipeline() {
     // run them together instead of one at a time. A 20-30 card list
     // (a plausible column size) previously blocked the post-drag refresh
     // on 20-30 sequential round trips.
-    await Promise.all(newOrder.map((id, i) => api.put(`/requests/${id}/sort`, { sort_order: (newOrder.length - i) })));
+    try {
+      await Promise.all(newOrder.map((id, i) => api.put(`/requests/${id}/sort`, { sort_order: (newOrder.length - i) })));
+    } catch (e) {
+      toast.error('فشل حفظ الترتيب الجديد: ' + e.message);
+    }
     fetchPipeline();
   };
 
@@ -287,40 +293,44 @@ export default function Pipeline() {
       </div>
 
       {viewMode === 'columns' ? (
-        /* ===== أعمدة — تمرير عام واحد ===== */
+        /* ===== أعمدة — تمرير عام واحد =====
+           Narrowed from 280-340px to ~180-220px (roughly 6 columns visible
+           at once instead of 3) with tighter internal spacing throughout --
+           same color-coded header/card language as before, just a more
+           compact, professional density. */
         <div className="flex-1 overflow-y-auto">
-          <div className="flex gap-4 pb-4" style={{ minHeight: '100%' }}>
+          <div className="flex gap-2.5 pb-4" style={{ minHeight: '100%' }}>
             {lists.filter(isListVisible).map(col => {
               const items = col.requests || col.tasks || [];
               const st = LIST_STYLES_BY_ID[col.id] || { bg: '#6B7280', label: col.name_ar };
               return (
-                <div key={col.id} className="flex flex-col shrink-0 rounded-2xl overflow-hidden"
-                  style={{ minWidth: '280px', maxWidth: '340px', minHeight: '100%', boxShadow: 'var(--shadow-sm)' }}
+                <div key={col.id} className="flex flex-col shrink-0 rounded-xl overflow-hidden"
+                  style={{ minWidth: '180px', maxWidth: '220px', minHeight: '100%', boxShadow: 'var(--shadow-sm)' }}
                   onDragOver={handleDragOver} onDrop={e => handleDrop(e, col.id)}>
-                  <div className="px-4 py-3 border border-b-0 flex items-center justify-between"
+                  <div className="px-2.5 py-2 border border-b-0 flex items-center justify-between gap-1"
                     style={{ background: st.bg + '15', borderColor: st.bg + '30' }}>
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full" style={{ background: st.bg }} />
-                      <h3 className="font-bold" style={{ color: 'var(--text-primary)' }}>{col.name_ar}</h3>
-                      <span className="px-2 py-0.5 rounded font-bold cursor-pointer hover:opacity-80 transition-opacity"
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <div className="w-2 h-2 rounded-full shrink-0" style={{ background: st.bg }} />
+                      <h3 className="font-semibold text-[12px] truncate" style={{ color: 'var(--text-primary)' }} title={col.name_ar}>{col.name_ar}</h3>
+                      <span className="px-1.5 py-0.5 rounded text-[11px] font-bold cursor-pointer hover:opacity-80 transition-opacity shrink-0"
                         style={{ background: st.bg + '20', color: st.bg }}
                         onClick={() => navigate(`/pipeline/lists/${col.id}`)}>{items.length}</span>
                     </div>
                     <ListAssignees listId={col.id} listColor={st.bg} assignees={assigneesByList[col.id]} allUsers={allUsers}
                       isOpen={openAssignFor === col.id} onToggle={setOpenAssignFor} onSave={saveAssignees} />
                   </div>
-                  <div className="flex-1 p-3 space-y-2.5 border overflow-y-auto"
+                  <div className="flex-1 p-2 space-y-2 border overflow-y-auto"
                     style={{ borderColor: st.bg + '30', background: 'var(--bg-primary)', minHeight: '200px' }}>
                     {items.length === 0 ? (
-                      <div className="flex items-center justify-center py-12 rounded-xl border-2 border-dashed" style={{ borderColor: 'var(--border)' }}>
-                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>📥 اسحب البطاقة هنا</p>
+                      <div className="flex items-center justify-center py-8 rounded-lg border-2 border-dashed" style={{ borderColor: 'var(--border)' }}>
+                        <p className="text-[11px] text-center px-1" style={{ color: 'var(--text-muted)' }}>📥 اسحب هنا</p>
                       </div>
                     ) : items.map((item, idx) => (
                       <div key={item.id} draggable
                         onDragStart={e => handleInternalDragStart(e, item.id, col.list_number, idx)}
                         onDragEnd={() => setDraggedItemInside(null)}
                         onClick={() => item.case_id && navigate(`/cases/${item.case_id}`)}
-                        className="rounded-2xl border cursor-grab active:cursor-grabbing transition-all duration-150 hover:-translate-y-0.5"
+                        className="rounded-xl border cursor-grab active:cursor-grabbing transition-all duration-150 hover:-translate-y-0.5"
                         style={{
                           background: 'var(--bg-secondary)', borderColor: 'var(--border)',
                           opacity: draggedItem === item.id || draggedItemInside?.requestId === item.id ? 0.4 : 1,
@@ -328,15 +338,15 @@ export default function Pipeline() {
                         }}
                         onDragOver={e => { e.preventDefault(); }}
                         onDrop={e => handleInternalDrop(e, col, idx)}>
-                        <div className="px-4 py-3">
-                          <div className="flex items-center justify-between">
-                            <span className="font-mono font-bold" style={{ color: st.bg, fontSize: '1rem' }}>#{item.case_id || item.id}</span>
-                            {item.priority === 'high' && <span className="px-1.5 py-0.5 rounded text-xs font-medium" style={{ background: '#EF444420', color: '#EF4444' }}>عاجل</span>}
+                        <div className="px-2.5 py-2">
+                          <div className="flex items-center justify-between gap-1 mb-1">
+                            <span className="font-mono font-bold text-[12px]" style={{ color: st.bg }}>#{item.case_id || item.id}</span>
+                            {item.priority === 'high' && <span className="px-1 py-0.5 rounded text-[9px] font-medium shrink-0" style={{ background: '#EF444420', color: '#EF4444' }}>عاجل</span>}
                           </div>
-                          <p className="font-medium leading-snug line-clamp-2 mt-1" style={{ color: 'var(--text-primary)' }}>{item.case_title || item.title || 'بدون عنوان'}</p>
-                          <div className="flex items-center justify-between text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>
+                          <p className="font-medium leading-snug line-clamp-2 text-[12px]" style={{ color: 'var(--text-primary)' }}>{item.case_title || item.title || 'بدون عنوان'}</p>
+                          <div className="flex flex-col gap-0.5 text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
                             {item.agency_name_ar && <span className="truncate">🏛️ {item.agency_name_ar}</span>}
-                            {(() => { const d = getDeadlineChip(item); return d && <span className="shrink-0 font-medium" style={{ color: d.color }}>⏳ {d.text}</span>; })()}
+                            {(() => { const d = getDeadlineChip(item); return d && <span className="font-medium truncate" style={{ color: d.color }}>⏳ {d.text}</span>; })()}
                           </div>
                         </div>
                       </div>

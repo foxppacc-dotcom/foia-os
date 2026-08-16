@@ -29,7 +29,10 @@ export default function MailLogs() {
 
   const fetchLogs = (caseId) => {
     if (!caseId) { setLogs([]); return; }
-    api.get(`/api/cases/${caseId}/mail-logs`)
+    // api.js's request() already prepends /api -- passing '/api/cases/...'
+    // here doubled the prefix to /api/api/cases/..., which 404s. Same bug
+    // in createLog/deleteLog below.
+    api.get(`/cases/${caseId}/mail-logs`)
       .then(d => setLogs(Array.isArray(d) ? d : d.data || []))
       .catch(() => setLogs([]));
   };
@@ -38,21 +41,25 @@ export default function MailLogs() {
 
   const createLog = async () => {
     if (!form.sender_name.trim()) return;
-    await api.post('/api/cases/' + selectedCaseId + '/mail-logs', {
-      case_id: parseInt(selectedCaseId), ...form,
-      tracking_number: form.tracking_number || null, courier: form.courier || null,
-      recipient_name: form.recipient_name || null, sent_date: form.sent_date || null,
-      received_date: form.received_date || null, notes: form.notes || null,
-    });
-    setShowForm(false);
-    setForm({ case_id: '', direction: 'inbound', mail_type: 'letter', tracking_number: '', courier: '', sender_name: '', recipient_name: '', sent_date: '', received_date: '', notes: '' });
-    fetchLogs(selectedCaseId);
+    try {
+      await api.post('/cases/' + selectedCaseId + '/mail-logs', {
+        case_id: parseInt(selectedCaseId), ...form,
+        tracking_number: form.tracking_number || null, courier: form.courier || null,
+        recipient_name: form.recipient_name || null, sent_date: form.sent_date || null,
+        received_date: form.received_date || null, notes: form.notes || null,
+      });
+      setShowForm(false);
+      setForm({ case_id: '', direction: 'inbound', mail_type: 'letter', tracking_number: '', courier: '', sender_name: '', recipient_name: '', sent_date: '', received_date: '', notes: '' });
+      fetchLogs(selectedCaseId);
+    } catch (err) { alert('فشل إضافة المراسلة: ' + err.message); }
   };
 
   const deleteLog = async (id) => {
     if (!confirm('هل أنت متأكد من حذف هذه المراسلة؟')) return;
-    await api.delete(`/api/cases/${selectedCaseId}/mail-logs/${id}`);
-    fetchLogs(selectedCaseId);
+    try {
+      await api.delete(`/cases/${selectedCaseId}/mail-logs/${id}`);
+      fetchLogs(selectedCaseId);
+    } catch (err) { alert('فشل حذف المراسلة: ' + err.message); }
   };
 
   if (loading) return (

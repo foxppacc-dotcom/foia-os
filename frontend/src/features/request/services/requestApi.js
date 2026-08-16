@@ -10,5 +10,3 @@ export const classifyRequest = (caseId, reqId, value) =>
   api.put(`/cases/${caseId}/requests/${reqId}/classification`, { agency_classification: value });
 export const setRequestChannel = (id, channel) =>
   api.put(`/requests/${id}/channel`, { channel });
-export const reorderRequests = (caseId, orderedIds) =>
-  api.put(`/cases/${caseId}/requests/reorder`, { order: orderedIds });

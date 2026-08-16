@@ -73,4 +73,49 @@ router.get('/cron/reset-email-counters', async (req, res) => {
   }
 });
 
+// GET /api/cron/gdrive-check — Vercel Cron target, same auth pattern as the
+// others above. A stored refresh token can go silently invalid (Google
+// auto-expires it after 7 days for an OAuth app still in "Testing"
+// publishing status, or it can be revoked) -- gdrive.isConnected() only
+// checks that a token is STORED, not that it still works, so this used to
+// go undetected until someone's upload failed with a raw "invalid_grant"
+// error. This makes the real verifyConnection() call daily and notifies
+// every admin the moment it breaks, instead of waiting for a user to hit it.
+router.get('/cron/gdrive-check', async (req, res) => {
+  const configuredSecret = process.env.CRON_SECRET;
+  if (configuredSecret) {
+    const auth = req.headers.authorization || '';
+    if (auth !== `Bearer ${configuredSecret}`) {
+      return res.status(401).json({ error: 'Unauthorized cron request' });
+    }
+  }
+
+  try {
+    const gdrive = require('../services/googleDriveService');
+    const { getSupabase } = require('../supabase');
+    const { notifyUsers } = require('../services/notificationService');
+    const sup = getSupabase();
+
+    if (!(await gdrive.isConnected())) {
+      return res.json({ success: true, skipped: 'not_connected', checkedAt: new Date().toISOString() });
+    }
+    const check = await gdrive.verifyConnection();
+    if (!check.ok) {
+      const { data: admins } = await sup.from('users').select('id').eq('role', 'admin');
+      await notifyUsers(sup, (admins || []).map(a => a.id), {
+        type: 'gdrive_disconnected',
+        title: '⚠️ انقطع اتصال Google Drive',
+        body: check.reason === 'invalid_grant'
+          ? 'انتهت صلاحية ربط Google Drive (على الأغلب لازم يتحول تطبيق Google Cloud من Testing لـ Published حتى لا يتكرر). أعد الربط من صفحة Google Drive.'
+          : `تعذر التحقق من الاتصال بـ Google Drive: ${check.error || check.reason}`,
+        target_type: 'settings', target_id: null,
+      });
+    }
+    res.json({ success: true, connected: check.ok, reason: check.ok ? null : check.reason, checkedAt: new Date().toISOString() });
+  } catch (ex) {
+    console.error('Cron gdrive check error:', ex.message);
+    res.status(500).json({ success: false, error: ex.message });
+  }
+});
+
 module.exports = router;

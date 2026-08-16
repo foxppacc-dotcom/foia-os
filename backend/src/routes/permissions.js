@@ -16,6 +16,10 @@ const RESOURCES = [
   { key: 'settings', label: 'الإعدادات', actions: ['view', 'manage'] },
   { key: 'users', label: 'المستخدمين', actions: ['invite', 'edit', 'delete'] },
   { key: 'email_accounts', label: 'حسابات البريد', actions: ['manage'] },
+  { key: 'case_comments', label: 'نقاش الفريق (داخل القضية)', actions: ['delete_any'] },
+  { key: 'forum', label: 'المنتدى العام', actions: ['view', 'create_topic', 'comment', 'pin', 'delete_any'] },
+  { key: 'intake', label: 'الاستقبال الذكي', actions: ['view', 'create', 'edit', 'promote', 'manage_criteria'] },
+  { key: 'employee_performance', label: 'أداء الموظفين', actions: ['view'] },
 ];
 
 // Navigation visibility catalog — mirrors the Sidebar items exactly.
@@ -31,6 +35,7 @@ const NAV_ITEMS = [
   { key: 'agencies', label: 'الجهات' },
   { key: 'portals', label: 'بوابات' },
   { key: 'inbox', label: 'صندوق الوارد' },
+  { key: 'forum', label: 'المنتدى العام' },
   { key: 'email_accounts', label: 'إيميلات' },
   { key: 'teams', label: 'الفرق' },
   { key: 'permissions', label: 'فريق العمل' },
@@ -61,7 +66,7 @@ const PRODUCTION_LISTS = [
 // is derived straight from the resource's view permission instead of its
 // own row. Every other nav item (no matching resource, or no 'view' action)
 // keeps its own independently-configured visibility below.
-const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production', 'settings'];
+const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production', 'settings', 'forum', 'intake'];
 
 // Fallback only for the rare case the roles table is empty/unreachable --
 // the real, editable role list lives in the `roles` table (teamManagement.js
@@ -115,6 +120,18 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
   const navRows = (data || []).filter(p => p.resource === 'nav');
   const navVisibility = {};
   for (const item of NAV_ITEMS) {
+    if (item.key === 'forum' || item.key === 'intake') {
+      // Being able to comment/create/pin/moderate the forum (or create/
+      // triage/promote in الاستقبال الذكي) is meaningless without being
+      // able to see it -- an admin granting only one specific action
+      // (without separately remembering "عرض") shouldn't hide the sidebar
+      // link from a role that can otherwise act on it. Matches the same
+      // any-action-implies-visible rule enforced on the API side (see
+      // requireForumVisible in forum.js).
+      const rows = (data || []).filter(p => p.resource === item.key);
+      navVisibility[item.key] = rows.some(r => r.allowed);
+      continue;
+    }
     if (RESOURCE_VIEW_NAV_KEYS.includes(item.key)) {
       const viewRow = (data || []).find(p => p.resource === item.key && p.action === 'view');
       navVisibility[item.key] = viewRow ? viewRow.allowed !== false : false;

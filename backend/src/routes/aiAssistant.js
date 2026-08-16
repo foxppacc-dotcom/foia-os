@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
+const { canAccessCase, canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
 
 /**
  * AI Assistant Service
@@ -17,11 +18,14 @@ router.post('/ai/ask', async (req, res) => {
     if (!case_id || !question) return res.status(400).json({ error: 'case_id and question required' });
 
     const sup = getSupabase();
+    if (!(await canAccessCase(sup, req.user, case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
     const { data: c } = await sup.from('cases').select('*').eq('id', case_id).maybeSingle();
     if (!c) return res.status(404).json({ error: 'Case not found' });
 
     const q = question.toLowerCase();
-    const answer = await generateAnswer(q, c, sup, case_id);
+    const answer = await generateAnswer(q, c, sup, case_id, req.user);
 
     res.json({ success: true, answer, case_id });
   } catch (err) {
@@ -32,7 +36,7 @@ router.post('/ai/ask', async (req, res) => {
 /**
  * Generate AI response based on question type
  */
-async function generateAnswer(question, caseData, sup, caseId) {
+async function generateAnswer(question, caseData, sup, caseId, user) {
   const [{ data: requests }, { data: comms }, { data: docs }, { data: tasks }, { data: comments }] = await Promise.all([
     sup.from('requests').select('*').eq('case_id', caseId),
     sup.from('communications').select('*').eq('case_id', caseId).order('created_at', { ascending: false }),
@@ -180,12 +184,26 @@ ${actions.map((a, i) => `${i + 1}. ${a}`).join('\n')}`;
   // === 6. Similar cases / duplicates ===
   const similarRegex = /(مشابه|مكرر|similar|duplicate|آخر|same)/i;
   if (similarRegex.test(question)) {
-    const titlePrefix = caseData.title.substring(0, 20);
-    const { data: similar } = await sup.from('cases')
+    // Case titles are often "Lastname, Firstname" -- a raw comma there would
+    // break .or()'s filter grammar (its own separator) and 500 the whole
+    // query instead of just not matching, same class of bug as the Cases/
+    // Inbox/Agencies search filters.
+    const titlePrefix = caseData.title.substring(0, 20).replace(/[,()]/g, m => '\\' + m);
+    let similarQuery = sup.from('cases')
       .select('id, title, status, created_at')
       .neq('id', caseId)
       .or(`description.ilike.%${titlePrefix}%,title.ilike.%${titlePrefix}%`)
       .order('created_at', { ascending: false }).limit(5);
+    // The route already confirmed the user can access THIS case, but that
+    // says nothing about the OTHER cases this query surfaces titles/status
+    // for -- without the same cases.view_all scoping GET /cases applies, a
+    // restricted role could learn about cases it has no access to just by
+    // asking the assistant "similar cases?" on one it IS allowed to see.
+    if (user && !(await canViewAllCases(sup, user.role))) {
+      const visibleCaseIds = await getVisibleCaseIds(sup, user.id);
+      similarQuery = similarQuery.in('id', visibleCaseIds.length ? visibleCaseIds : [-1]);
+    }
+    const { data: similar } = await similarQuery;
 
     if (!similar || similar.length === 0) return '🔍 **لا توجد قضايا مشابهة.**';
 

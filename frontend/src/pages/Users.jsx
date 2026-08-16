@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import { Plus, Trash2, Shield } from 'lucide-react';
+import { Plus, Trash2, Shield, UserCircle } from 'lucide-react';
 
 const roleColors = { admin: '#EF4444', manager: '#F59E0B', member: '#3B82F6' };
 const roleNames = { admin: 'مدير النظام', manager: 'مدير', member: 'عضو' };
 
 export default function Users() {
+  const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [specialties, setSpecialties] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -142,9 +144,19 @@ export default function Users() {
                 </td>
                 <td className="px-4 py-3" style={{ color: 'var(--text-muted)' }}>{u.team_name || '—'}</td>
                 <td className="px-4 py-3">
-                  <button onClick={() => deleteUser(u.id)} className="p-1.5 rounded-lg hover:bg-[#EF4444]/10" style={{ color: 'var(--text-muted)' }}>
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    {/* Full task/case history + KPI for evaluating this
+                        employee's work -- gated server-side by the
+                        employee_performance permission (viewing your own
+                        profile is always allowed regardless). */}
+                    <button onClick={() => navigate(`/profile/${u.id}`)} title="عرض الملف الشخصي وتقييم الأداء"
+                      className="p-1.5 rounded-lg hover:bg-[var(--accent)]/10" style={{ color: 'var(--text-muted)' }}>
+                      <UserCircle className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => deleteUser(u.id)} className="p-1.5 rounded-lg hover:bg-[#EF4444]/10" style={{ color: 'var(--text-muted)' }}>
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

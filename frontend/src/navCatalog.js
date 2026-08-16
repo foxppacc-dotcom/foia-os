@@ -6,7 +6,7 @@
 // drive per-role visibility, this drives path/label/icon/order/placement.
 import {
   FolderOpen, LayoutDashboard, GitBranch, Building2, Sparkles, Users, Mail,
-  Timer, Key, Cloud, UserCog, Phone, MailPlus, AtSign, ListChecks, Palette,
+  Timer, Key, Cloud, UserCog, Phone, MailPlus, AtSign, ListChecks, Palette, Megaphone,
 } from 'lucide-react';
 
 export const NAV_CATALOG = [
@@ -18,6 +18,7 @@ export const NAV_CATALOG = [
   { key: 'agencies', path: '/agencies', label: 'الجهات', icon: Building2, roles: ['admin', 'manager', 'member'] },
   { key: 'portals', path: '/portals', label: 'بوابات', icon: Key, roles: ['admin', 'manager'] },
   { key: 'inbox', path: '/inbox', label: 'صندوق البريد', icon: Mail, roles: ['admin', 'manager', 'member'] },
+  { key: 'forum', path: '/forum', label: 'المنتدى العام', icon: Megaphone, roles: ['admin', 'manager', 'member'] },
   { key: 'email_accounts', path: '/email-accounts', label: 'إيميلات', icon: AtSign, roles: ['admin', 'manager', 'member'] },
   { key: 'teams', path: '/teams', label: 'الفرق', icon: Users, roles: ['admin'] },
   { key: 'permissions', path: '/permissions', label: 'فريق العمل', icon: UserCog, roles: ['admin', 'manager'] },

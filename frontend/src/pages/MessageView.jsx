@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { getApiBase } from '../api';
 import { Mail, Reply, Forward, Download, Paperclip, ExternalLink, Loader2, X, Send } from 'lucide-react';
+import EmailBodyView from '../components/EmailBodyView';
 
 const BASE = getApiBase();
 const tok = () => localStorage.getItem('foia_token');
@@ -152,10 +153,10 @@ export default function MessageView() {
             <div><span style={{ color: 'var(--ds-text-muted)' }}>التاريخ: </span>{formatDateTime(msg.created_at)}</div>
           </div>
 
-          {/* Full body -- plain selectable text, for copying/reviewing/inspecting */}
-          <div className="rounded-lg p-3.5 text-sm leading-relaxed whitespace-pre-wrap select-text mb-3"
-            style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-primary)' }}>
-            {msg.body || '(لا يوجد محتوى)'}
+          {/* Full body, matching the source (rendered HTML with clickable
+              links/portal buttons when available, plain text otherwise) */}
+          <div className="mb-3">
+            <EmailBodyView html={msg.body_html} text={msg.body} />
           </div>
 
           {attachments.length > 0 && (

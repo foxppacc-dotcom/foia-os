@@ -82,18 +82,31 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
 
   const openNotification = async (n) => {
     if (!n.is_read) {
-      try { await api.put(`/notifications/${n.id}/read`, {}); } catch {}
-      setNotifications(p => p.map(x => x.id === n.id ? { ...x, is_read: true } : x));
-      setUnreadCount(c => Math.max(0, c - 1));
+      // Only reflect "read" locally once the server actually confirms it --
+      // applying it unconditionally meant a failed request (network blip,
+      // expired session) still showed the notification as read and the
+      // badge decremented, silently reverting back on the next 60s poll
+      // with no error ever surfaced to the user.
+      try {
+        await api.put(`/notifications/${n.id}/read`, {});
+        setNotifications(p => p.map(x => x.id === n.id ? { ...x, is_read: true } : x));
+        setUnreadCount(c => Math.max(0, c - 1));
+      } catch {}
     }
     setNotifOpen(false);
     if (n.target_type === 'case' && n.target_id) navigate(`/cases/${n.target_id}`);
+    else if (n.target_type === 'pipeline_list') navigate('/pipeline');
+    else if (n.target_type === 'email_account') navigate('/email-accounts');
+    else if (n.target_type === 'forum_topic' && n.target_id) navigate(`/forum?topic=${n.target_id}`);
+    else if (n.target_type === 'settings') navigate('/gdrive');
   };
 
   const markAllRead = async () => {
-    try { await api.put('/notifications/read-all', {}); } catch {}
-    setNotifications(p => p.map(x => ({ ...x, is_read: true })));
-    setUnreadCount(0);
+    try {
+      await api.put('/notifications/read-all', {});
+      setNotifications(p => p.map(x => ({ ...x, is_read: true })));
+      setUnreadCount(0);
+    } catch {}
   };
 
   return (

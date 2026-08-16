@@ -167,7 +167,7 @@ export default function DocumentsTab() {
   return (
     <div className="space-y-4">
       {/* Upload zone */}
-      <UploadZone caseId={id} />
+      <UploadZone caseId={id} onUploadComplete={() => refetch?.(true)} />
 
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -254,7 +254,14 @@ export default function DocumentsTab() {
                         onKeyDown={e => { if (e.key === 'Enter') commitRename(doc.id); if (e.key === 'Escape') setRenamingId(null); }} />
                     ) : (
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-[11px] font-medium truncate cursor-pointer" style={{ color: 'var(--ds-text-primary)' }}
+                        {/* A flex child needs its own min-w-0 for `truncate` to
+                            actually engage -- flex items default to
+                            min-width:auto, which lets them overflow their
+                            basis before overflow:hidden can kick in. Without
+                            it, a long filename could push this row's size
+                            badge off-screen instead of properly ellipsizing
+                            next to it. */}
+                        <span className="text-[11px] font-medium truncate cursor-pointer min-w-0" style={{ color: 'var(--ds-text-primary)' }}
                           onClick={() => setPreviewFile?.(doc)}>{doc.original_name || doc.file_name || 'بدون اسم'}</span>
                         <span className="text-[9px] sm:hidden shrink-0" style={{ color: 'var(--ds-text-muted)' }}>{size}</span>
                       </div>

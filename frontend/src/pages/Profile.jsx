@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import { Phone, IdCard, Edit3, Save, X, LogIn, LogOut, ListTodo, Clock, Bell, BarChart3 } from 'lucide-react';
+import { Phone, IdCard, Edit3, Save, X, LogIn, LogOut, ListTodo, Clock, Bell, BarChart3, Briefcase } from 'lucide-react';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Card from '../components/ui/Card';
@@ -11,11 +11,16 @@ import Spinner from '../components/ui/Spinner';
 import EmptyState from '../components/ui/EmptyState';
 
 const PROFILE_TABS = [
+  { key: 'cases', label: 'القضايا' },
   { key: 'tasks', label: 'المهام' },
   { key: 'attendance', label: 'الحضور' },
   { key: 'notifications', label: 'الإشعارات' },
   { key: 'kpi', label: 'مؤشرات الأداء' },
 ];
+
+const CASE_STATUS_LABEL = {
+  open: 'مفتوحة', in_progress: 'جارية', closed: 'مغلقة', pending: 'معلقة',
+};
 
 // Fallback only -- used until /roles resolves, or if a role was deleted
 // after being assigned. The hardcoded map used to be the ONLY source, so
@@ -26,11 +31,12 @@ const ROLE_LABEL_FALLBACK = { admin: 'مدير النظام', manager: 'مدير
 
 export default function Profile() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
-  const [activeTab, setActiveTab] = useState('tasks');
+  const [activeTab, setActiveTab] = useState('cases');
   const [todayAttendance, setTodayAttendance] = useState(null);
   const [roles, setRoles] = useState([]);
 
@@ -142,6 +148,32 @@ export default function Profile() {
       </Card>
 
       <Tabs tabs={PROFILE_TABS} active={activeTab} onChange={setActiveTab} />
+
+      {activeTab === 'cases' && (
+        <Card title={`القضايا (${profile.cases?.length || 0})`} icon={<Briefcase className="w-4 h-4" style={{ color: 'var(--accent)' }} />}>
+          {/* Union of case_assignees (modern, multi-person team) and the
+              legacy single cases.assigned_to column -- case_tasks alone
+              (the "المهام" tab) misses case-team membership entirely, which
+              is the more common way someone is attached to a case here. */}
+          {!profile.cases?.length ? <EmptyState compact title="لا توجد قضايا" /> : (
+            <div className="space-y-2">
+              {profile.cases.map(c => (
+                <div key={c.id} onClick={() => navigate(`/cases/${c.id}`)}
+                  className="flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-colors"
+                  style={{ background: 'var(--bg-tertiary)' }}>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{c.title}</p>
+                    {c.role && <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{c.role}</p>}
+                  </div>
+                  <Badge variant={c.status === 'closed' ? 'neutral' : c.status === 'in_progress' ? 'warning' : 'info'}>
+                    {CASE_STATUS_LABEL[c.status] || c.status || '—'}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {activeTab === 'tasks' && (
         <Card title={`المهام الموكلة (${profile.tasks?.length || 0})`} icon={<ListTodo className="w-4 h-4" style={{ color: 'var(--accent)' }} />}>

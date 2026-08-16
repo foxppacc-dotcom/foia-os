@@ -23,11 +23,6 @@ export default class ErrorBoundary extends Component {
         details: { stack: error?.stack, componentStack: info?.componentStack },
       }).catch(() => {});
     } catch {}
-    // Notify monitoring endpoint if available
-    try {
-      const payload = { error: error?.message, stack: error?.stack, url: window.location.href };
-      navigator.sendBeacon?.('/api/errors', new Blob([JSON.stringify(payload)], { type: 'application/json' }));
-    } catch {}
   }
 
   render() {

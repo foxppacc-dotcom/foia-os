@@ -2,11 +2,20 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
+const { requireCaseAccess, canAccessCase } = require('../services/caseAccess');
+
+// Every route in this file previously had ZERO per-case access check (only
+// requireAuth) -- a role restricted to its own assigned cases could
+// read/create phone/mail logs on ANY case, and the PUT/DELETE-by-bare-:id
+// routes didn't even check the log row's own case_id, letting anyone edit
+// or delete any phone/mail log system-wide regardless of which case it
+// belonged to.
+const caseGate = requireCaseAccess('caseId');
 
 // ===================== PHONE LOGS =====================
 
 // GET /api/cases/:caseId/phone-logs
-router.get('/cases/:caseId/phone-logs', requireAuth, async (req, res) => {
+router.get('/cases/:caseId/phone-logs', requireAuth, caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const { data, error } = await sup.from('phone_logs')
@@ -22,7 +31,7 @@ router.get('/cases/:caseId/phone-logs', requireAuth, async (req, res) => {
 });
 
 // POST /api/cases/:caseId/phone-logs
-router.post('/cases/:caseId/phone-logs', requireAuth, async (req, res) => {
+router.post('/cases/:caseId/phone-logs', requireAuth, caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
@@ -49,10 +58,18 @@ router.post('/cases/:caseId/phone-logs', requireAuth, async (req, res) => {
   }
 });
 
-// PUT /api/phone-logs/:id
+// PUT /api/phone-logs/:id -- :id is the LOG row's own id, not a case id, so
+// the case access check has to resolve the log's case_id first.
 router.put('/phone-logs/:id', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
+    const logId = parseInt(req.params.id);
+    const { data: existing } = await sup.from('phone_logs').select('case_id').eq('id', logId).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'السجل غير موجود' });
+    if (!(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
+
     const { direction, caller_name, caller_number, duration_seconds, summary, notes, recording_path } = req.body;
     const updates = {};
     if (direction !== undefined) updates.direction = direction;
@@ -63,7 +80,7 @@ router.put('/phone-logs/:id', requireAuth, async (req, res) => {
     if (notes !== undefined) updates.notes = notes;
     if (recording_path !== undefined) updates.recording_path = recording_path;
 
-    const { error } = await sup.from('phone_logs').update(updates).eq('id', parseInt(req.params.id));
+    const { error } = await sup.from('phone_logs').update(updates).eq('id', logId);
     if (error) throw error;
     res.json({ success: true, message: '✅ تم تحديث سجل المكالمة' });
   } catch (err) {
@@ -75,7 +92,13 @@ router.put('/phone-logs/:id', requireAuth, async (req, res) => {
 router.delete('/phone-logs/:id', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
-    const { error } = await sup.from('phone_logs').delete().eq('id', parseInt(req.params.id));
+    const logId = parseInt(req.params.id);
+    const { data: existing } = await sup.from('phone_logs').select('case_id').eq('id', logId).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'السجل غير موجود' });
+    if (!(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
+    const { error } = await sup.from('phone_logs').delete().eq('id', logId);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -86,7 +109,7 @@ router.delete('/phone-logs/:id', requireAuth, async (req, res) => {
 // ===================== PHYSICAL MAIL =====================
 
 // GET /api/cases/:caseId/mail-logs
-router.get('/cases/:caseId/mail-logs', requireAuth, async (req, res) => {
+router.get('/cases/:caseId/mail-logs', requireAuth, caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const { data, error } = await sup.from('mail_logs')
@@ -102,7 +125,7 @@ router.get('/cases/:caseId/mail-logs', requireAuth, async (req, res) => {
 });
 
 // POST /api/cases/:caseId/mail-logs
-router.post('/cases/:caseId/mail-logs', requireAuth, async (req, res) => {
+router.post('/cases/:caseId/mail-logs', requireAuth, caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
@@ -136,6 +159,13 @@ router.post('/cases/:caseId/mail-logs', requireAuth, async (req, res) => {
 router.put('/mail-logs/:id', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
+    const logId = parseInt(req.params.id);
+    const { data: existing } = await sup.from('mail_logs').select('case_id').eq('id', logId).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'السجل غير موجود' });
+    if (!(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
+
     const { direction, mail_type, tracking_number, courier, sender_name, recipient_name, sent_date, received_date, notes, scanned_path } = req.body;
     const updates = {};
     if (direction !== undefined) updates.direction = direction;
@@ -149,7 +179,7 @@ router.put('/mail-logs/:id', requireAuth, async (req, res) => {
     if (notes !== undefined) updates.notes = notes;
     if (scanned_path !== undefined) updates.scanned_path = scanned_path;
 
-    const { error } = await sup.from('mail_logs').update(updates).eq('id', parseInt(req.params.id));
+    const { error } = await sup.from('mail_logs').update(updates).eq('id', logId);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -161,7 +191,13 @@ router.put('/mail-logs/:id', requireAuth, async (req, res) => {
 router.delete('/mail-logs/:id', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
-    const { error } = await sup.from('mail_logs').delete().eq('id', parseInt(req.params.id));
+    const logId = parseInt(req.params.id);
+    const { data: existing } = await sup.from('mail_logs').select('case_id').eq('id', logId).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'السجل غير موجود' });
+    if (!(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
+    const { error } = await sup.from('mail_logs').delete().eq('id', logId);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {

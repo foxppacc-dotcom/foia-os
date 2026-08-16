@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth, requirePermission } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
+const { canViewAllCases, getVisibleCaseIds, canAccessCase } = require('../services/caseAccess');
 
 // GET /api/pipeline — returns all 7 lists with their tasks grouped
 router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) => {
@@ -16,6 +17,15 @@ router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) 
       .select('*')
       .order('list_number', { ascending: true });
 
+    // A role restricted to its own assigned cases (cases.view_all = false)
+    // could otherwise see every OTHER case's title/status/tasks on this
+    // board too -- requirePermission('pipeline','view') only confirms the
+    // role can see the board at all, not which cases' data belongs on it.
+    // Same visibility rule GET /cases already applies (caseAccess.js).
+    const restricted = !(await canViewAllCases(sup, req.user.role));
+    const visibleCaseIds = restricted ? await getVisibleCaseIds(sup, req.user.id) : null;
+    if (restricted && !visibleCaseIds.length) return res.json([]);
+
     let tasksQuery = sup
       .from('case_tasks')
       .select(`*, pipeline_lists!left(name_ar, name_en, color), users!left(name)`)
@@ -24,6 +34,7 @@ router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) 
     if (caseId) {
       tasksQuery = tasksQuery.eq('case_id', parseInt(caseId));
     }
+    if (restricted) tasksQuery = tasksQuery.in('case_id', visibleCaseIds);
 
     const { data: allTasks } = await tasksQuery;
 
@@ -47,6 +58,7 @@ router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) 
     if (caseId) {
       requestsQuery = requestsQuery.eq('case_id', parseInt(caseId));
     }
+    if (restricted) requestsQuery = requestsQuery.in('case_id', visibleCaseIds);
 
     const { data: allRequests } = await requestsQuery;
 
@@ -77,10 +89,18 @@ router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) 
       return new Date(b.created_at) - new Date(a.created_at);
     });
 
-    // Group by lists
+    // Group by lists. A request with classification_id === null (never
+    // explicitly classified -- some creation paths besides POST /cases
+    // still don't set one) has to land SOMEWHERE, not just vanish off the
+    // board entirely with zero visible trace. "لم يبدأ بعد" (Not Started) is
+    // that catch-all: a request literally classified as list.id AND any
+    // still-unclassified request both belong here, since "not started" and
+    // "never classified" are the same real-world state.
+    const notStartedList = (lists || []).find(l => l.name_en === 'Not Started');
     const pipeline = (lists || []).map(list => {
       const tasks = tasksMapped.filter(t => t.list_id === list.id);
-      const items = requestsMapped.filter(r => r.classification_id === list.id);
+      const isNotStarted = notStartedList && list.id === notStartedList.id;
+      const items = requestsMapped.filter(r => r.classification_id === list.id || (isNotStarted && r.classification_id == null));
       return {
         ...list,
         tasks,
@@ -115,6 +135,13 @@ router.put('/pipeline/tasks/:id', requirePermission('pipeline', 'move'), async (
 
     if (!existing) {
       return res.status(404).json({ error: 'Task not found' });
+    }
+    // case_tasks is case-scoped (case_id) exactly like the other sub-resources
+    // caseAccess.js's requireCaseAccess already protects elsewhere -- this
+    // route only ever checked the role-level 'pipeline','move' permission,
+    // never whether THIS task's case is one the user is allowed to touch.
+    if (existing.case_id && !(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
     }
 
     const { data: list } = await sup

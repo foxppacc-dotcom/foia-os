@@ -6,6 +6,7 @@
  * unrestricted, so turning this feature on never silently hides cases from
  * a role until an admin explicitly restricts it from the Permissions tab.
  */
+const { getSupabase } = require('../supabase');
 
 async function canViewAllCases(sup, role) {
   if (role === 'admin') return true;
@@ -44,4 +45,31 @@ async function canAccessCase(sup, user, caseId) {
   return ids.includes(parseInt(caseId));
 }
 
-module.exports = { canViewAllCases, getVisibleCaseIds, scopeCasesQuery, canAccessCase };
+/**
+ * Express middleware factory — gates any route whose case id sits directly
+ * in the URL (e.g. /cases/:id/..., /cases/:caseId/...). A huge swath of
+ * case-scoped sub-resource routes (team, checklist, requests, documents,
+ * timeline, phone/mail logs, communications, assignees, compose...) across
+ * many separate route files had ONLY `requirePermission('cases', 'edit')`-
+ * style role checks and never this per-case check -- requirePermission only
+ * confirms the role CAN edit/view cases in general, not that THIS specific
+ * case is one the user is allowed to touch. A role restricted to its own
+ * assigned cases (`cases.view_all = false`) could read or mutate ANY case's
+ * data just by guessing/knowing its numeric id. Mount this on every such
+ * route instead of hand-rolling the same check inline everywhere.
+ */
+function requireCaseAccess(paramName = 'id') {
+  return async (req, res, next) => {
+    try {
+      const sup = getSupabase();
+      const caseId = parseInt(req.params[paramName]);
+      if (!caseId) return res.status(400).json({ error: 'Invalid case id' });
+      if (!(await canAccessCase(sup, req.user, caseId))) {
+        return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+      }
+      next();
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  };
+}
+
+module.exports = { canViewAllCases, getVisibleCaseIds, scopeCasesQuery, canAccessCase, requireCaseAccess };

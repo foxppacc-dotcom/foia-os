@@ -3,7 +3,15 @@ const router = express.Router();
 const { requireAuth, requirePermission } = require('../middleware/auth');
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
-const { canAccessCase } = require('../services/caseAccess');
+const { canAccessCase, requireCaseAccess } = require('../services/caseAccess');
+// Every route below except /dashboard previously had ZERO per-case access
+// check -- a role restricted to its own assigned cases could read/mutate
+// ANY case's team, checklist, requests, documents, or timeline just by
+// knowing its numeric id. requireCaseAccess('id') mounted per-route below
+// closes this uniformly (every path here carries the case id as :id
+// directly, confirmed by inspection).
+const caseGate = requireCaseAccess('id');
+const { notifyUsers, getCaseRecipients, getCaseActivityRecipients } = require('../services/notificationService');
 
 // GET /api/cases/:id/dashboard — combined overview
 router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (req, res) => {
@@ -19,8 +27,16 @@ router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (re
     const caseRow = await sup.from('cases').select('*').eq('id', caseId).single();
     if (caseRow.error) return res.status(404).json({ error: 'Case not found' });
 
+    // Opening the case is itself the "I saw this" signal for its own
+    // activity badge in القضايا (Cases.jsx) -- clear it here instead of
+    // requiring a separate click per notification. Fire-and-forget: must
+    // never slow down or fail the dashboard load itself.
+    sup.from('notifications').update({ is_read: true })
+      .eq('user_id', req.user.id).eq('target_type', 'case').eq('target_id', caseId).eq('is_read', false)
+      .then(() => {}).catch(() => {});
+
     // Fetch all other data independently — failures are non-fatal
-    const [team, requests, checklist, documents, timeline, channels] = await Promise.all([
+    const [team, requests, checklist, documents, timeline, channels, comments] = await Promise.all([
       sup.from('case_assignees').select('*').eq('case_id', caseId).then(r => {
         if (r.error) return [];
         return r.data || [];
@@ -73,6 +89,22 @@ router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (re
         .then(r => r.error ? [] : (r.data || [])),
       sup.from('case_agency_channels').select('*').eq('case_id', caseId).order('created_at')
         .then(r => r.error ? [] : (r.data || [])),
+      // Team discussion (نقاش الفريق) -- human-posted notes/comments on the
+      // case, distinct from the auto-generated system entries (case
+      // created, classified, document uploaded...) that also live in this
+      // same table. No FK-embed relationship relied on (batch-fetch names
+      // separately, same defensive pattern used for `team`/`requests` above)
+      // since PostgREST's schema cache has been unreliable for embeds
+      // elsewhere in this codebase (see portals.js's earlier fix).
+      sup.from('case_comments').select('*').eq('case_id', caseId).order('created_at', { ascending: false })
+        .then(async (r) => {
+          if (r.error) return [];
+          const rows = r.data || [];
+          const userIds = [...new Set(rows.map(c => c.user_id).filter(Boolean))];
+          const { data: users } = userIds.length ? await sup.from('users').select('id, name').in('id', userIds) : { data: [] };
+          const userMap = Object.fromEntries((users || []).map(u => [u.id, u.name]));
+          return rows.map(c => ({ ...c, user_name: c.user_id ? (userMap[c.user_id] || null) : null }));
+        }),
     ]);
 
     const recordsProgress = {
@@ -91,6 +123,7 @@ router.get('/cases/:id/dashboard', requirePermission('cases', 'view'), async (re
       timeline: timeline || [],
       records_progress: recordsProgress,
       channels: channels || [],
+      comments: comments || [],
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -233,7 +266,7 @@ async function persistChecklist(sup, caseId, items) {
 }
 
 // GET /api/cases/:id/team
-router.get('/cases/:id/team', async (req, res) => {
+router.get('/cases/:id/team', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -251,7 +284,7 @@ router.get('/cases/:id/team', async (req, res) => {
 });
 
 // POST /api/cases/:id/team
-router.post('/cases/:id/team', async (req, res) => {
+router.post('/cases/:id/team', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -281,20 +314,22 @@ router.post('/cases/:id/team', async (req, res) => {
       target_title: `Assigned user #${user_id} as ${roleType || 'member'}`,
     });
 
-    // Create notification (skip if table doesn't exist)
-    try {
-      await sup.from('notifications').insert({
-        user_id, is_read: false, type: 'case_update', title: '📋 تم تعيينك في قضية',
-        body: `تم تعيينك ضمن فريق القضية #${caseId}`
+    // target_type/target_id were previously never set here, so this
+    // notification rendered in the bell but couldn't navigate anywhere when
+    // clicked -- see notificationService.js. Skip if assigning yourself.
+    if (user_id !== req.user?.id) {
+      await notifyUsers(sup, [user_id], {
+        type: 'case_update', title: '📋 تم تعيينك في قضية', body: `${req.user?.name || 'أحد الموظفين'} أضافك إلى فريق القضية #${caseId}`,
+        target_type: 'case', target_id: caseId,
       });
-    } catch (e) { /* notifications table may not exist */ }
+    }
 
     res.status(201).json({ success: true, data });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // DELETE /api/cases/:id/team/:userId
-router.delete('/cases/:id/team/:userId', async (req, res) => {
+router.delete('/cases/:id/team/:userId', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const { error } = await sup.from('case_assignees').delete().eq('case_id', parseInt(req.params.id)).eq('user_id', parseInt(req.params.userId));
@@ -310,7 +345,7 @@ router.delete('/cases/:id/team/:userId', async (req, res) => {
 // file) resolves it -- see services/mailPoller.js tiers 3b/4b.
 
 // POST /api/cases/:id/agencies/:agencyId/channels
-router.post('/cases/:id/agencies/:agencyId/channels', async (req, res) => {
+router.post('/cases/:id/agencies/:agencyId/channels', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const { portal_link, email, filter_keywords } = req.body;
@@ -324,11 +359,34 @@ router.post('/cases/:id/agencies/:agencyId/channels', async (req, res) => {
     }).select().single();
     if (error) throw error;
     res.status(201).json({ success: true, data });
+
+    // A channel/keyword just added here may match an email that already
+    // arrived and sat unlinked BEFORE this channel existed -- matching only
+    // ever ran once, at ingestion time, so without this it would never be
+    // caught. Fire-and-forget: the channel is already saved and the response
+    // already sent, this is just a best-effort catch-up.
+    try {
+      const mailPoller = require('../services/mailPoller');
+      mailPoller.rescanUnmatched().catch(e => console.error('[channels] rescanUnmatched failed:', e.message));
+    } catch (e) { console.error('[channels] rescanUnmatched trigger failed:', e.message); }
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/cases/rescan-unmatched — manually re-run email auto-matching
+// against already-received, still-unlinked inbound messages using CURRENT
+// case/agency/channel data. Meant to be triggered after editing anything
+// that could affect matching (defendant name, title, source agency, request
+// reference numbers) rather than only after adding a channel.
+router.post('/cases/rescan-unmatched', async (req, res) => {
+  try {
+    const mailPoller = require('../services/mailPoller');
+    const result = await mailPoller.rescanUnmatched();
+    res.json({ success: true, ...result });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // DELETE /api/cases/:id/agencies/:agencyId/channels/:channelId
-router.delete('/cases/:id/agencies/:agencyId/channels/:channelId', async (req, res) => {
+router.delete('/cases/:id/agencies/:agencyId/channels/:channelId', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const { error } = await sup.from('case_agency_channels').delete()
@@ -339,7 +397,7 @@ router.delete('/cases/:id/agencies/:agencyId/channels/:channelId', async (req, r
 });
 
 // GET /api/cases/:id/checklist
-router.get('/cases/:id/checklist', async (req, res) => {
+router.get('/cases/:id/checklist', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -355,7 +413,7 @@ router.get('/cases/:id/checklist', async (req, res) => {
 });
 
 // PUT /api/cases/:id/checklist/:recordType
-router.put('/cases/:id/checklist/:recordType', async (req, res) => {
+router.put('/cases/:id/checklist/:recordType', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -401,7 +459,7 @@ router.put('/cases/:id/checklist/:recordType', async (req, res) => {
 });
 
 // GET /api/cases/:id/requests (enhanced with classification)
-router.get('/cases/:id/requests', async (req, res) => {
+router.get('/cases/:id/requests', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -420,7 +478,7 @@ router.get('/cases/:id/requests', async (req, res) => {
 });
 
 // PUT /api/cases/:id/requests/:reqId/classification
-router.put('/cases/:id/requests/:reqId/classification', async (req, res) => {
+router.put('/cases/:id/requests/:reqId/classification', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const reqId = parseInt(req.params.reqId);
@@ -452,7 +510,7 @@ router.put('/cases/:id/requests/:reqId/classification', async (req, res) => {
 });
 
 // POST /api/cases/:id/requests — add agency to case
-router.post('/cases/:id/requests', async (req, res) => {
+router.post('/cases/:id/requests', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -475,7 +533,7 @@ router.post('/cases/:id/requests', async (req, res) => {
 });
 
 // DELETE /api/cases/:id/requests/:reqId — remove agency from case
-router.delete('/cases/:id/requests/:reqId', async (req, res) => {
+router.delete('/cases/:id/requests/:reqId', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -492,7 +550,7 @@ router.delete('/cases/:id/requests/:reqId', async (req, res) => {
 });
 
 // GET /api/cases/:id/documents
-router.get('/cases/:id/documents', async (req, res) => {
+router.get('/cases/:id/documents', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const { data, error } = await sup.from('case_documents').select('*').eq('case_id', parseInt(req.params.id)).order('created_at', { ascending: false });
@@ -513,7 +571,7 @@ const upload = multer({
 });
 
 // POST /api/cases/:id/documents — upload document (multipart)
-router.post('/cases/:id/documents', upload.single('file'), async (req, res) => {
+router.post('/cases/:id/documents', caseGate, upload.single('file'), async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);
@@ -600,12 +658,20 @@ router.post('/cases/:id/documents', upload.single('file'), async (req, res) => {
       target_title: `Uploaded: ${original_name}`,
     });
 
+    try {
+      const recipients = await getCaseActivityRecipients(sup, caseId, { excludeUserId: req.user.id });
+      await notifyUsers(sup, recipients, {
+        type: 'document_uploaded', title: '📎 مستند جديد', body: `${req.user?.name || 'أحد الموظفين'} رفع "${original_name}" على القضية`,
+        target_type: 'case', target_id: caseId,
+      });
+    } catch (e) { console.error('[documents] notification failed:', e.message); }
+
     res.status(201).json({ success: true, data });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // DELETE /api/cases/:id/documents/:docId
-router.delete('/cases/:id/documents/:docId', async (req, res) => {
+router.delete('/cases/:id/documents/:docId', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const docId = parseInt(req.params.docId);
@@ -641,7 +707,7 @@ router.delete('/cases/:id/documents/:docId', async (req, res) => {
 });
 
 // GET /api/cases/:id/timeline
-router.get('/cases/:id/timeline', async (req, res) => {
+router.get('/cases/:id/timeline', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.id);

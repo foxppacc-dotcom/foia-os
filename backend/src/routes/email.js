@@ -208,6 +208,7 @@ router.post('/send', requireAuth, async (req, res) => {
         direction: 'outbound',
         subject,
         body: body || html || '',
+        body_html: html || null,
         sender: to,
         recipient: cc || '',
         message_id: result.messageId,
@@ -252,13 +253,17 @@ router.post('/fetch', requireAuth, async (req, res) => {
 router.post('/fetch-all', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data: accounts, error } = await sup
+    // is_active is a real boolean in this environment (not the INTEGER 1/0
+    // some other code paths assumed) -- .eq('is_active', 1) matched zero
+    // rows every time, so this route silently "succeeded" against no
+    // accounts at all. Same bug already fixed via JS-side filtering in
+    // mailPoller.pollAll() and agencies.js's bulk-import active check.
+    const { data: allAccounts, error } = await sup
       .from('email_accounts')
-      .select('id')
-      .eq('is_active', 1)
-      .not('imap_host', 'is', null);
+      .select('id, is_active, imap_host');
 
     if (error) return res.status(500).json({ error: error.message });
+    const accounts = (allAccounts || []).filter(a => (a.is_active === true || a.is_active === 1) && a.imap_host);
 
     let totalFetched = 0;
     let totalCreated = 0;

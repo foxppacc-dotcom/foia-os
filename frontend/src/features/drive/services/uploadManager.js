@@ -78,6 +78,12 @@ class UploadManager {
   async _uploadItem(item) {
     item.status = UPLOAD_STATUS.UPLOADING;
     item.startedAt = Date.now();
+    // Baseline for this attempt's speed calc -- resuming a paused chunked
+    // upload (or retrying) must measure bytes moved SINCE THIS ATTEMPT, not
+    // since the file's original start, or the bar reports an instant,
+    // physically-impossible speed the moment it resumes (e.g. 40MB already
+    // uploaded before a pause, divided by the ~0.1s since resume = "400 MB/s").
+    item.uploadedBytesAtStart = item.uploadedBytes;
     item.abortController = new AbortController();
     this._notify();
 
@@ -95,7 +101,13 @@ class UploadManager {
       item.completedAt = Date.now();
     } catch (err) {
       if (err.name === 'AbortError') {
-        item.status = UPLOAD_STATUS.CANCELED;
+        // pause()/cancel() already set the definitive status synchronously
+        // (PAUSED or CANCELED) before aborting -- don't clobber a pause with
+        // "canceled" just because aborting the request throws the same
+        // AbortError either way.
+        if (item.status !== UPLOAD_STATUS.PAUSED && item.status !== UPLOAD_STATUS.CANCELED) {
+          item.status = UPLOAD_STATUS.CANCELED;
+        }
       } else if (item.retryCount < MAX_CHUNK_RETRIES) {
         item.retryCount++;
         item.status = UPLOAD_STATUS.RETRYING;
@@ -139,6 +151,11 @@ class UploadManager {
         else reject(new Error(xhr.responseText || `HTTP ${xhr.status}`));
       };
       xhr.onerror = () => reject(new Error('Network error'));
+      // Without this, calling xhr.abort() (pause()/cancel()) never fires
+      // onload or onerror -- the promise just hangs forever, silently
+      // orphaning the whole _uploadItem() chain (and, before the resume()
+      // fix below, permanently leaking one activeCount slot every time).
+      xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'));
       xhr.open('POST', `${API}/cases/${item.caseId}/documents`);
       if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.send(formData);
@@ -255,6 +272,11 @@ class UploadManager {
          const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
          const firstChunk = Math.min(Math.floor(startOffset / CHUNK_SIZE), totalChunks);
          let driveFile = null;
+         // Marks this call as the one live chain resume() should wake up in
+         // place (by flipping status back to UPLOADING) instead of starting
+         // a SECOND, competing _uploadItem() call that would re-upload the
+         // same file concurrently with this one.
+         item._chunkedInFlight = true;
 
          for (let chunkIndex = firstChunk; chunkIndex < totalChunks; chunkIndex++) {
       if (item.status === UPLOAD_STATUS.CANCELED || item.status === UPLOAD_STATUS.PAUSED) {
@@ -289,6 +311,11 @@ class UploadManager {
           if (result) driveFile = result; // the final chunk's response is the created Drive file
           break;
         } catch (err) {
+          // A deliberate cancel/pause abort is not a transient network
+          // failure -- retrying it (up to MAX_CHUNK_RETRIES times, each with
+          // a growing delay) would ignore the user's action for several
+          // seconds before finally propagating. Let it through immediately.
+          if (err.name === 'AbortError') throw err;
           chunkRetries++;
           if (chunkRetries > MAX_CHUNK_RETRIES) throw err;
           item.status = UPLOAD_STATUS.RETRYING;
@@ -330,27 +357,43 @@ class UploadManager {
         }
       };
       xhr.onerror = () => reject(new Error('خطأ شبكة أثناء الرفع إلى Google Drive'));
+      // Without this, aborting mid-chunk (a pause/cancel that lands while
+      // this exact chunk is in flight) never settles the promise -- it just
+      // hangs, same issue as _simpleUpload above.
+      xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'));
       xhr.open('PUT', sessionUrl);
       xhr.setRequestHeader('Content-Range', `bytes ${start}-${end - 1}/${totalSize}`);
       xhr.send(chunk);
     });
   }
 
-  /** Calculate upload speed and ETA */
+  /** Calculate upload speed and ETA, measured against THIS attempt only --
+   *  using bytes-since-file-started would report an instant, impossible
+   *  speed right after a resume (all the bytes uploaded before the pause,
+   *  divided by the ~0.1s since resume). A short elapsed-time floor also
+   *  keeps the very first tick of any attempt from spiking on tiny timers. */
   _updateSpeed(item, loadedBytes) {
     const elapsed = (Date.now() - item.startedAt) / 1000;
-    item.speed = elapsed > 0 ? loadedBytes / elapsed : 0;
+    const bytesThisAttempt = loadedBytes - (item.uploadedBytesAtStart || 0);
+    item.speed = elapsed > 0.2 ? bytesThisAttempt / elapsed : (item.speed || 0);
     const remaining = item.totalBytes - loadedBytes;
     item.eta = item.speed > 0 ? remaining / item.speed : 0;
   }
 
-  /** Pause an upload */
+  /** Pause an upload. activeCount is deliberately left untouched here -- the
+   *  SAME .finally() that incremented it (in _processQueue, or resume() for a
+   *  restarted simple upload) is the only thing that ever decrements it, once
+   *  the aborted request's promise actually settles. Adjusting it here too
+   *  used to double-count against that .finally() for a simple upload (whose
+   *  abort now properly rejects), or never get released at all for a chunked
+   *  upload's between-chunks pause (whose chain doesn't finish until later)
+   *  -- both drift the count until the queue silently stops starting new
+   *  items once enough pauses/cancels/resumes had happened in a session. */
   pause(id) {
     const item = this.queue.find(i => i.id === id);
     if (item && (item.status === UPLOAD_STATUS.UPLOADING || item.status === UPLOAD_STATUS.QUEUED)) {
       item.status = UPLOAD_STATUS.PAUSED;
       if (item.abortController) item.abortController.abort();
-      this.activeCount = Math.max(0, this.activeCount - 1);
       this._notify();
     }
   }
@@ -360,9 +403,23 @@ class UploadManager {
     const item = this.queue.find(i => i.id === id);
     if (item && item.status === UPLOAD_STATUS.PAUSED) {
       item.abortController = new AbortController();
-      this.activeCount++;
-      this._uploadItem(item);
-      this._notify();
+      if (item._chunkedInFlight) {
+        // The original _uploadChunksToSession call for this item is still
+        // alive, parked in its own between-chunks wait loop watching for
+        // this exact flip -- starting a second _uploadItem() here would
+        // race it into uploading the same file twice over. Just wake it up.
+        item.status = UPLOAD_STATUS.UPLOADING;
+        this._notify();
+      } else {
+        // Nothing is alive waiting: a simple upload's pause fully aborted
+        // its one request (no partial-resume possible for a single POST),
+        // or the item was paused before it ever started. Rejoin the same
+        // managed queue every fresh item uses so activeCount/MAX_CONCURRENT
+        // bookkeeping stays correct instead of force-starting a 4th+ upload.
+        item.status = UPLOAD_STATUS.QUEUED;
+        this._notify();
+        this._processQueue();
+      }
     }
   }
 
@@ -370,9 +427,8 @@ class UploadManager {
   cancel(id) {
     const item = this.queue.find(i => i.id === id);
     if (item) {
-      if (item.abortController) item.abortController.abort();
       item.status = UPLOAD_STATUS.CANCELED;
-      if (item.status === UPLOAD_STATUS.UPLOADING) this.activeCount = Math.max(0, this.activeCount - 1);
+      if (item.abortController) item.abortController.abort();
       this._notify();
     }
   }

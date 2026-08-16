@@ -139,9 +139,21 @@ export default function CaseGDrive() {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-3">
               <XCircle className="w-5 h-5 shrink-0" style={{ color: 'var(--warning)' }} />
-              <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>غير متصل بجوجل درايف</p>
+              <div>
+                <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                  {status.needsReconnect ? 'انتهت صلاحية الاتصال بجوجل درايف' : 'غير متصل بجوجل درايف'}
+                </p>
+                {status.needsReconnect && (
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {status.email ? `الحساب السابق: ${status.email} — ` : ''}
+                    الرفع سيفشل حتى تعيد الربط من الزر بجانب هذا.
+                  </p>
+                )}
+              </div>
             </div>
-            <AppButton size="sm" icon={<CloudCog className="w-3.5 h-3.5" />} onClick={connectDrive}>ربط حساب جوجل درايف</AppButton>
+            <AppButton size="sm" icon={<CloudCog className="w-3.5 h-3.5" />} onClick={connectDrive}>
+              {status.needsReconnect ? 'إعادة الربط' : 'ربط حساب جوجل درايف'}
+            </AppButton>
           </div>
         )}
       </AppCard>

@@ -3,9 +3,15 @@ const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
+const { requireCaseAccess, canAccessCase } = require('../services/caseAccess');
+// Every route in this file previously had NO per-case access check -- a role
+// restricted to its own assigned cases could read/create/edit/reorder
+// requests, or acknowledge overdue items, on ANY case just by knowing a
+// case id or request id.
+const caseGate = requireCaseAccess('caseId');
 
 // GET /api/cases/:caseId/requests
-router.get('/cases/:caseId/requests', async (req, res) => {
+router.get('/cases/:caseId/requests', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
@@ -33,7 +39,7 @@ router.get('/cases/:caseId/requests', async (req, res) => {
 });
 
 // POST /api/cases/:caseId/requests
-router.post('/cases/:caseId/requests', async (req, res) => {
+router.post('/cases/:caseId/requests', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
@@ -76,6 +82,9 @@ router.put('/requests/:id', async (req, res) => {
     const { data: existing } = await sup.from('requests').select('*').eq('id', requestId).single();
     if (!existing) {
       return res.status(404).json({ error: 'Request not found' });
+    }
+    if (!(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
     }
 
     const { agency_id, status, classification_id, sent_date, response_date, notes } = req.body;
@@ -127,6 +136,9 @@ router.put('/requests/:id/channel', async (req, res) => {
 
     const { data: existing } = await sup.from('requests').select('*').eq('id', requestId).single();
     if (!existing) return res.status(404).json({ error: 'Request not found' });
+    if (!(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     const { error: updateErr } = await sup
       .from('requests')
@@ -176,6 +188,9 @@ router.put('/requests/:id/sort', async (req, res) => {
 
     const { data: existing } = await sup.from('requests').select('*').eq('id', requestId).single();
     if (!existing) return res.status(404).json({ error: 'Request not found' });
+    if (!(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     const { error } = await sup.from('requests').update({ sort_order }).eq('id', requestId);
     if (error) return res.status(400).json({ error: error.message });
@@ -197,6 +212,9 @@ router.post('/requests/:id/acknowledge-overdue', async (req, res) => {
 
     const { data: existing } = await sup.from('requests').select('id, case_id, agency_id').eq('id', requestId).maybeSingle();
     if (!existing) return res.status(404).json({ error: 'Request not found' });
+    if (!(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     const { error } = await sup.from('requests').update({
       overdue_ack_by: req.user.id,

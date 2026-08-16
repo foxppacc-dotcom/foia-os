@@ -25,7 +25,7 @@ const routes = [
   'automation', 'gdrive', 'phoneAndMail', 'portals', 'production',
   'settings', 'activity', 'classifier', 'cleanup', 'migration',
   'case_detail.routes', 'checklist', 'assignees', 'teamManagement', 'team.routes',
-  'teams', 'permissions', 'pipelineLists',
+  'teams', 'permissions', 'pipelineLists', 'forum',
 ];
 
 // Diagnostics and truly-public callbacks (no user Bearer token possible) must be
@@ -56,6 +56,12 @@ try {
   const gdriveRoute = require('./routes/gdrive');
   if (gdriveRoute && gdriveRoute.oauthCallbackHandler) {
     app.get('/api/gdrive/oauth-callback', gdriveRoute.oauthCallbackHandler);
+  }
+  // Same reasoning as oauth-callback above: an <img src> can never carry our
+  // Bearer token, so this must resolve before cases.js's blanket
+  // `router.use(requireAuth)` (no path) can intercept and 401 it first.
+  if (gdriveRoute && gdriveRoute.imageProxyHandler) {
+    app.get('/api/gdrive/image/:fileId', gdriveRoute.imageProxyHandler);
   }
 } catch (e) {
   console.error('[index] gdrive oauth-callback mount failed:', e.message);
