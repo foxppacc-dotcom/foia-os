@@ -177,6 +177,14 @@ export default function Cases() {
   const [page, setPage] = useState(0); // 0-indexed internally, shown as page+1
   const [pageInput, setPageInput] = useState('1');
   const [loading, setLoading] = useState(true);
+  // Separate from `loading` above -- that one flips true/false on EVERY
+  // fetchCases() call, including the debounced search-as-you-type refetch.
+  // The whole page used to early-return a spinner whenever `loading` was
+  // true, which unmounted the search input (and everything else) on every
+  // keystroke's debounced refetch -- losing focus mid-typing, so each
+  // character required clicking back into the box before the next one could
+  // be typed. This one is only ever true before the FIRST fetch resolves.
+  const [initialLoading, setInitialLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [agencies, setAgencies] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -226,10 +234,11 @@ export default function Cases() {
       setTotal(Array.isArray(d) ? d.length : d.total || 0);
       setFetchError('');
       setLoading(false);
+      setInitialLoading(false);
     // Previously left `cases` at [] on any failure -- rendered as "لا توجد
     // قضايا" (no cases exist), indistinguishable from a genuinely empty
     // caseload.
-    }).catch(() => { setFetchError('تعذر تحميل القضايا — حاول تحديث الصفحة'); setLoading(false); });
+    }).catch(() => { setFetchError('تعذر تحميل القضايا — حاول تحديث الصفحة'); setLoading(false); setInitialLoading(false); });
   };
 
   const fetchAgencies = () => {
@@ -394,7 +403,7 @@ export default function Cases() {
   // whole caseload to filter client-side against.
   const filteredCases = cases;
 
-  if (loading) return (
+  if (initialLoading) return (
     <div className="flex items-center justify-center h-64">
       <div className="w-10 h-10 border-2 rounded-full animate-spin" style={{ borderColor: 'var(--accent)', borderTopColor: 'transparent' }} />
     </div>
@@ -647,7 +656,11 @@ export default function Cases() {
       )}
 
       {/* Cases Table */}
-      {fetchError ? (
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <div className="w-8 h-8 border-2 rounded-full animate-spin" style={{ borderColor: 'var(--accent)', borderTopColor: 'transparent' }} />
+        </div>
+      ) : fetchError ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <p className="text-lg" style={{ color: '#ef4444' }}>⚠️ {fetchError}</p>
           <button onClick={() => { setLoading(true); fetchCases(); }} className="mt-4 px-5 py-2.5 rounded-xl font-semibold"
