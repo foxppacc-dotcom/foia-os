@@ -76,17 +76,33 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
       candidateCaseIds = candidateCaseIds === null ? set : new Set([...candidateCaseIds].filter(id => set.has(id)));
     };
     if (search) {
-      // Resolved via 3 separate single-column ilike queries instead of a
+      // Resolved via separate single-column ilike queries instead of a
       // hand-rolled .or("title.ilike.%x%,...") string -- PostgREST parses
       // that string's own commas/parens as ITS filter-grammar syntax, so a
       // search term that happens to contain either (e.g. "Smith, John")
       // broke the ENTIRE query with a 500 instead of just not matching.
-      const [byTitle, byClient, byUuid] = await Promise.all([
+      // Extended beyond the case's own title/client_name/uuid to also match
+      // an uploaded document's filename and a linked email's subject/sender
+      // -- the latter also covers portal-submission confirmation numbers,
+      // since documentCenter.js's portal-submission logger embeds
+      // "رقم التأكيد: {confirmation_number}" directly into the synthesized
+      // communication's subject, so no separate column is needed for that.
+      const [byTitle, byClient, byUuid, byDocument, byCommSubject, byCommSender] = await Promise.all([
         sup.from('cases').select('id').ilike('title', `%${search}%`),
         sup.from('cases').select('id').ilike('client_name', `%${search}%`),
         sup.from('cases').select('id').ilike('uuid', `%${search}%`),
+        sup.from('case_documents').select('case_id').ilike('original_name', `%${search}%`),
+        sup.from('communications').select('case_id').ilike('subject', `%${search}%`),
+        sup.from('communications').select('case_id').ilike('sender', `%${search}%`),
       ]);
-      intersect([...(byTitle.data || []), ...(byClient.data || []), ...(byUuid.data || [])].map(r => r.id));
+      intersect([
+        ...(byTitle.data || []).map(r => r.id),
+        ...(byClient.data || []).map(r => r.id),
+        ...(byUuid.data || []).map(r => r.id),
+        ...(byDocument.data || []).map(r => r.case_id),
+        ...(byCommSubject.data || []).map(r => r.case_id),
+        ...(byCommSender.data || []).map(r => r.case_id),
+      ]);
     }
     if (agency_ids) {
       const ids = agency_ids.split(',').map(s => parseInt(s)).filter(Number.isFinite);

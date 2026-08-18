@@ -3,6 +3,7 @@ import { useCaseContext } from '../context/CaseContext';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Send, Reply, Forward, Paperclip, Search, Clock, AlertCircle, Inbox, FileText, Building2, User, Mail, Tag, ChevronDown, ExternalLink, X, Download, Trash2 } from 'lucide-react';
 import Button from '../../../components/ui/Button';
+import { formatAgencyLocation } from '../../request/utils';
 
 const API = getApiBase();
 const tok = () => localStorage.getItem('foia_token');
@@ -56,6 +57,28 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
     if (newAgency?.email && (!to || to === prevAgencyEmail)) setTo(newAgency.email);
   };
   const [accountId, setAccountId] = useState(replyTo?.email_account_id || replyTo?.assigned_email_account_id || accounts?.[0]?.id || '');
+  // Once an account has emailed this agency for ANOTHER case, reusing it
+  // here is blocked server-side (documentCenter.js's /compose) -- checked
+  // here too so the reason shows up as soon as both are picked, not only
+  // after a failed send attempt.
+  const [lockInfo, setLockInfo] = useState(null);
+  const [unlocking, setUnlocking] = useState(false);
+  const checkAgencyLock = () => {
+    if (!accountId || !agencyId) { setLockInfo(null); return; }
+    fetch(`${API}/email-accounts/${accountId}/agency-lock?agency_id=${agencyId}&case_id=${caseId}`, { headers: authHdrs() })
+      .then(r => r.json()).then(setLockInfo).catch(() => setLockInfo(null));
+  };
+  useEffect(() => { checkAgencyLock(); }, [accountId, agencyId]);
+  const overrideLock = async () => {
+    setUnlocking(true);
+    try {
+      await fetch(`${API}/email-accounts/${accountId}/agency-lock/override`, {
+        method: 'POST', headers: hdrs(), body: JSON.stringify({ agency_id: agencyId, case_id: caseId }),
+      });
+      checkAgencyLock();
+    } catch {}
+    setUnlocking(false);
+  };
   const [subject, setSubject] = useState(
     isForward ? `Fwd: ${replyTo?.subject || ''}` : replyTo ? `Re: ${replyTo.subject}` : ''
   );
@@ -63,6 +86,17 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
   const [sending, setSending] = useState(false);
   const [files, setFiles] = useState([]);
   const fileInputRef = useRef(null);
+  // Grows with the actual email content instead of staying a small fixed
+  // box -- same auto-grow approach as components/ds/AppTextarea.jsx, ported
+  // inline to keep this composer's own compact styling. Resetting to 'auto'
+  // first (not just reading scrollHeight) is what lets it shrink back down
+  // too when text is deleted, not just grow.
+  const bodyRef = useRef(null);
+  const autoGrowBody = () => {
+    const el = bodyRef.current;
+    if (el) { el.style.height = 'auto'; el.style.height = Math.max(el.scrollHeight, 100) + 'px'; }
+  };
+  useEffect(() => { autoGrowBody(); }, [body]);
   const [expectedDays, setExpectedDays] = useState(!isForward && !replyTo ? '14' : '');
   const [customDays, setCustomDays] = useState('');
   const [sendError, setSendError] = useState('');
@@ -110,7 +144,15 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
           <select className="flex-1 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
             value={agencyId} onChange={e => handleAgencyChange(e.target.value)}>
             <option value="">اختر الجهة</option>
-            {(agencies || []).map(a => <option key={a.id} value={a.id}>{a.name_en || a.name || a.name_ar || ''}</option>)}
+            {(agencies || []).map(a => {
+              const name = a.name_en || a.name || a.name_ar || '';
+              const loc = formatAgencyLocation(a);
+              // Same disambiguation already used in AgenciesTab.jsx's own
+              // agency picker -- several agencies here share a name and only
+              // differ by state/city, so the name alone silently picked the
+              // wrong one.
+              return <option key={a.id} value={a.id}>{loc ? `${name} — ${loc}` : name}</option>;
+            })}
           </select>
           <select className="flex-1 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
             value={accountId} onChange={e => setAccountId(e.target.value)}>
@@ -118,6 +160,19 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
             {(accounts || []).map(a => <option key={a.id} value={a.id}>{a.display_name || a.email}</option>)}
           </select>
         </div>
+        {lockInfo?.locked && (
+          <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded text-[11px]" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#EF4444' }}>
+            <span>
+              ⚠️ هذا الحساب مستخدم بالفعل لمراسلة هذه الجهة في قضية "{lockInfo.lockedByCase?.title || '#' + lockInfo.lockedByCase?.id}" — اختر حسابًا آخر.
+            </span>
+            {lockInfo.canOverride && (
+              <button type="button" onClick={overrideLock} disabled={unlocking}
+                className="shrink-0 px-2 py-1 rounded font-medium" style={{ background: 'rgba(239,68,68,0.15)', color: '#EF4444' }}>
+                {unlocking ? '...' : 'فك القيد'}
+              </button>
+            )}
+          </div>
+        )}
         <input className="w-full px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
           placeholder="إلى..." value={to} onChange={e => setTo(e.target.value)} />
         <div className="flex gap-2">
@@ -146,8 +201,9 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
               placeholder="أيام" value={customDays} onChange={e => setCustomDays(e.target.value)} />
           )}
         </div>
-        <textarea className="w-full px-2 py-1.5 rounded text-xs min-h-[100px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
-          placeholder="محتوى الرسالة..." value={body} onChange={e => setBody(e.target.value)} />
+        <textarea ref={bodyRef} className="w-full px-2 py-1.5 rounded text-xs min-h-[100px] resize-none overflow-hidden"
+          style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
+          placeholder="محتوى الرسالة..." value={body} onChange={e => setBody(e.target.value)} onInput={autoGrowBody} />
         {files.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {files.map((f, i) => (
@@ -166,7 +222,7 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
           <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()}><Paperclip className="w-3 h-3" />مرفقات</Button>
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>حفظ كمسودة</Button>
-            <Button variant="primary" size="sm" onClick={send} disabled={sending}>
+            <Button variant="primary" size="sm" onClick={send} disabled={sending || lockInfo?.locked}>
               {sending ? 'جاري الإرسال...' : <><Send className="w-3 h-3" />إرسال</>}
             </Button>
           </div>
@@ -303,7 +359,13 @@ export default function CommunicationCenter({ caseId }) {
     if (!caseId) return;
     fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []));
     fetch(`${API}/email-accounts`, { headers: hdrs() }).then(r => r.json()).then(d => setAccounts(d.data || d.accounts || []));
-    fetch(`${API}/agencies`, { headers: hdrs() }).then(r => r.json()).then(d => setAgencies(d.data || d.agencies || d || []));
+    // Unlike AgenciesTab.jsx's own agency picker (caseApi.js's fetchAgencies,
+    // which already passes limit=1000), this fetch had no limit param -- the
+    // backend's GET /agencies defaults to limit=100, so once the org passed
+    // 100 agencies this composer silently dropped everything alphabetically
+    // past that cutoff, making it look like only a handful of agencies (the
+    // case's own, coincidentally early alphabetically) were selectable.
+    fetch(`${API}/agencies?limit=1000`, { headers: hdrs() }).then(r => r.json()).then(d => setAgencies(d.data || d.agencies || d || []));
   }, [caseId]);
 
   const filtered = useMemo(() => {

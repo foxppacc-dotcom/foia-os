@@ -20,6 +20,7 @@ const ACTION_LABEL = {
   delete_any: 'حذف أي تعليق/موضوع (بغض النظر عن الكاتب)', create_topic: 'إنشاء موضوع جديد',
   comment: 'التعليق', pin: 'تثبيت الإعلانات المهمة',
   promote: 'اعتماد ونقل القضية للقضايا الجاهزة', manage_criteria: 'إدارة معايير الفرز',
+  override_lock: 'فك قيد استخدام حساب بريد لجهة مقفلة على قضية أخرى',
 };
 
 export default function TeamPermissions() {

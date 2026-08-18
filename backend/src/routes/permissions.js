@@ -15,7 +15,7 @@ const RESOURCES = [
   { key: 'timeline', label: 'الخط الزمني الشامل', actions: ['view'] },
   { key: 'settings', label: 'الإعدادات', actions: ['view', 'manage'] },
   { key: 'users', label: 'المستخدمين', actions: ['invite', 'edit', 'delete'] },
-  { key: 'email_accounts', label: 'حسابات البريد', actions: ['manage'] },
+  { key: 'email_accounts', label: 'حسابات البريد', actions: ['manage', 'override_lock'] },
   { key: 'case_comments', label: 'نقاش الفريق (داخل القضية)', actions: ['delete_any'] },
   { key: 'forum', label: 'المنتدى العام', actions: ['view', 'create_topic', 'comment', 'pin', 'delete_any'] },
   { key: 'intake', label: 'الاستقبال الذكي', actions: ['view', 'create', 'edit', 'promote', 'manage_criteria'] },

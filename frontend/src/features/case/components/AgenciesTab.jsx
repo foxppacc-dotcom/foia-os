@@ -1,7 +1,7 @@
 import { api } from '../../../api';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, ChevronDown, ChevronUp, UserPlus, XCircle, CheckCircle, AlertTriangle, CalendarClock, History } from 'lucide-react';
+import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, UserPlus, XCircle, CheckCircle, AlertTriangle, CalendarClock, History, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import { useRequests } from '../../request/hooks/useRequests';
 import { classifyRequest } from '../../request/services/requestApi';
@@ -11,7 +11,6 @@ import AppButton from '../../../components/ds/AppButton';
 import AppSelect from '../../../components/ds/AppSelect';
 import AppBadge from '../../../components/ds/AppBadge';
 import AppEmptyState from '../../../components/ds/AppEmptyState';
-import AppStack from '../../../components/ds/AppStack';
 
 const AGENCY_TYPES = [
   { value: '', label: 'اختر النوع' },
@@ -35,6 +34,206 @@ function formatDateTime(dateStr) {
   return `${d.toLocaleDateString('ar-SA')} ${d.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
+// One agency's full card: basic info + channels + requests + a SINGLE unified
+// correspondence feed for everything ever sent/received/logged with this
+// agency on this case -- previously this same history was nested one level
+// deeper, per-request, so reviewing "what's happened with this agency"
+// meant opening every request separately. Split out of the old single
+// 429-line AgenciesTab.jsx so this section can be reasoned about on its own.
+function AgencyCard({
+  agency, reqs, channels, emailAccounts, agencyLog,
+  showChannelForm, newChannel, setNewChannel, setShowChannelForm, addChannel, removeChannel,
+  showPortalForm, setShowPortalForm, portalForm, setPortalForm, logPortalSubmission,
+  setClassification, acknowledgeOverdue, handleRemove, navigate,
+}) {
+  const firstReq = reqs[0];
+  const key = agency?.id || firstReq.agency_id || firstReq.id;
+  const openReqs = reqs.filter(r => r.status !== 'closed').length;
+  const closedReqs = reqs.filter(r => r.status === 'closed').length;
+  const defaultAccount = (emailAccounts || []).find(a => String(a.id) === String(agency?.default_email_account_id));
+  const location = formatAgencyLocation(agency);
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  return (
+    <div className="shrink-0 flex flex-col rounded-lg" style={{ width: '340px', background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)' }}>
+      {/* Header — always visible, no expand/collapse anymore: the whole
+          point of this redesign is seeing an agency's info + correspondence
+          at a glance, not behind a click. */}
+      <div className="p-3 rounded-t-lg" style={{ background: 'var(--ds-bg-secondary)', borderBottom: '1px solid var(--ds-border)' }}>
+        <div className="flex items-start gap-2.5">
+          <Building2 className="w-5 h-5 shrink-0 mt-0.5" style={{ color: 'var(--ds-accent)' }} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-0.5">
+              <span className="text-sm font-semibold truncate" style={{ color: 'var(--ds-text-primary)' }}>{agency?.name_ar || agency?.name_en || 'جهة'}</span>
+            </div>
+            {agency?.name_ar && agency?.name_en && <div className="text-[10px] truncate" style={{ color: 'var(--ds-text-muted)' }}>{agency.name_en}</div>}
+            <div className="flex items-center gap-2 text-[10px] flex-wrap mt-0.5" style={{ color: 'var(--ds-text-muted)' }}>
+              {location && <span><MapPin className="w-3 h-3 inline" /> {location}</span>}
+              <span>· {openReqs} مفتوح</span>
+              <span>· {closedReqs} مغلق</span>
+            </div>
+          </div>
+          <button onClick={() => handleRemove(firstReq.id)} title="إزالة الجهة من القضية" className="p-1 shrink-0" style={{ color: 'var(--ds-text-muted)' }}>
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="p-3 space-y-3 overflow-y-auto" style={{ maxHeight: '520px' }}>
+        {/* Real agency details */}
+        <div className="grid grid-cols-1 gap-y-1 text-[11px] p-2.5 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', color: 'var(--ds-text-secondary)' }}>
+          {agency?.type && <span>النوع: {AGENCY_TYPES.find(t => t.value === agency.type)?.label || agency.type}</span>}
+          {agency?.phone && <span><Phone className="w-3 h-3 inline" /> {agency.phone}</span>}
+          {agency?.email && <span><Mail className="w-3 h-3 inline" /> {agency.email}</span>}
+          {agency?.address && <span><MapPin className="w-3 h-3 inline" /> {agency.address}</span>}
+          {agency?.portal_url && <a href={agency.portal_url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> بوابة الطلبات</a>}
+          {agency?.website && <a href={agency.website} target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> الموقع الرسمي</a>}
+          {agency?.tracking_portal_url && <a href={agency.tracking_portal_url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> متابعة الطلب</a>}
+          {agency?.reply_to && <span>الرد على: {agency.reply_to}</span>}
+          {defaultAccount && <span><Mail className="w-3 h-3 inline" /> حساب الإرسال: {defaultAccount.email}</span>}
+        </div>
+
+        {/* Communication channels */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] font-semibold" style={{ color: 'var(--ds-text-muted)' }}>بيانات التواصل ({(channels[agency?.id] || []).length})</span>
+            <button onClick={() => setShowChannelForm(p => ({ ...p, [agency.id]: true }))}
+              className="text-[10px] px-2 py-0.5 rounded" style={{ color: '#3b82f6', background: 'rgba(59,130,246,0.1)' }}>
+              <UserPlus className="w-3 h-3 inline" /> إضافة</button>
+          </div>
+          {showChannelForm[agency?.id] && (
+            <div className="p-2 mb-1 rounded-lg space-y-1" style={{ background: 'var(--ds-bg-tertiary)', border: '1px dashed var(--ds-border)' }}>
+              <input placeholder="رابط البوابة" value={newChannel[agency.id]?.portal_link || ''} onChange={e => setNewChannel(p => ({ ...p, [agency.id]: { ...p[agency.id], portal_link: e.target.value } }))}
+                className="w-full px-2 py-1 rounded text-[11px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+              <input placeholder="البريد الإلكتروني" value={newChannel[agency.id]?.email || ''} onChange={e => setNewChannel(p => ({ ...p, [agency.id]: { ...p[agency.id], email: e.target.value } }))}
+                className="w-full px-2 py-1 rounded text-[11px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+              <textarea placeholder="كلمات تساعد الفلتر في ربط الإيميل بالقضية"
+                value={newChannel[agency.id]?.filter_keywords || ''} onChange={e => setNewChannel(p => ({ ...p, [agency.id]: { ...p[agency.id], filter_keywords: e.target.value } }))}
+                rows={2} className="w-full px-2 py-1 rounded text-[11px] resize-none" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+              <div className="flex gap-1.5 pt-0.5">
+                <AppButton size="sm" onClick={() => addChannel(agency.id)}><CheckCircle className="w-3.5 h-3.5" />حفظ</AppButton>
+                <AppButton size="sm" variant="secondary" onClick={() => setShowChannelForm(p => ({ ...p, [agency.id]: false }))}>إلغاء</AppButton>
+              </div>
+            </div>
+          )}
+          <div className="space-y-1">
+            {(channels[agency?.id] || []).map(ch => (
+              <div key={ch.id} className="flex items-center gap-1.5 p-1.5 rounded-lg text-[11px]" style={{ background: 'var(--ds-bg-tertiary)' }}>
+                <Mail className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--ds-text-muted)' }} />
+                <div className="flex-1 min-w-0">
+                  {ch.email && <span className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{ch.email}</span>}
+                  {ch.portal_link && <a href={ch.portal_link} target="_blank" rel="noreferrer" className="mr-1" style={{ color: '#3b82f6' }}>· رابط البوابة</a>}
+                  {ch.filter_keywords && <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--ds-text-muted)' }}>كلمات الفلترة: {ch.filter_keywords}</div>}
+                </div>
+                <button onClick={() => removeChannel(agency.id, ch.id)} className="p-0.5 shrink-0" style={{ color: 'var(--ds-text-muted)' }}>
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Requests — status/classification/portal-log actions per request;
+            correspondence itself moved out of here into the unified feed below. */}
+        <div>
+          <span className="text-[11px] font-semibold block mb-1" style={{ color: 'var(--ds-text-muted)' }}>الطلبات ({reqs.length})</span>
+          <div className="space-y-1.5">
+            {reqs.map(req => {
+              const rBadge = getStatusBadge(req.status);
+              const isLate = !!(req.expected_response_date && req.expected_response_date < todayStr && !req.response_date);
+              const isAcked = isLate && !!req.overdue_ack_by;
+              const isPortalFormOpen = showPortalForm[req.id];
+              return (
+                <div key={req.id} className="p-2 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: isLate && !isAcked ? '3px solid #ef4444' : '3px solid transparent' }}>
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0" style={{ background: 'var(--ds-accent)', color: 'white' }}>#{req.id}</div>
+                    {req.reference_number && <span className="text-[10px] truncate" style={{ color: 'var(--ds-text-muted)' }}>مرجع: {req.reference_number}</span>}
+                    <AppBadge variant={rBadge.variant}>{rBadge.text}</AppBadge>
+                    {isLate && !isAcked && <AlertTriangle className="w-3.5 h-3.5" style={{ color: '#ef4444' }} />}
+                  </div>
+                  <select value={req.agency_classification || ''} onChange={e => setClassification(req.id, e.target.value || null)}
+                    className="w-full px-2 py-1 rounded text-[11px] font-medium mb-1.5" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
+                    <option value="">— غير محدد —</option>
+                    {CLASS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  {isLate && !isAcked && (
+                    <div className="flex items-center justify-between gap-1.5 mb-1.5 text-[10px] px-2 py-1 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
+                      <span>تخطّى الموعد المتوقع ({req.expected_response_date})</span>
+                      <button onClick={() => acknowledgeOverdue(req.id)} className="px-1.5 py-0.5 rounded shrink-0" style={{ background: 'var(--ds-bg-secondary)', color: '#ef4444' }}>تم الاطلاع</button>
+                    </div>
+                  )}
+                  {isAcked && (
+                    <div className="flex items-center gap-1 mb-1.5 text-[10px] px-2 py-1 rounded-lg flex-wrap" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>
+                      <CheckCircle className="w-3.5 h-3.5" /> تم الاطلاع من{' '}
+                      <button onClick={() => navigate(`/profile/${req.overdue_ack_user?.id}`)} className="underline" style={{ color: 'var(--ds-accent)' }}>
+                        {req.overdue_ack_user?.name || 'مستخدم'}
+                      </button>
+                    </div>
+                  )}
+                  {!isLate && req.expected_response_date && (
+                    <div className="flex items-center gap-1 mb-1.5 text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>
+                      <CalendarClock className="w-3.5 h-3.5" /> موعد الرد المتوقع: {req.expected_response_date}
+                    </div>
+                  )}
+                  <button onClick={() => setShowPortalForm(p => ({ ...p, [req.id]: !p[req.id] }))} className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg" style={{ background: 'rgba(139,92,246,0.1)', color: '#8b5cf6' }}>
+                    <Globe className="w-3 h-3" />تسجيل تقديم عبر البوابة</button>
+                  {isPortalFormOpen && (
+                    <div className="mt-1.5 p-2 rounded-lg space-y-1.5" style={{ background: 'var(--ds-bg-tertiary)', border: '1px dashed var(--ds-border)' }}>
+                      <input type="number" min="1" max="30" placeholder="مهلة الرد (أيام)"
+                        value={portalForm[req.id]?.expected_response_days ?? ''}
+                        onChange={e => setPortalForm(p => ({ ...p, [req.id]: { ...p[req.id], expected_response_days: e.target.value } }))}
+                        className="w-full px-2 py-1 rounded text-[11px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+                      <input placeholder="رقم تأكيد التقديم (اختياري)" value={portalForm[req.id]?.confirmation_number || ''} onChange={e => setPortalForm(p => ({ ...p, [req.id]: { ...p[req.id], confirmation_number: e.target.value } }))}
+                        className="w-full px-2 py-1 rounded text-[11px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+                      <input placeholder="ملاحظة (اختياري)" value={portalForm[req.id]?.note || ''} onChange={e => setPortalForm(p => ({ ...p, [req.id]: { ...p[req.id], note: e.target.value } }))}
+                        className="w-full px-2 py-1 rounded text-[11px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+                      <div className="flex gap-1.5 justify-end pt-0.5">
+                        <AppButton size="sm" variant="secondary" onClick={() => setShowPortalForm(p => ({ ...p, [req.id]: false }))}>إلغاء</AppButton>
+                        <AppButton size="sm" onClick={() => logPortalSubmission(req.id, agency?.id)}><CheckCircle className="w-3.5 h-3.5" />تسجيل</AppButton>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Unified correspondence -- every message/log tied to THIS agency for
+            this case, newest first, instead of split per-request. Portal
+            submissions land here too since they're logged as their own
+            communications row (documentCenter.js's portal-log route). */}
+        <div>
+          <div className="text-[11px] font-semibold mb-1 flex items-center gap-1.5" style={{ color: 'var(--ds-text-muted)' }}>
+            <History className="w-3.5 h-3.5" /> كل المراسلات مع هذه الجهة ({agencyLog.length})
+          </div>
+          {agencyLog.length === 0 ? (
+            <p className="text-[11px]" style={{ color: 'var(--ds-text-muted)' }}>لا توجد مراسلات مسجلة بعد</p>
+          ) : (
+            <div className="space-y-1">
+              {agencyLog.map(c => {
+                const relatedReq = reqs.find(r => r.id === c.request_id);
+                return (
+                  <div key={c.id} className="text-[11px] p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium truncate" style={{ color: 'var(--ds-text-primary)' }}>
+                        {c.type === 'portal' ? '🌐' : c.type === 'email' ? '📧' : '📄'} {c.subject || '—'}
+                        {relatedReq && <span className="mr-1 font-normal" style={{ color: 'var(--ds-text-muted)' }}>· #{relatedReq.id}</span>}
+                      </span>
+                      <span className="shrink-0" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(c.created_at)}</span>
+                    </div>
+                    {c.body && <div className="mt-0.5 line-clamp-2" style={{ color: 'var(--ds-text-secondary)' }}>{c.body}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AgenciesTab() {
   const navigate = useNavigate();
   const { id, requests, allAgencies, refetch, channels: caseChannels } = useCaseContext();
@@ -42,7 +241,6 @@ export default function AgenciesTab() {
   const [extraAgencies, setExtraAgencies] = useState([]);
   const unusedAgencies = filterUnusedAgencies([...(allAgencies || []), ...extraAgencies], requests);
   const [emailAccounts, setEmailAccounts] = useState([]);
-  const [expanded, setExpanded] = useState({});
   const [newChannel, setNewChannel] = useState({});
   const [showChannelForm, setShowChannelForm] = useState({});
   const [showNewAgencyForm, setShowNewAgencyForm] = useState(false);
@@ -51,6 +249,7 @@ export default function AgenciesTab() {
   const [showPortalForm, setShowPortalForm] = useState({});
   const [portalForm, setPortalForm] = useState({});
   const [commRecords, setCommRecords] = useState([]);
+  const scrollRef = useRef(null);
 
   useEffect(() => {
     api.get('/email-accounts').then(d => setEmailAccounts(d.data || d.accounts || [])).catch(() => {});
@@ -59,10 +258,6 @@ export default function AgenciesTab() {
   useEffect(() => {
     api.get(`/cases/${id}/threads`).then(d => setCommRecords(d.threads || [])).catch(() => {});
   }, [id, requests]);
-
-  const getRequestLog = (reqId, agencyId) => (commRecords || [])
-    .filter(c => c.request_id === reqId || (!c.request_id && c.agency_id === agencyId))
-    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
 
   const grouped = useMemo(() => {
     const map = {};
@@ -80,7 +275,13 @@ export default function AgenciesTab() {
     return map;
   }, [caseChannels]);
 
-  const toggleExpand = (key) => setExpanded(p => ({ ...p, [key]: !p[key] }));
+  // Matches by agency_id (now reliably stamped on every send/receive, see
+  // documentCenter.js) OR by request_id falling under this agency's own
+  // requests -- keeps older rows that predate agency_id being saved
+  // correctly attributed too.
+  const getAgencyLog = (agencyId, reqIds) => (commRecords || [])
+    .filter(c => c.agency_id === agencyId || (c.request_id && reqIds.includes(c.request_id)))
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
 
   const createAgencyInline = async () => {
     if (!newAgency.name_en.trim()) return alert('الاسم بالإنجليزية مطلوب');
@@ -148,9 +349,17 @@ export default function AgenciesTab() {
     } catch (e) { alert('❌ ' + e.message); }
   };
 
+  const scrollBy = (dx) => scrollRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
+
   return (
     <AppSection title={'الجهات (' + (grouped?.length || 0) + ')'}
       actions={<>
+        {grouped.length > 3 && (
+          <div className="flex gap-1">
+            <AppButton size="sm" variant="secondary" onClick={() => scrollBy(-360)}><ChevronRight className="w-3.5 h-3.5" /></AppButton>
+            <AppButton size="sm" variant="secondary" onClick={() => scrollBy(360)}><ChevronLeft className="w-3.5 h-3.5" /></AppButton>
+          </div>
+        )}
         <AppButton size="sm" variant="secondary" disabled={rescanning} onClick={runRescan} title="إعادة فحص الرسائل الواردة غير المرتبطة بناءً على بيانات القضية والجهات الحالية">
           {rescanning ? 'جارٍ الفحص...' : 'إعادة فحص الرسائل غير المرتبطة'}
         </AppButton>
@@ -203,226 +412,28 @@ export default function AgenciesTab() {
       )}
 
       {grouped?.length > 0 ? (
-        <AppStack gap="6px">
+        <div ref={scrollRef} className="flex gap-3 overflow-x-auto pb-1" style={{ scrollSnapType: 'x proximity' }}>
           {grouped.map(group => {
             const agency = group.agency;
             const reqs = group.requests;
-            const firstReq = reqs[0];
-            const key = agency?.id || firstReq.agency_id || firstReq.id;
-            const isExpanded = expanded[key];
-            const openReqs = reqs.filter(r => r.status !== 'closed').length;
-            const closedReqs = reqs.filter(r => r.status === 'closed').length;
-            const defaultAccount = (emailAccounts || []).find(a => String(a.id) === String(agency?.default_email_account_id));
-            const location = formatAgencyLocation(agency);
-
+            const key = agency?.id || reqs[0].agency_id || reqs[0].id;
+            const reqIds = reqs.map(r => r.id);
             return (
-              <div key={key}>
-                {/* Agency Card */}
-                <div onClick={() => toggleExpand(key)}
-                  className="p-3 rounded-lg cursor-pointer ds-transition-colors"
-                  style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
-                  <div className="flex items-start gap-3">
-                    <Building2 className="w-5 h-5 shrink-0 mt-0.5" style={{ color: 'var(--ds-accent)' }} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="text-sm font-semibold" style={{ color: 'var(--ds-text-primary)' }}>{agency?.name_ar || agency?.name_en || 'جهة'}</span>
-                        {agency?.name_ar && agency?.name_en && <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>{agency.name_en}</span>}
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] flex-wrap" style={{ color: 'var(--ds-text-muted)' }}>
-                        {location && <span><MapPin className="w-3 h-3 inline" /> {location}</span>}
-                        <span>· {openReqs} مفتوح</span>
-                        <span>· {closedReqs} مغلق</span>
-                        {agency?.email && <span>· <Mail className="w-3 h-3 inline" /> {agency.email}</span>}
-                      </div>
-                    </div>
-                    <button className="p-1" style={{ color: 'var(--ds-text-muted)' }}>
-                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                {isExpanded && (
-                  <div className="p-3 rounded-b-lg space-y-3" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', borderTop: 'none' }}>
-                    {/* Real agency details */}
-                    <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm p-3 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', color: 'var(--ds-text-secondary)' }}>
-                      {agency?.type && <span>النوع: {AGENCY_TYPES.find(t => t.value === agency.type)?.label || agency.type}</span>}
-                      {agency?.phone && <span><Phone className="w-3 h-3 inline" /> {agency.phone}</span>}
-                      {agency?.email && <span><Mail className="w-3 h-3 inline" /> {agency.email}</span>}
-                      {agency?.address && <span><MapPin className="w-3 h-3 inline" /> {agency.address}</span>}
-                      {agency?.portal_url && <a href={agency.portal_url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> بوابة الطلبات</a>}
-                      {agency?.website && <a href={agency.website} target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> الموقع الرسمي</a>}
-                      {agency?.tracking_portal_url && <a href={agency.tracking_portal_url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> متابعة الطلب</a>}
-                      {agency?.reply_to && <span>الرد على: {agency.reply_to}</span>}
-                      {defaultAccount && <span><Mail className="w-3 h-3 inline" /> حساب الإرسال: {defaultAccount.email}</span>}
-                    </div>
-
-                    {/* Communication channels — portal link + email + filter
-                        keywords used to auto-link an inbound email from this
-                        agency to this case (services/mailPoller.js). */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-sm font-semibold" style={{ color: 'var(--ds-text-muted)' }}>بيانات التواصل ({(channels[agency?.id] || []).length})</span>
-                        <button onClick={(e) => { e.stopPropagation(); setShowChannelForm(p => ({ ...p, [agency.id]: true })); }}
-                          className="text-xs px-2.5 py-1 rounded" style={{ color: '#3b82f6', background: 'rgba(59,130,246,0.1)' }}>
-                          <UserPlus className="w-3.5 h-3.5 inline" /> إضافة</button>
-                      </div>
-
-                      {showChannelForm[agency?.id] && (
-                        <div className="p-2.5 mb-1.5 rounded-lg space-y-1.5" style={{ background: 'var(--ds-bg-tertiary)', border: '1px dashed var(--ds-border)' }}>
-                          <input placeholder="رابط البوابة" value={newChannel[agency.id]?.portal_link || ''} onChange={e => setNewChannel(p => ({ ...p, [agency.id]: { ...p[agency.id], portal_link: e.target.value } }))}
-                            className="w-full px-2.5 py-1.5 rounded text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-                          <input placeholder="البريد الإلكتروني" value={newChannel[agency.id]?.email || ''} onChange={e => setNewChannel(p => ({ ...p, [agency.id]: { ...p[agency.id], email: e.target.value } }))}
-                            className="w-full px-2.5 py-1.5 rounded text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-                          <textarea placeholder="كلمات أو جمل تساعد الفلتر في جلب الإيميل وربطه بالقضية (افصل بفاصلة أو سطر جديد)"
-                            value={newChannel[agency.id]?.filter_keywords || ''} onChange={e => setNewChannel(p => ({ ...p, [agency.id]: { ...p[agency.id], filter_keywords: e.target.value } }))}
-                            rows={2} className="w-full px-2.5 py-1.5 rounded text-sm resize-none" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-                          <div className="flex gap-1.5 pt-0.5">
-                            <AppButton size="sm" onClick={() => addChannel(agency.id)}><CheckCircle className="w-3.5 h-3.5" />حفظ</AppButton>
-                            <AppButton size="sm" variant="secondary" onClick={() => setShowChannelForm(p => ({ ...p, [agency.id]: false }))}>إلغاء</AppButton>
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="space-y-1">
-                        {(channels[agency?.id] || []).map(ch => (
-                          <div key={ch.id} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
-                            <Mail className="w-4 h-4 shrink-0" style={{ color: 'var(--ds-text-muted)' }} />
-                            <div className="flex-1 min-w-0 text-sm">
-                              {ch.email && <span className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{ch.email}</span>}
-                              {ch.portal_link && <a href={ch.portal_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="mr-1" style={{ color: '#3b82f6' }}>· رابط البوابة</a>}
-                              {ch.filter_keywords && <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--ds-text-muted)' }}>كلمات الفلترة: {ch.filter_keywords}</div>}
-                            </div>
-                            <button onClick={() => removeChannel(agency.id, ch.id)} className="p-1" style={{ color: 'var(--ds-text-muted)' }}>
-                              <XCircle className="w-4 h-4" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Requests */}
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold" style={{ color: 'var(--ds-text-muted)' }}>الطلبات ({reqs.length})</span>
-                        <button onClick={(e) => { e.stopPropagation(); handleRemove(firstReq.id); }} className="text-xs px-2.5 py-1 rounded flex items-center gap-1" style={{ color: '#ef4444', background: 'rgba(239,68,68,0.08)' }}>
-                          <Trash2 className="w-3.5 h-3.5" /> إزالة الجهة من القضية
-                        </button>
-                      </div>
-                      {reqs.map(req => {
-                        const rBadge = getStatusBadge(req.status);
-                        const rWaitingDays = req.created_at ? Math.floor((Date.now() - new Date(req.created_at)) / (1000*60*60*24)) : 0;
-                        const todayStr = new Date().toISOString().split('T')[0];
-                        const isLate = !!(req.expected_response_date && req.expected_response_date < todayStr && !req.response_date);
-                        const isAcked = isLate && !!req.overdue_ack_by;
-                        const isPortalFormOpen = showPortalForm[req.id];
-                        const reqLog = getRequestLog(req.id, agency?.id);
-                        return (
-                          <div key={req.id} className="p-3.5 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderRight: isLate && !isAcked ? '3px solid #ef4444' : '3px solid transparent' }}>
-                            <div className="flex items-center gap-2 mb-2">
-                              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: 'var(--ds-accent)', color: 'white' }}>#{req.id}</div>
-                              <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--ds-text-muted)' }}>
-                                {req.reference_number && <span>مرجع: {req.reference_number}</span>}
-                              </div>
-                              <AppBadge variant={rBadge.variant}>{rBadge.text}</AppBadge>
-                              <span className="text-xs shrink-0" style={{ color: isLate ? '#ef4444' : 'var(--ds-text-muted)' }}>{rWaitingDays} يوم · {formatDateTime(req.created_at)}</span>
-                            </div>
-
-                            {/* Classification */}
-                            <div className="mb-2">
-                              <label className="text-xs font-medium block mb-1" style={{ color: 'var(--ds-text-muted)' }}>تصنيف الجهة في هذه القضية</label>
-                              <select value={req.agency_classification || ''} onChange={e => setClassification(req.id, e.target.value || null)}
-                                className="w-full px-3 py-2 rounded-lg text-sm font-medium ds-transition-colors" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
-                                <option value="">— غير محدد —</option>
-                                {CLASS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                              </select>
-                            </div>
-
-                            {isLate && !isAcked && (
-                              <div className="flex items-center justify-between gap-2 mb-2 text-xs px-2.5 py-1.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
-                                <span className="flex items-center gap-1.5"><AlertTriangle className="w-4 h-4" /> تخطّى الموعد المتوقع للرد ({req.expected_response_date})</span>
-                                <button onClick={() => acknowledgeOverdue(req.id)} className="px-2 py-1 rounded-lg shrink-0" style={{ background: 'var(--ds-bg-secondary)', color: '#ef4444' }}>تم الاطلاع</button>
-                              </div>
-                            )}
-                            {isAcked && (
-                              <div className="flex items-center gap-1.5 mb-2 text-xs px-2.5 py-1.5 rounded-lg flex-wrap" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>
-                                <CheckCircle className="w-4 h-4" /> تخطّى الموعد المتوقع للرد — تم الاطلاع من قبل{' '}
-                                <button onClick={() => navigate(`/profile/${req.overdue_ack_user?.id}`)} className="underline" style={{ color: 'var(--ds-accent)' }}>
-                                  {req.overdue_ack_user?.name || 'مستخدم'}
-                                </button>
-                                {req.overdue_ack_at && (
-                                  <span>
-                                    ({new Date(req.overdue_ack_at).toLocaleDateString('ar-EG')} — {new Date(req.overdue_ack_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })})
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                            {!isLate && req.expected_response_date && (
-                              <div className="flex items-center gap-1.5 mb-2 text-xs" style={{ color: 'var(--ds-text-muted)' }}>
-                                <CalendarClock className="w-4 h-4" /> الموعد المتوقع للرد: {req.expected_response_date}
-                              </div>
-                            )}
-
-                            <button onClick={() => setShowPortalForm(p => ({ ...p, [req.id]: !p[req.id] }))} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg" style={{ background: 'rgba(139,92,246,0.1)', color: '#8b5cf6' }}>
-                              <Globe className="w-4 h-4" />تسجيل تقديم عبر البوابة</button>
-
-                            {isPortalFormOpen && (
-                              <div className="mt-2 p-3 rounded-lg space-y-2" style={{ background: 'var(--ds-bg-tertiary)', border: '1px dashed var(--ds-border)' }}>
-                                <div className="grid grid-cols-2 gap-2">
-                                  <div>
-                                    <label className="text-xs block mb-1" style={{ color: 'var(--ds-text-muted)' }}>مهلة الرد المتوقعة (بالأيام: 1-30)</label>
-                                    <input type="number" min="1" max="30" placeholder="20"
-                                      value={portalForm[req.id]?.expected_response_days ?? ''}
-                                      onChange={e => setPortalForm(p => ({ ...p, [req.id]: { ...p[req.id], expected_response_days: e.target.value } }))}
-                                      className="w-full px-3 py-2 rounded-lg text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-                                  </div>
-                                  <div>
-                                    <label className="text-xs block mb-1" style={{ color: 'var(--ds-text-muted)' }}>رقم تأكيد التقديم (اختياري)</label>
-                                    <input value={portalForm[req.id]?.confirmation_number || ''} onChange={e => setPortalForm(p => ({ ...p, [req.id]: { ...p[req.id], confirmation_number: e.target.value } }))}
-                                      className="w-full px-3 py-2 rounded-lg text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-                                  </div>
-                                </div>
-                                <div>
-                                  <label className="text-xs block mb-1" style={{ color: 'var(--ds-text-muted)' }}>ملاحظة (اختياري)</label>
-                                  <input value={portalForm[req.id]?.note || ''} onChange={e => setPortalForm(p => ({ ...p, [req.id]: { ...p[req.id], note: e.target.value } }))}
-                                    className="w-full px-3 py-2 rounded-lg text-sm" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-                                </div>
-                                <div className="flex gap-1.5 justify-end pt-0.5">
-                                  <AppButton size="sm" variant="secondary" onClick={() => setShowPortalForm(p => ({ ...p, [req.id]: false }))}>إلغاء</AppButton>
-                                  <AppButton size="sm" onClick={() => logPortalSubmission(req.id, agency?.id)}><CheckCircle className="w-3.5 h-3.5" />تسجيل</AppButton>
-                                </div>
-                              </div>
-                            )}
-
-                            {reqLog.length > 0 && (
-                              <div className="mt-2">
-                                <div className="text-xs font-medium mb-1 flex items-center gap-1.5" style={{ color: 'var(--ds-text-muted)' }}>
-                                  <History className="w-3.5 h-3.5" /> سجل المراسلات مع هذه الجهة ({reqLog.length})
-                                </div>
-                                <div className="space-y-1">
-                                  {reqLog.map(c => (
-                                    <div key={c.id} className="text-xs p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
-                                      <div className="flex items-center justify-between gap-2">
-                                        <span className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>
-                                          {c.type === 'portal' ? '🌐' : c.type === 'email' ? '📧' : '📄'} {c.subject || '—'}
-                                        </span>
-                                        <span className="shrink-0" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(c.created_at)}</span>
-                                      </div>
-                                      {c.body && <div className="mt-0.5" style={{ color: 'var(--ds-text-secondary)' }}>{c.body}</div>}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+              <div key={key} style={{ scrollSnapAlign: 'start' }}>
+                <AgencyCard
+                  agency={agency} reqs={reqs} channels={channels} emailAccounts={emailAccounts}
+                  agencyLog={getAgencyLog(agency?.id, reqIds)}
+                  showChannelForm={showChannelForm} newChannel={newChannel} setNewChannel={setNewChannel} setShowChannelForm={setShowChannelForm}
+                  addChannel={addChannel} removeChannel={removeChannel}
+                  showPortalForm={showPortalForm} setShowPortalForm={setShowPortalForm} portalForm={portalForm} setPortalForm={setPortalForm}
+                  logPortalSubmission={logPortalSubmission}
+                  setClassification={setClassification} acknowledgeOverdue={acknowledgeOverdue}
+                  handleRemove={handleRemove} navigate={navigate}
+                />
               </div>
             );
           })}
-        </AppStack>
+        </div>
       ) : <AppEmptyState compact icon={Building2} title="لم تضف جهات" description="أضف الجهات لمتابعة التواصل" />}
     </AppSection>
   );

@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission, hasPermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { encrypt, decrypt } = require('../services/crypto');
 const emailService = require('../services/emailService');
+const { checkLock } = require('../services/emailAccountLock');
 
 /**
  * Real Email Engine for FOIA OS
@@ -349,6 +350,56 @@ router.post('/receive', requireAuth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ============ PER-CASE ACCOUNT/AGENCY LOCK ============
+
+// GET /api/email-accounts/:id/agency-lock?agency_id=&case_id= — is this
+// account already tied to this agency on a DIFFERENT case? Checked as the
+// user picks agency+account in the composer, before they even try to send.
+router.get('/email-accounts/:id/agency-lock', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const emailAccountId = parseInt(req.params.id);
+    const agencyId = parseInt(req.query.agency_id);
+    const caseId = parseInt(req.query.case_id);
+    if (!agencyId || !caseId) return res.status(400).json({ error: 'agency_id و case_id مطلوبان' });
+
+    const result = await checkLock(sup, emailAccountId, agencyId, caseId);
+    const canOverride = await hasPermission(sup, req.user, 'email_accounts', 'override_lock');
+    res.json({
+      locked: result.locked,
+      lockedByCase: result.lockedByCase && !result.overridden ? result.lockedByCase : null,
+      canOverride,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/email-accounts/:id/agency-lock/override — manually allow this
+// account+agency pair for this case despite it already being used elsewhere.
+router.post('/email-accounts/:id/agency-lock/override', requireAuth, requirePermission('email_accounts', 'override_lock'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const emailAccountId = parseInt(req.params.id);
+    const { agency_id, case_id } = req.body;
+    if (!agency_id || !case_id) return res.status(400).json({ error: 'agency_id و case_id مطلوبان' });
+
+    const { error } = await sup.from('email_account_agency_overrides').upsert({
+      email_account_id: emailAccountId, agency_id: parseInt(agency_id), case_id: parseInt(case_id),
+      created_by: req.user?.id,
+    }, { onConflict: 'email_account_id,agency_id,case_id' });
+    if (error) return res.status(400).json({ error: error.message });
+
+    try {
+      await sup.from('activity_logs').insert({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'update_channel', target_type: 'case', target_id: parseInt(case_id),
+        target_title: '🔓 فك قيد استخدام حساب بريد لهذه الجهة',
+      });
+    } catch (e) { console.error('[email-accounts] override activity log failed:', e.message); }
+
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============ RESET DAILY COUNTERS ============

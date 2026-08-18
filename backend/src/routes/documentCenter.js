@@ -9,6 +9,7 @@ const gdrive = require('../services/googleDriveService');
 const composeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const { requireCaseAccess, canAccessCase } = require('../services/caseAccess');
 const { notifyUsers, getCaseRecipients, getCaseActivityRecipients } = require('../services/notificationService');
+const { checkLock } = require('../services/emailAccountLock');
 // /cases/:caseId/documents, /upload, /compose, /portal-log previously had no
 // per-case access check -- a role restricted to its own assigned cases
 // could list/upload documents, SEND A REAL OUTBOUND EMAIL as, or log a
@@ -322,6 +323,20 @@ router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array
     const { data: account } = await sup.from('email_accounts').select('email').eq('id', parseInt(account_id)).single();
     if (!account) return res.status(404).json({ error: 'Email account not found' });
 
+    // Once this account has emailed this agency for another case, block
+    // reusing it here too (unless a permissioned user explicitly unlocked
+    // it) -- keeps inbound replies filtering to exactly one case instead of
+    // being ambiguous between two. Only applies when an agency is actually
+    // selected; a reply/forward with no agency picked is unaffected.
+    if (agency_id) {
+      const lockCheck = await checkLock(sup, parseInt(account_id), parseInt(agency_id), caseId);
+      if (lockCheck.locked) {
+        return res.status(409).json({
+          error: `هذا الحساب مستخدم بالفعل لمراسلة هذه الجهة في قضية "${lockCheck.lockedByCase?.title || '#' + lockCheck.lockedByCase?.id}" — اختر حسابًا آخر، أو اطلب فك القيد من صاحب الصلاحية.`,
+        });
+      }
+    }
+
     // Reply/Reply-All/Forward: thread against the original message so both
     // our own matching (thread_id) and the recipient's mail client (In-Reply-To/
     // References headers) group this into the same conversation.
@@ -377,6 +392,12 @@ router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array
     // (SMTP accepted it) -- an unchecked error here would mean the message
     // reached the recipient but silently never showed up in the case's own
     // thread view, with the API still reporting success either way.
+    // agency_id/request_id were already being received above (line 319) and
+    // used transiently for deadline-tracking below, but never actually
+    // stamped onto the row itself -- inbound matching (mailPoller.js) relies
+    // on this same column and sets it correctly, so a SENT email had no
+    // reliable way to surface in the per-agency/per-request correspondence
+    // log (AgenciesTab.jsx) unless a later reply happened to backfill it.
     const { error: commErr } = await sup.from('communications').insert({
       case_id: caseId,
       type: 'email', direction: 'outbound',
@@ -385,6 +406,8 @@ router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array
       thread_id: threadId || info.messageId,
       created_at: new Date().toISOString(),
       email_account_id: parseInt(account_id),
+      agency_id: agency_id ? parseInt(agency_id) : null,
+      request_id: request_id ? parseInt(request_id) : null,
       // A message we just sent is read by definition -- is_read defaults to
       // false in the schema, which fed the "unread" badge with our own sent
       // mail (see /inbox/unread-count).
