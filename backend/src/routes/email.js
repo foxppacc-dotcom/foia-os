@@ -354,6 +354,31 @@ router.post('/receive', requireAuth, async (req, res) => {
 
 // ============ PER-CASE ACCOUNT/AGENCY LOCK ============
 
+// GET /api/email-accounts/agency-lock-status?agency_id=&case_id= — lock
+// status for EVERY account against this agency, so the composer's account
+// <select> can mark each locked option up front instead of only revealing
+// the conflict after the user has already picked one and waited for a
+// separate per-account check to come back.
+router.get('/email-accounts/agency-lock-status', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const agencyId = parseInt(req.query.agency_id);
+    const caseId = parseInt(req.query.case_id);
+    if (!agencyId || !caseId) return res.status(400).json({ error: 'agency_id و case_id مطلوبان' });
+
+    const { data: accounts, error } = await sup.from('email_accounts').select('id');
+    if (error) return res.status(500).json({ error: error.message });
+    const canOverride = await hasPermission(sup, req.user, 'email_accounts', 'override_lock');
+
+    const statuses = await Promise.all((accounts || []).map(async (a) => {
+      const result = await checkLock(sup, a.id, agencyId, caseId);
+      return [a.id, { locked: result.locked, lockedByCase: result.lockedByCase && !result.overridden ? result.lockedByCase : null }];
+    }));
+
+    res.json({ statuses: Object.fromEntries(statuses), canOverride });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/email-accounts/:id/agency-lock?agency_id=&case_id= — is this
 // account already tied to this agency on a DIFFERENT case? Checked as the
 // user picks agency+account in the composer, before they even try to send.

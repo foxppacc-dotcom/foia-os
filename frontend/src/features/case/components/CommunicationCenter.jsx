@@ -76,9 +76,20 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
         method: 'POST', headers: hdrs(), body: JSON.stringify({ agency_id: agencyId, case_id: caseId }),
       });
       checkAgencyLock();
+      checkAllAccountLocks();
     } catch {}
     setUnlocking(false);
   };
+  // Locked accounts should be marked right in the <select>'s own options --
+  // otherwise the only way to discover a lock is to pick each account one
+  // at a time and wait for checkAgencyLock above to report back.
+  const [accountLocks, setAccountLocks] = useState({});
+  const checkAllAccountLocks = () => {
+    if (!agencyId) { setAccountLocks({}); return; }
+    fetch(`${API}/email-accounts/agency-lock-status?agency_id=${agencyId}&case_id=${caseId}`, { headers: authHdrs() })
+      .then(r => r.json()).then(d => setAccountLocks(d.statuses || {})).catch(() => setAccountLocks({}));
+  };
+  useEffect(() => { checkAllAccountLocks(); }, [agencyId]);
   const [subject, setSubject] = useState(
     isForward ? `Fwd: ${replyTo?.subject || ''}` : replyTo ? `Re: ${replyTo.subject}` : ''
   );
@@ -157,7 +168,16 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
           <select className="flex-1 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}
             value={accountId} onChange={e => setAccountId(e.target.value)}>
             <option value="">اختر حساب البريد</option>
-            {(accounts || []).map(a => <option key={a.id} value={a.id}>{a.display_name || a.email}</option>)}
+            {(accounts || []).map(a => {
+              // Marked directly in the option label -- not just after picking
+              // it and waiting for the single-account check below -- so a
+              // locked account is visible at a glance while browsing the list.
+              const lock = accountLocks[a.id];
+              const label = lock?.locked
+                ? `🔒 ${a.display_name || a.email} — مستخدم لقضية "${lock.lockedByCase?.title || '#' + lock.lockedByCase?.id}"`
+                : (a.display_name || a.email);
+              return <option key={a.id} value={a.id}>{label}</option>;
+            })}
           </select>
         </div>
         {lockInfo?.locked && (
