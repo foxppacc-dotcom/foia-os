@@ -85,60 +85,60 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
       // document's filename, a linked email's subject/sender/recipient (the
       // agency's own address is usually the RECIPIENT on an outbound email,
       // not the sender -- missing that was a reported gap: searching an
-      // agency's registered email found nothing), the agency's own email and
-      // its case-specific channel email, team-discussion comment text, and
-      // each request's reference number/notes/checklist notes -- as close to
-      // "anything entered anywhere in the case" as the schema allows. Portal
-      // confirmation numbers are covered for free since documentCenter.js's
-      // portal-submission logger embeds "رقم التأكيد: {confirmation_number}"
-      // directly into the synthesized communication's subject.
+      // agency's registered email found nothing), the agency's own email,
+      // its case-specific channel email, and each request's reference
+      // number. Portal confirmation numbers are covered for free since
+      // documentCenter.js's portal-submission logger embeds "رقم التأكيد:
+      // {confirmation_number}" directly into the synthesized communication's
+      // subject.
+      //
+      // Promise.allSettled, not Promise.all: an earlier version used
+      // Promise.all across ~13 parallel sub-queries (including team-comment
+      // text and checklist notes, trimmed back out below) -- a single
+      // transient failure on ANY one of them rejected the whole batch and
+      // took the entire cases list down with a 500 ("تعذر تحميل القضايا"),
+      // reported live while testing this exact search. Each source below is
+      // now independent: one failing just contributes nothing instead of
+      // failing the whole request, and is logged so a real, recurring
+      // problem with one source doesn't disappear silently either.
       const term = `%${search}%`;
-      const [
-        byTitle, byClient, byUuid, byDocument,
-        byCommSubject, byCommSender, byCommRecipient,
-        byAgencyEmail, byChannelEmail, byComment,
-        byReqRef, byReqNotes, byChecklistNotes,
-      ] = await Promise.all([
-        sup.from('cases').select('id').ilike('title', term),
-        sup.from('cases').select('id').ilike('client_name', term),
-        sup.from('cases').select('id').ilike('uuid', term),
-        sup.from('case_documents').select('case_id').ilike('original_name', term),
-        sup.from('communications').select('case_id').ilike('subject', term),
-        sup.from('communications').select('case_id').ilike('sender', term),
-        sup.from('communications').select('case_id').ilike('recipient', term),
-        sup.from('agencies').select('id').ilike('email', term)
-          .then(async ({ data }) => {
-            const agencyIds = (data || []).map(a => a.id);
-            if (!agencyIds.length) return { data: [] };
-            return sup.from('requests').select('case_id').in('agency_id', agencyIds);
-          }),
-        sup.from('case_agency_channels').select('case_id').ilike('email', term),
-        sup.from('case_comments').select('case_id').ilike('content', term),
-        sup.from('requests').select('case_id').ilike('reference_number', term),
-        sup.from('requests').select('case_id').ilike('notes', term),
-        sup.from('case_records_checklist').select('case_id').ilike('notes', term),
-      ]);
-      const matchedIds = [
-        ...(byTitle.data || []).map(r => r.id),
-        ...(byClient.data || []).map(r => r.id),
-        ...(byUuid.data || []).map(r => r.id),
-        ...(byDocument.data || []).map(r => r.case_id),
-        ...(byCommSubject.data || []).map(r => r.case_id),
-        ...(byCommSender.data || []).map(r => r.case_id),
-        ...(byCommRecipient.data || []).map(r => r.case_id),
-        ...(byAgencyEmail.data || []).map(r => r.case_id),
-        ...(byChannelEmail.data || []).map(r => r.case_id),
-        ...(byComment.data || []).map(r => r.case_id),
-        ...(byReqRef.data || []).map(r => r.case_id),
-        ...(byReqNotes.data || []).map(r => r.case_id),
-        ...(byChecklistNotes.data || []).map(r => r.case_id),
+      const sources = [
+        ['title', () => sup.from('cases').select('id').ilike('title', term).then(r => ({ ...r, key: 'id' }))],
+        ['client_name', () => sup.from('cases').select('id').ilike('client_name', term).then(r => ({ ...r, key: 'id' }))],
+        ['uuid', () => sup.from('cases').select('id').ilike('uuid', term).then(r => ({ ...r, key: 'id' }))],
+        ['document name', () => sup.from('case_documents').select('case_id').ilike('original_name', term).then(r => ({ ...r, key: 'case_id' }))],
+        ['comm subject', () => sup.from('communications').select('case_id').ilike('subject', term).then(r => ({ ...r, key: 'case_id' }))],
+        ['comm sender', () => sup.from('communications').select('case_id').ilike('sender', term).then(r => ({ ...r, key: 'case_id' }))],
+        ['comm recipient', () => sup.from('communications').select('case_id').ilike('recipient', term).then(r => ({ ...r, key: 'case_id' }))],
+        ['agency email', async () => {
+          const { data } = await sup.from('agencies').select('id').ilike('email', term);
+          const agencyIds = (data || []).map(a => a.id);
+          if (!agencyIds.length) return { data: [], key: 'case_id' };
+          return { ...(await sup.from('requests').select('case_id').in('agency_id', agencyIds)), key: 'case_id' };
+        }],
+        ['channel email', () => sup.from('case_agency_channels').select('case_id').ilike('email', term).then(r => ({ ...r, key: 'case_id' }))],
+        ['request reference number', () => sup.from('requests').select('case_id').ilike('reference_number', term).then(r => ({ ...r, key: 'case_id' }))],
       ];
+      const settled = await Promise.allSettled(sources.map(([, run]) => run()));
+      const matchedIds = [];
+      settled.forEach((result, i) => {
+        const [label] = sources[i];
+        if (result.status === 'rejected') {
+          console.error(`[cases search] "${label}" source failed:`, result.reason?.message || result.reason);
+          return;
+        }
+        const { data, error, key } = result.value;
+        if (error) { console.error(`[cases search] "${label}" source errored:`, error.message); return; }
+        (data || []).forEach(r => matchedIds.push(r[key]));
+      });
       // Case number: not text, so ilike can't match it directly -- fetch every
       // id once and compare as a string instead, only when the search term
       // actually contains a digit (skips the wasted round-trip otherwise).
       if (/\d/.test(search)) {
-        const { data: allIds } = await sup.from('cases').select('id');
-        (allIds || []).forEach(c => { if (String(c.id).includes(search.trim())) matchedIds.push(c.id); });
+        try {
+          const { data: allIds } = await sup.from('cases').select('id');
+          (allIds || []).forEach(c => { if (String(c.id).includes(search.trim())) matchedIds.push(c.id); });
+        } catch (e) { console.error('[cases search] case-number source failed:', e.message); }
       }
       intersect(matchedIds);
     }
