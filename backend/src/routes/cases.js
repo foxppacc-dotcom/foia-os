@@ -81,28 +81,66 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
       // that string's own commas/parens as ITS filter-grammar syntax, so a
       // search term that happens to contain either (e.g. "Smith, John")
       // broke the ENTIRE query with a 500 instead of just not matching.
-      // Extended beyond the case's own title/client_name/uuid to also match
-      // an uploaded document's filename and a linked email's subject/sender
-      // -- the latter also covers portal-submission confirmation numbers,
-      // since documentCenter.js's portal-submission logger embeds
-      // "رقم التأكيد: {confirmation_number}" directly into the synthesized
-      // communication's subject, so no separate column is needed for that.
-      const [byTitle, byClient, byUuid, byDocument, byCommSubject, byCommSender] = await Promise.all([
-        sup.from('cases').select('id').ilike('title', `%${search}%`),
-        sup.from('cases').select('id').ilike('client_name', `%${search}%`),
-        sup.from('cases').select('id').ilike('uuid', `%${search}%`),
-        sup.from('case_documents').select('case_id').ilike('original_name', `%${search}%`),
-        sup.from('communications').select('case_id').ilike('subject', `%${search}%`),
-        sup.from('communications').select('case_id').ilike('sender', `%${search}%`),
+      // Covers the case's own title/client_name/uuid/id, an uploaded
+      // document's filename, a linked email's subject/sender/recipient (the
+      // agency's own address is usually the RECIPIENT on an outbound email,
+      // not the sender -- missing that was a reported gap: searching an
+      // agency's registered email found nothing), the agency's own email and
+      // its case-specific channel email, team-discussion comment text, and
+      // each request's reference number/notes/checklist notes -- as close to
+      // "anything entered anywhere in the case" as the schema allows. Portal
+      // confirmation numbers are covered for free since documentCenter.js's
+      // portal-submission logger embeds "رقم التأكيد: {confirmation_number}"
+      // directly into the synthesized communication's subject.
+      const term = `%${search}%`;
+      const [
+        byTitle, byClient, byUuid, byDocument,
+        byCommSubject, byCommSender, byCommRecipient,
+        byAgencyEmail, byChannelEmail, byComment,
+        byReqRef, byReqNotes, byChecklistNotes,
+      ] = await Promise.all([
+        sup.from('cases').select('id').ilike('title', term),
+        sup.from('cases').select('id').ilike('client_name', term),
+        sup.from('cases').select('id').ilike('uuid', term),
+        sup.from('case_documents').select('case_id').ilike('original_name', term),
+        sup.from('communications').select('case_id').ilike('subject', term),
+        sup.from('communications').select('case_id').ilike('sender', term),
+        sup.from('communications').select('case_id').ilike('recipient', term),
+        sup.from('agencies').select('id').ilike('email', term)
+          .then(async ({ data }) => {
+            const agencyIds = (data || []).map(a => a.id);
+            if (!agencyIds.length) return { data: [] };
+            return sup.from('requests').select('case_id').in('agency_id', agencyIds);
+          }),
+        sup.from('case_agency_channels').select('case_id').ilike('email', term),
+        sup.from('case_comments').select('case_id').ilike('content', term),
+        sup.from('requests').select('case_id').ilike('reference_number', term),
+        sup.from('requests').select('case_id').ilike('notes', term),
+        sup.from('case_records_checklist').select('case_id').ilike('notes', term),
       ]);
-      intersect([
+      const matchedIds = [
         ...(byTitle.data || []).map(r => r.id),
         ...(byClient.data || []).map(r => r.id),
         ...(byUuid.data || []).map(r => r.id),
         ...(byDocument.data || []).map(r => r.case_id),
         ...(byCommSubject.data || []).map(r => r.case_id),
         ...(byCommSender.data || []).map(r => r.case_id),
-      ]);
+        ...(byCommRecipient.data || []).map(r => r.case_id),
+        ...(byAgencyEmail.data || []).map(r => r.case_id),
+        ...(byChannelEmail.data || []).map(r => r.case_id),
+        ...(byComment.data || []).map(r => r.case_id),
+        ...(byReqRef.data || []).map(r => r.case_id),
+        ...(byReqNotes.data || []).map(r => r.case_id),
+        ...(byChecklistNotes.data || []).map(r => r.case_id),
+      ];
+      // Case number: not text, so ilike can't match it directly -- fetch every
+      // id once and compare as a string instead, only when the search term
+      // actually contains a digit (skips the wasted round-trip otherwise).
+      if (/\d/.test(search)) {
+        const { data: allIds } = await sup.from('cases').select('id');
+        (allIds || []).forEach(c => { if (String(c.id).includes(search.trim())) matchedIds.push(c.id); });
+      }
+      intersect(matchedIds);
     }
     if (agency_ids) {
       const ids = agency_ids.split(',').map(s => parseInt(s)).filter(Number.isFinite);
