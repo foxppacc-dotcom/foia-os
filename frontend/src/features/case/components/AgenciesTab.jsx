@@ -213,8 +213,12 @@ function AgencyCard({
             <div className="space-y-1">
               {agencyLog.map(c => {
                 const relatedReq = reqs.find(r => r.id === c.request_id);
+                const isInbound = c.direction === 'inbound';
                 return (
-                  <div key={c.id} className="text-[11px] p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
+                  <div key={c.id} onClick={() => window.open(`/inbox/message/${c.id}`, '_blank', 'noopener,noreferrer')}
+                    title="فتح الرسالة"
+                    className="text-[11px] p-2 rounded-lg cursor-pointer ds-transition-colors"
+                    style={{ background: 'var(--ds-bg-tertiary)', borderRight: isInbound ? '3px solid #22c55e' : '3px solid #3b82f6' }}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium truncate" style={{ color: 'var(--ds-text-primary)' }}>
                         {c.type === 'portal' ? '🌐' : c.type === 'email' ? '📧' : '📄'} {c.subject || '—'}
@@ -222,7 +226,12 @@ function AgencyCard({
                       </span>
                       <span className="shrink-0" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(c.created_at)}</span>
                     </div>
-                    {c.body && <div className="mt-0.5 line-clamp-2" style={{ color: 'var(--ds-text-secondary)' }}>{c.body}</div>}
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="shrink-0 px-1 rounded text-[9px] font-medium" style={{ background: isInbound ? 'rgba(34,197,94,0.12)' : 'rgba(59,130,246,0.12)', color: isInbound ? '#22c55e' : '#3b82f6' }}>
+                        {isInbound ? 'وارد' : 'صادر'}
+                      </span>
+                      {c.body && <span className="line-clamp-1" style={{ color: 'var(--ds-text-secondary)' }}>{c.body}</span>}
+                    </div>
                   </div>
                 );
               })}
