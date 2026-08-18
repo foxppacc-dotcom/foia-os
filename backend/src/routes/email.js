@@ -5,6 +5,7 @@ const { getSupabase } = require('../supabase');
 const { encrypt, decrypt } = require('../services/crypto');
 const emailService = require('../services/emailService');
 const { checkLock } = require('../services/emailAccountLock');
+const { canAccessCase } = require('../services/caseAccess');
 
 /**
  * Real Email Engine for FOIA OS
@@ -203,6 +204,7 @@ router.post('/send', requireAuth, async (req, res) => {
     // Link to case if provided
     if (case_id) {
       const sup = getSupabase();
+      if (!(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
       await sup.from('communications').insert({
         case_id: parseInt(case_id),
         type: 'email',
@@ -240,6 +242,10 @@ router.post('/fetch', requireAuth, async (req, res) => {
   try {
     const { account_id, case_id } = req.body;
     if (!account_id) return res.status(400).json({ error: 'account_id مطلوب' });
+    if (case_id) {
+      const sup = getSupabase();
+      if (!(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     const result = await emailService.processIncomingEmails(parseInt(account_id), case_id ? parseInt(case_id) : null);
 
@@ -312,6 +318,7 @@ router.post('/receive', requireAuth, async (req, res) => {
     if (!case_id || !subject || !body) {
       return res.status(400).json({ error: 'case_id, subject, body required' });
     }
+    if (!(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
 
     await sup.from('communications').insert({
       case_id: parseInt(case_id),
@@ -365,6 +372,11 @@ router.get('/email-accounts/agency-lock-status', requireAuth, async (req, res) =
     const agencyId = parseInt(req.query.agency_id);
     const caseId = parseInt(req.query.case_id);
     if (!agencyId || !caseId) return res.status(400).json({ error: 'agency_id و case_id مطلوبان' });
+    // This response includes another case's id+title once locked -- without
+    // this check, a role restricted to its own assigned cases could learn
+    // that just by passing any case_id here, matching the class of gap the
+    // earlier case-scoping audit fixed across other routes.
+    if (!(await canAccessCase(sup, req.user, caseId))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
 
     const { data: accounts, error } = await sup.from('email_accounts').select('id');
     if (error) return res.status(500).json({ error: error.message });
@@ -389,6 +401,7 @@ router.get('/email-accounts/:id/agency-lock', requireAuth, async (req, res) => {
     const agencyId = parseInt(req.query.agency_id);
     const caseId = parseInt(req.query.case_id);
     if (!agencyId || !caseId) return res.status(400).json({ error: 'agency_id و case_id مطلوبان' });
+    if (!(await canAccessCase(sup, req.user, caseId))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
 
     const result = await checkLock(sup, emailAccountId, agencyId, caseId);
     const canOverride = await hasPermission(sup, req.user, 'email_accounts', 'override_lock');
@@ -408,6 +421,7 @@ router.post('/email-accounts/:id/agency-lock/override', requireAuth, requirePerm
     const emailAccountId = parseInt(req.params.id);
     const { agency_id, case_id } = req.body;
     if (!agency_id || !case_id) return res.status(400).json({ error: 'agency_id و case_id مطلوبان' });
+    if (!(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
 
     const { error } = await sup.from('email_account_agency_overrides').upsert({
       email_account_id: emailAccountId, agency_id: parseInt(agency_id), case_id: parseInt(case_id),

@@ -733,6 +733,13 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
   const sup = getSupabase();
   try {
     const { case_id, agency_id } = req.body;
+    // A restricted-role user could otherwise link a message onto (or read
+    // metadata for) a case they don't otherwise have access to, just by
+    // supplying its id here -- same class of gap the case-scoping audit
+    // fixed elsewhere.
+    if (case_id && !(await canAccessCase(sup, req.user, case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
     const updates = {};
     if (case_id) updates.case_id = parseInt(case_id);
     if (agency_id) updates.agency_id = parseInt(agency_id);
@@ -742,7 +749,10 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
     // flagged (see mailPoller.js's possibleMatches) -- clear it so a
     // resolved message doesn't keep showing a stale "might also be case X/Y"
     // hint after the user already picked one.
-    const { data: existing } = await sup.from('communications').select('metadata, subject, sender').eq('id', parseInt(req.params.id)).maybeSingle();
+    const { data: existing } = await sup.from('communications').select('metadata, subject, sender, case_id').eq('id', parseInt(req.params.id)).maybeSingle();
+    if (existing?.case_id && !(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
     if (existing) {
       let meta = {};
       try { meta = existing.metadata ? JSON.parse(existing.metadata) : {}; } catch { meta = {}; }
@@ -777,6 +787,10 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
 // counted as "unread" forever unless separately linked or archived.
 router.put('/inbox/:id/read', requireAuth, async (req, res) => {
   const sup = getSupabase();
+  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
   const { error } = await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
@@ -788,6 +802,10 @@ router.put('/inbox/:id/read', requireAuth, async (req, res) => {
 // removes the message from the main inbox tabs into its own أرشيف tab.
 router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   const sup = getSupabase();
+  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
   const { error } = await sup.from('communications').update({ is_archived: true, archived_at: new Date().toISOString() }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
@@ -796,6 +814,10 @@ router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
 // PUT /api/inbox/:id/unarchive -- restore a message back to the main inbox.
 router.put('/inbox/:id/unarchive', requireAuth, async (req, res) => {
   const sup = getSupabase();
+  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
   const { error } = await sup.from('communications').update({ is_archived: false, archived_at: null }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
@@ -806,6 +828,10 @@ router.put('/inbox/:id/unarchive', requireAuth, async (req, res) => {
 // message can be opened without anyone having actually verified its content.
 router.put('/inbox/:id/review', requireAuth, async (req, res) => {
   const sup = getSupabase();
+  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
   const { error } = await sup.from('communications')
     .update({ reviewed_by: req.user.id, reviewed_at: new Date().toISOString() })
     .eq('id', parseInt(req.params.id));
@@ -820,6 +846,10 @@ router.put('/inbox/:id/review', requireAuth, async (req, res) => {
 // plausible case as `possible_matches` in metadata).
 router.put('/inbox/:id/unlink', requireAuth, async (req, res) => {
   const sup = getSupabase();
+  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
   const { error } = await sup.from('communications')
     .update({ case_id: null, agency_id: null, request_id: null })
     .eq('id', parseInt(req.params.id));
