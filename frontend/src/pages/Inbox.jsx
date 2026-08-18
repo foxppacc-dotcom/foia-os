@@ -225,14 +225,20 @@ export default function InboxPage() {
   };
 
   const handleLink = async (id, caseId, agencyId) => {
-    await fetch(`${BASE}/inbox/${id}/link`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ case_id: caseId, agency_id: agencyId }) });
-    fetchInbox();
+    try {
+      const r = await fetch(`${BASE}/inbox/${id}/link`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ case_id: caseId, agency_id: agencyId }) });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر ربط الرسالة')); return; }
+      fetchInbox();
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const handleUnlink = async (id) => {
     if (!confirm('فك ارتباط هذه الرسالة بالقضية؟')) return;
-    await fetch(`${BASE}/inbox/${id}/unlink`, { method: 'PUT', headers: hdrs() });
-    fetchInbox();
+    try {
+      const r = await fetch(`${BASE}/inbox/${id}/unlink`, { method: 'PUT', headers: hdrs() });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر فك الارتباط')); return; }
+      fetchInbox();
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const handleReview = async (id) => {

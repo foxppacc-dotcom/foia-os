@@ -61,7 +61,7 @@ export default function CaseGDrive() {
 
   const disconnectDrive = async () => {
     if (!confirm('قطع الاتصال بحساب جوجل درايف الحالي؟')) return;
-    try { await api.post('/gdrive/disconnect', {}); fetchStatus(); } catch {}
+    try { await api.post('/gdrive/disconnect', {}); fetchStatus(); } catch (e) { alert('❌ ' + e.message); }
   };
 
   const linkFile = async () => {
@@ -72,7 +72,11 @@ export default function CaseGDrive() {
       file_name: fileForm.file_name,
       web_link: fileForm.web_link,
     };
-    try { const res = await api.post('/gdrive/link', payload); if (res.success) { setShowLinkFile(false); setFileForm({ file_id: '', file_name: '', web_link: '' }); fetchFiles(selectedCaseId); } } catch {}
+    try {
+      const res = await api.post('/gdrive/link', payload);
+      if (!res.success) { alert('❌ ' + (res.error || 'تعذر ربط الملف')); return; }
+      setShowLinkFile(false); setFileForm({ file_id: '', file_name: '', web_link: '' }); fetchFiles(selectedCaseId);
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const linkFolder = async () => {
@@ -81,17 +85,18 @@ export default function CaseGDrive() {
       const res = await api.post('/gdrive/folder', {
         case_id: parseInt(selectedCaseId), folder_id: folderForm.folder_id, folder_name: folderForm.folder_name
       });
-      if (res.success) { setShowLinkFolder(false); setFolderForm({ folder_id: '', folder_name: '' }); fetchFiles(selectedCaseId); }
-    } catch {}
+      if (!res.success) { alert('❌ ' + (res.error || 'تعذر ربط المجلد')); return; }
+      setShowLinkFolder(false); setFolderForm({ folder_id: '', folder_name: '' }); fetchFiles(selectedCaseId);
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const deleteFile = async (id) => {
-    try { await api.delete(`/gdrive/file/${id}`); fetchFiles(selectedCaseId); } catch {}
+    try { await api.delete(`/gdrive/file/${id}`); fetchFiles(selectedCaseId); } catch (e) { alert('❌ ' + e.message); }
   };
 
   const unlinkFolder = async () => {
     if (!confirm('إزالة ربط المجلد من هذه القضية؟')) return;
-    try { await api.delete(`/gdrive/folder/${selectedCaseId}`); fetchFiles(selectedCaseId); } catch {}
+    try { await api.delete(`/gdrive/folder/${selectedCaseId}`); fetchFiles(selectedCaseId); } catch (e) { alert('❌ ' + e.message); }
   };
 
   const inputStyle = {

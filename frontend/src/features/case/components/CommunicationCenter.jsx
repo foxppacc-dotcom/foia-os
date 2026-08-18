@@ -63,31 +63,48 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
   // after a failed send attempt.
   const [lockInfo, setLockInfo] = useState(null);
   const [unlocking, setUnlocking] = useState(false);
+  // A failed check silently defaulting to "not locked" would be a false
+  // negative for the very feature this exists to enforce (Part 4) -- a
+  // transient network error could otherwise let a locked account send
+  // through the frontend with no warning at all (the backend's own check on
+  // /compose is the real backstop, but the user would still see a confusing
+  // 409 with no context instead of this clear inline warning). Failing
+  // closed here: a check that couldn't complete blocks sending too, same as
+  // a check that came back genuinely locked.
+  const [lockCheckFailed, setLockCheckFailed] = useState(false);
   const checkAgencyLock = () => {
-    if (!accountId || !agencyId) { setLockInfo(null); return; }
+    if (!accountId || !agencyId) { setLockInfo(null); setLockCheckFailed(false); return; }
     fetch(`${API}/email-accounts/${accountId}/agency-lock?agency_id=${agencyId}&case_id=${caseId}`, { headers: authHdrs() })
-      .then(r => r.json()).then(setLockInfo).catch(() => setLockInfo(null));
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(d => { setLockInfo(d); setLockCheckFailed(false); })
+      .catch(() => { setLockInfo(null); setLockCheckFailed(true); });
   };
   useEffect(() => { checkAgencyLock(); }, [accountId, agencyId]);
   const overrideLock = async () => {
     setUnlocking(true);
     try {
-      await fetch(`${API}/email-accounts/${accountId}/agency-lock/override`, {
+      const r = await fetch(`${API}/email-accounts/${accountId}/agency-lock/override`, {
         method: 'POST', headers: hdrs(), body: JSON.stringify({ agency_id: agencyId, case_id: caseId }),
       });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('❌ ' + (d.error || 'تعذر فك القيد')); setUnlocking(false); return; }
       checkAgencyLock();
       checkAllAccountLocks();
-    } catch {}
+    } catch (e) { alert('❌ ' + e.message); }
     setUnlocking(false);
   };
   // Locked accounts should be marked right in the <select>'s own options --
   // otherwise the only way to discover a lock is to pick each account one
-  // at a time and wait for checkAgencyLock above to report back.
+  // at a time and wait for checkAgencyLock above to report back. Purely
+  // advisory (the selected-account check above is what actually gates
+  // sending), so a failure here just logs instead of blocking anything.
   const [accountLocks, setAccountLocks] = useState({});
   const checkAllAccountLocks = () => {
     if (!agencyId) { setAccountLocks({}); return; }
     fetch(`${API}/email-accounts/agency-lock-status?agency_id=${agencyId}&case_id=${caseId}`, { headers: authHdrs() })
-      .then(r => r.json()).then(d => setAccountLocks(d.statuses || {})).catch(() => setAccountLocks({}));
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(d => setAccountLocks(d.statuses || {}))
+      .catch(e => { console.error('[compose] account lock status check failed:', e.message); setAccountLocks({}); });
   };
   useEffect(() => { checkAllAccountLocks(); }, [agencyId]);
   const [subject, setSubject] = useState(
@@ -180,6 +197,12 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
             })}
           </select>
         </div>
+        {lockCheckFailed && (
+          <div className="flex items-center gap-1.5 px-2 py-1.5 rounded text-[11px]" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#EF4444' }}>
+            ⚠️ تعذر التحقق من قيد استخدام هذا الحساب لهذه الجهة — لا يمكن الإرسال حتى يتم التحقق.
+            <button type="button" onClick={checkAgencyLock} className="underline font-semibold">إعادة المحاولة</button>
+          </div>
+        )}
         {lockInfo?.locked && (
           <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded text-[11px]" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#EF4444' }}>
             <span className="flex items-center gap-1.5 flex-wrap">
@@ -247,7 +270,7 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
           <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()}><Paperclip className="w-3 h-3" />مرفقات</Button>
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>حفظ كمسودة</Button>
-            <Button variant="primary" size="sm" onClick={send} disabled={sending || lockInfo?.locked}>
+            <Button variant="primary" size="sm" onClick={send} disabled={sending || lockInfo?.locked || (accountId && agencyId && lockCheckFailed)}>
               {sending ? 'جاري الإرسال...' : <><Send className="w-3 h-3" />إرسال</>}
             </Button>
           </div>
@@ -280,21 +303,30 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted,
   };
 
   const download = async (index) => {
-    const r = await fetch(`${API}/communications/${thread.id}/attachments/${index}/download`, { headers: authHdrs() });
-    const d = await r.json();
-    if (d.url) window.open(d.url, '_blank', 'noopener,noreferrer');
+    try {
+      const r = await fetch(`${API}/communications/${thread.id}/attachments/${index}/download`, { headers: authHdrs() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.url) { alert('❌ ' + (d.error || 'تعذر تحميل المرفق')); return; }
+      window.open(d.url, '_blank', 'noopener,noreferrer');
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const remove = async (index) => {
-    await fetch(`${API}/communications/${thread.id}/attachments/${index}`, { method: 'DELETE', headers: authHdrs() });
-    onAttachmentDeleted?.();
+    try {
+      const r = await fetch(`${API}/communications/${thread.id}/attachments/${index}`, { method: 'DELETE', headers: authHdrs() });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر حذف المرفق')); return; }
+      onAttachmentDeleted?.();
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const deleteMessage = async (e) => {
     e.stopPropagation();
     if (!confirm('حذف هذه الرسالة نهائيًا؟')) return;
-    await fetch(`${API}/communications/${thread.id}`, { method: 'DELETE', headers: authHdrs() });
-    onDeleted?.();
+    try {
+      const r = await fetch(`${API}/communications/${thread.id}`, { method: 'DELETE', headers: authHdrs() });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر حذف الرسالة')); return; }
+      onDeleted?.();
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   return (
@@ -379,6 +411,16 @@ export default function CommunicationCenter({ caseId }) {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [sendSuccess, setSendSuccess] = useState('');
+  const [threadsError, setThreadsError] = useState('');
+
+  // Previously had no .catch anywhere -- a rejected fetch (network error)
+  // left `threads` at its initial [] forever with no distinction from "this
+  // case genuinely has no correspondence yet", and no console/user-visible
+  // trace that anything had failed at all.
+  const refetchThreads = () => fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(d => { setThreads(d.threads || []); setThreadsError(''); })
+    .catch(e => setThreadsError('تعذر تحميل المراسلات: ' + e.message));
 
   // Only agencies actually registered on this case (via its requests) should
   // be selectable here -- this composer isn't a way to start correspondence
@@ -392,8 +434,8 @@ export default function CommunicationCenter({ caseId }) {
 
   useEffect(() => {
     if (!caseId) return;
-    fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []));
-    fetch(`${API}/email-accounts`, { headers: hdrs() }).then(r => r.json()).then(d => setAccounts(d.data || d.accounts || []));
+    refetchThreads();
+    fetch(`${API}/email-accounts`, { headers: hdrs() }).then(r => r.json()).then(d => setAccounts(d.data || d.accounts || [])).catch(() => {});
   }, [caseId]);
 
   const filtered = useMemo(() => {
@@ -413,6 +455,12 @@ export default function CommunicationCenter({ caseId }) {
       {sendSuccess && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium" style={{ background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
           {sendSuccess}
+        </div>
+      )}
+      {threadsError && (
+        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-medium" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
+          <span>⚠️ {threadsError}</span>
+          <button onClick={refetchThreads} className="underline shrink-0">إعادة المحاولة</button>
         </div>
       )}
       {/* Toolbar */}
@@ -443,7 +491,7 @@ export default function CommunicationCenter({ caseId }) {
       {showComposer && (
         <EmailComposer caseId={caseId} onClose={() => { setShowComposer(false); setReplyTo(null); }} accounts={accounts} agencies={agencies} replyTo={replyTo} mode={composerMode}
           onSent={(sentData, subject) => {
-            fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(t => setThreads(t.threads || []));
+            refetchThreads();
             const warningNote = sentData?.warnings?.length ? ` (تنبيه: ${sentData.warnings.join(' — ')})` : '';
             setSendSuccess(`تم إرسال "${subject || ''}" بنجاح ✓${warningNote}`);
             setTimeout(() => setSendSuccess(''), 6000);
@@ -461,7 +509,7 @@ export default function CommunicationCenter({ caseId }) {
           <>
             <div className="text-[10px] font-medium px-1 mb-1" style={{ color: 'var(--ds-text-muted)' }}>{filtered.length} محادثة</div>
             {filtered.map(t => <ThreadCard key={t.id} thread={t} accounts={accounts} onReply={openComposer}
-              onAttachmentDeleted={() => fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []))}
+              onAttachmentDeleted={refetchThreads}
               onDeleted={() => setThreads(prev => prev.filter(x => x.id !== t.id))}
               onRead={id => setThreads(prev => prev.map(x => x.id === id ? { ...x, is_read: true } : x))} />)}
           </>

@@ -258,15 +258,22 @@ export default function AgenciesTab() {
   const [showPortalForm, setShowPortalForm] = useState({});
   const [portalForm, setPortalForm] = useState({});
   const [commRecords, setCommRecords] = useState([]);
+  const [commRecordsError, setCommRecordsError] = useState('');
   const scrollRef = useRef(null);
 
   useEffect(() => {
     api.get('/email-accounts').then(d => setEmailAccounts(d.data || d.accounts || [])).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    api.get(`/cases/${id}/threads`).then(d => setCommRecords(d.threads || [])).catch(() => {});
-  }, [id, requests]);
+  const fetchThreads = () => {
+    // A failed fetch previously left commRecords at [] silently -- every
+    // agency card's "كل المراسلات مع هذه الجهة" feed would then show "لا
+    // توجد مراسلات مسجلة بعد" (no correspondence recorded), indistinguishable
+    // from a genuinely quiet agency instead of a load failure.
+    api.get(`/cases/${id}/threads`).then(d => { setCommRecords(d.threads || []); setCommRecordsError(''); })
+      .catch(e => setCommRecordsError(e.message || 'تعذر تحميل المراسلات'));
+  };
+  useEffect(() => { fetchThreads(); }, [id, requests]);
 
   const grouped = useMemo(() => {
     const map = {};
@@ -374,6 +381,12 @@ export default function AgenciesTab() {
         </AppButton>
         <AppButton size="sm" icon={<Plus className="w-3.5 h-3.5" />} onClick={() => setShowAdd(!showAdd)}>إضافة</AppButton>
       </>}>
+      {commRecordsError && (
+        <div className="flex items-center justify-between gap-2 mb-3 px-2.5 py-1.5 rounded-lg text-[11px]" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
+          <span>⚠️ تعذر تحميل سجل المراسلات: {commRecordsError}</span>
+          <button onClick={fetchThreads} className="underline shrink-0 font-medium">إعادة المحاولة</button>
+        </div>
+      )}
       {showAdd && (
         <div className="space-y-2 mb-3 p-2.5 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)', border: '1px dashed var(--ds-border)' }}>
           <div className="flex items-center gap-2">

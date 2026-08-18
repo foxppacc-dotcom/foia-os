@@ -201,8 +201,12 @@ export default function EmailAccounts() {
   };
 
   const handleResetCounters = async () => {
-    setResetting(true);
-    try { await api.post('/reset-counters', {}); } catch {}
+    setResetting(true); clearFeedback();
+    try {
+      await api.post('/reset-counters', {});
+      setSuccess('تم تصفير عدادات الإرسال اليومية');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (e) { setError(e.message || 'تعذر تصفير العدادات'); }
     setResetting(false);
   };
 
