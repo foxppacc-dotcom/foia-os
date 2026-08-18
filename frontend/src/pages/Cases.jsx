@@ -237,8 +237,11 @@ export default function Cases() {
       setInitialLoading(false);
     // Previously left `cases` at [] on any failure -- rendered as "لا توجد
     // قضايا" (no cases exist), indistinguishable from a genuinely empty
-    // caseload.
-    }).catch(() => { setFetchError('تعذر تحميل القضايا — حاول تحديث الصفحة'); setLoading(false); setInitialLoading(false); });
+    // caseload. The backend already returns a specific error message
+    // (res.json({error: err.message})) -- surfacing it here instead of a
+    // fixed generic string, since a search that intermittently 500s needs
+    // the ACTUAL reason visible to diagnose, not just "try refreshing".
+    }).catch((e) => { setFetchError(`تعذر تحميل القضايا — ${e.message || 'حاول تحديث الصفحة'}`); setLoading(false); setInitialLoading(false); });
   };
 
   const fetchAgencies = () => {

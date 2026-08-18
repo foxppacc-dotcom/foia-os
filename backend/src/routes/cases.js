@@ -281,6 +281,7 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
 
     res.json({ data: result, total: count || 0 });
   } catch (err) {
+    console.error('[GET /cases] failed:', err.message, err.stack);
     res.status(500).json({ error: err.message });
   }
 });
