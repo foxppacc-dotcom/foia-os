@@ -344,9 +344,9 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted,
 }
 
 export default function CommunicationCenter({ caseId }) {
+  const { requests } = useCaseContext();
   const [threads, setThreads] = useState([]);
   const [accounts, setAccounts] = useState([]);
-  const [agencies, setAgencies] = useState([]);
   const [showComposer, setShowComposer] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
   const [composerMode, setComposerMode] = useState('new');
@@ -355,17 +355,20 @@ export default function CommunicationCenter({ caseId }) {
   const [sortBy, setSortBy] = useState('date');
   const [sendSuccess, setSendSuccess] = useState('');
 
+  // Only agencies actually registered on this case (via its requests) should
+  // be selectable here -- this composer isn't a way to start correspondence
+  // with an agency the case doesn't involve, that belongs in AgenciesTab's
+  // own "add agency" flow first.
+  const agencies = useMemo(() => {
+    const map = new Map();
+    (requests || []).forEach(r => { if (r.agencies?.id) map.set(r.agencies.id, r.agencies); });
+    return [...map.values()];
+  }, [requests]);
+
   useEffect(() => {
     if (!caseId) return;
     fetch(`${API}/cases/${caseId}/threads`, { headers: hdrs() }).then(r => r.json()).then(d => setThreads(d.threads || []));
     fetch(`${API}/email-accounts`, { headers: hdrs() }).then(r => r.json()).then(d => setAccounts(d.data || d.accounts || []));
-    // Unlike AgenciesTab.jsx's own agency picker (caseApi.js's fetchAgencies,
-    // which already passes limit=1000), this fetch had no limit param -- the
-    // backend's GET /agencies defaults to limit=100, so once the org passed
-    // 100 agencies this composer silently dropped everything alphabetically
-    // past that cutoff, making it look like only a handful of agencies (the
-    // case's own, coincidentally early alphabetically) were selectable.
-    fetch(`${API}/agencies?limit=1000`, { headers: hdrs() }).then(r => r.json()).then(d => setAgencies(d.data || d.agencies || d || []));
   }, [caseId]);
 
   const filtered = useMemo(() => {
