@@ -182,13 +182,13 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
         </div>
         {lockInfo?.locked && (
           <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded text-[11px]" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#EF4444' }}>
-            <span>
-              ⚠️ هذا الحساب مستخدم بالفعل لمراسلة هذه الجهة في القضية رقم{' '}
-              <button type="button" onClick={() => window.open(`/cases/${lockInfo.lockedByCase?.id}`, '_blank', 'noopener,noreferrer')}
-                className="underline font-semibold" style={{ color: '#EF4444' }}>
-                #{lockInfo.lockedByCase?.id}
-              </button>
-              {' '}— اختر حسابًا آخر.
+            <span className="flex items-center gap-1.5 flex-wrap">
+              ⚠️ هذا الحساب مستخدم بالفعل لمراسلة هذه الجهة في
+              <a href={`/cases/${lockInfo.lockedByCase?.id}`} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium" style={{ background: 'rgba(234,179,8,0.15)', color: '#eab308' }}>
+                <ExternalLink className="w-2.5 h-2.5" />قضية #{lockInfo.lockedByCase?.id}
+              </a>
+              — اختر حسابًا آخر.
             </span>
             {lockInfo.canOverride && (
               <button type="button" onClick={overrideLock} disabled={unlocking}
