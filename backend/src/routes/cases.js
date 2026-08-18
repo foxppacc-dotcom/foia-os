@@ -72,7 +72,16 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
     // before applying to the main query.
     let candidateCaseIds = null; // null = no restriction from this filter group yet
     const intersect = (ids) => {
-      const set = new Set(ids);
+      // Some sources (e.g. communications rows with no case_id yet -- an
+      // inbound email nothing has matched to a case) can legitimately
+      // contribute null/undefined here. Left in, `.in('id', [...])` further
+      // down serializes it as the literal text "null", and Postgres throws
+      // "invalid input syntax for type bigint" trying to cast that string --
+      // which took the WHOLE cases list down with the search's real match
+      // still sitting right next to it in the same array. Filtered here,
+      // once, so every filter category (search, agencies, employees,
+      // classifications) is protected the same way.
+      const set = new Set(ids.filter(id => id !== null && id !== undefined));
       candidateCaseIds = candidateCaseIds === null ? set : new Set([...candidateCaseIds].filter(id => set.has(id)));
     };
     if (search) {
