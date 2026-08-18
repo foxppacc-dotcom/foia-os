@@ -174,7 +174,7 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
               // locked account is visible at a glance while browsing the list.
               const lock = accountLocks[a.id];
               const label = lock?.locked
-                ? `🔒 ${a.display_name || a.email} — مستخدم لقضية "${lock.lockedByCase?.title || '#' + lock.lockedByCase?.id}"`
+                ? `🔒 ${a.display_name || a.email} — مستخدم لقضية رقم #${lock.lockedByCase?.id}`
                 : (a.display_name || a.email);
               return <option key={a.id} value={a.id}>{label}</option>;
             })}
@@ -183,7 +183,12 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
         {lockInfo?.locked && (
           <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded text-[11px]" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#EF4444' }}>
             <span>
-              ⚠️ هذا الحساب مستخدم بالفعل لمراسلة هذه الجهة في قضية "{lockInfo.lockedByCase?.title || '#' + lockInfo.lockedByCase?.id}" — اختر حسابًا آخر.
+              ⚠️ هذا الحساب مستخدم بالفعل لمراسلة هذه الجهة في القضية رقم{' '}
+              <button type="button" onClick={() => window.open(`/cases/${lockInfo.lockedByCase?.id}`, '_blank', 'noopener,noreferrer')}
+                className="underline font-semibold" style={{ color: '#EF4444' }}>
+                #{lockInfo.lockedByCase?.id}
+              </button>
+              {' '}— اختر حسابًا آخر.
             </span>
             {lockInfo.canOverride && (
               <button type="button" onClick={overrideLock} disabled={unlocking}
