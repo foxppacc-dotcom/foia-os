@@ -934,6 +934,18 @@ router.post('/imap/backfill-html', requireAuth, requireRole('admin'), async (req
   } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
 });
 
+// POST /api/imap/backfill-attachments — one-time enrichment for attachments
+// that arrived before the email was matched/linked to a case (so they were
+// never uploaded to Drive, only their name/size recorded). Admin-only, same
+// re-fetch-and-let-dedup-backfill-in-place approach as backfill-html above.
+router.post('/imap/backfill-attachments', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const mailPoller = require('../services/mailPoller');
+    const results = await mailPoller.backfillMissingAttachments();
+    res.json({ success: true, results });
+  } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
+});
+
 // TEMP DIAGNOSTIC — GET /api/imap/raw-fetch/:accountId
 // Calls pollAccount directly (no insert) and returns exactly what IMAP
 // fetch returned, to compare against what should be there.

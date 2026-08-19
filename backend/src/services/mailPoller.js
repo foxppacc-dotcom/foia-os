@@ -4,6 +4,7 @@ const { getSupabase } = require('../supabase');
 const { decrypt } = require('./crypto');
 const storage = require('./storage');
 const caseFileStorage = require('./caseFileStorage');
+const gdrive = require('./googleDriveService');
 const { notifyUsers, getCaseRecipients, getUsersWithPermission, getCaseActivityRecipients } = require('./notificationService');
 
 function guessFileType(filename) {
@@ -13,6 +14,30 @@ function guessFileType(filename) {
   if (['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext)) return 'video';
   if (['.mp3', '.wav', '.ogg', '.flac'].includes(ext)) return 'audio';
   return 'document';
+}
+
+// Every inbound attachment should be downloadable regardless of whether its
+// email has been matched to a case yet -- previously an unmatched email's
+// attachments were never uploaded anywhere at all (no case to file a Drive
+// folder under), leaving them permanently unrecoverable metadata-only
+// entries. Matched emails still file into the case's own folder (so they
+// also show up in its Files tab); unmatched ones go into one shared
+// system-level "Unmatched Emails" folder instead, just to make them
+// downloadable -- they're not case_documents rows since there's no case yet.
+async function uploadInboundAttachment(sup, caseId, buffer, fileName, mimeType, size) {
+  if (caseId) {
+    const driveFields = await caseFileStorage.saveCaseFile({ caseId, buffer, fileName, mimeType, category: 'incoming' });
+    const { error: docErr } = await sup.from('case_documents').insert({
+      case_id: caseId, filename: fileName, original_name: fileName,
+      mime_type: mimeType, size, file_type: guessFileType(fileName), source: 'email',
+      ...driveFields, url: driveFields.file_path,
+    });
+    if (docErr) console.error(`[mailPoller] case_documents insert failed for "${fileName}":`, docErr.message);
+    return { driveFileId: driveFields.drive_file_id, viewUrl: driveFields.file_path };
+  }
+  const folderId = await gdrive.ensureSystemFolder('Unmatched Emails');
+  const driveFile = await gdrive.uploadBytes(buffer, fileName, mimeType, folderId);
+  return { driveFileId: driveFile.id, viewUrl: driveFile.webViewLink };
 }
 
 // Extract an agency-assigned reference/tracking number from an email's
@@ -481,11 +506,41 @@ class MailPoller {
       // body_html existed) but is re-fetched by a wider-window poll gets its
       // html filled in via an UPDATE rather than being silently skipped --
       // still not counted as new, still no notification, just enriched.
-      const { data: existing } = await sup.from('communications').select('id, body_html').eq('message_id', msg.messageId).maybeSingle();
+      // Attachment backfill uses the exact same trick: emails stored before
+      // uploadInboundAttachment existed had their attachments recorded as
+      // metadata only (name/size, tagged 'unmatched': true) -- the raw bytes
+      // were never saved anywhere, only held in memory for that one poll.
+      // This re-fetch (with the raw content back in hand) is the only way to
+      // actually recover and store the file now, not just its name --
+      // whether the email has a case_id or not (uploadInboundAttachment
+      // below picks the right destination either way).
+      const { data: existing } = await sup.from('communications').select('id, body_html, case_id, metadata').eq('message_id', msg.messageId).maybeSingle();
       if (existing) {
         if (!existing.body_html && msg.html) {
           const { error: backfillErr } = await sup.from('communications').update({ body_html: msg.html }).eq('id', existing.id);
           if (backfillErr) console.error(`[mailPoller] body_html backfill failed for message ${msg.messageId}:`, backfillErr.message);
+        }
+        if (msg.attachments?.length) {
+          let meta; try { meta = JSON.parse(existing.metadata || '{}'); } catch { meta = {}; }
+          const atts = meta.attachments || [];
+          const needsBackfill = atts.some(a => !a.driveFileId && !a.storageKey && !a.error);
+          if (needsBackfill) {
+            const updatedAtts = await Promise.all(atts.map(async (a) => {
+              if (a.driveFileId || a.storageKey) return a;
+              const match = msg.attachments.find(ma => ma.filename === a.filename && ma.content);
+              if (!match) return a;
+              try {
+                const buffer = Buffer.from(match.content, 'base64');
+                const { driveFileId, viewUrl } = await uploadInboundAttachment(sup, existing.case_id, buffer, a.filename, a.mimeType || match.contentType, a.size);
+                return { filename: a.filename, size: a.size, mimeType: a.mimeType, driveFileId, viewUrl };
+              } catch (e) {
+                console.error(`[mailPoller] attachment backfill upload failed for "${a.filename}":`, e.message);
+                return a;
+              }
+            }));
+            const { error: metaErr } = await sup.from('communications').update({ metadata: JSON.stringify({ ...meta, attachments: updatedAtts }) }).eq('id', existing.id);
+            if (metaErr) console.error(`[mailPoller] attachment backfill metadata update failed for message ${msg.messageId}:`, metaErr.message);
+          }
         }
         continue;
       }
@@ -496,36 +551,17 @@ class MailPoller {
       // Persist attachment content to Google Drive (was previously uploaded
       // to Supabase Storage), and -- when the email matched a case -- also
       // register each one as a real Case Document so users find it in the
-      // Files tab, not only buried in the email thread. Unmatched emails
-      // have no case to file a Drive folder under, so their attachments
-      // stay unpersisted (metadata only) rather than accumulating as
-      // ownerless bytes in permanent storage.
+      // Files tab, not only buried in the email thread. Unmatched emails go
+      // into the shared "Unmatched Emails" folder instead (uploadInboundAttachment
+      // handles the split) -- still downloadable, just not filed under any
+      // case's own folder/Files tab until it's matched.
       const storedAttachments = [];
       for (const att of msg.attachments) {
         if (!att.content) continue;
-        if (!matchedCaseId) {
-          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, unmatched: true });
-          continue;
-        }
         try {
           const buffer = Buffer.from(att.content, 'base64');
-          const driveFields = await caseFileStorage.saveCaseFile({
-            caseId: matchedCaseId, buffer, fileName: att.filename, mimeType: att.contentType, category: 'incoming',
-          });
-          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, driveFileId: driveFields.drive_file_id, viewUrl: driveFields.file_path });
-
-          // Supabase-js resolves {data, error} rather than throwing on a
-          // DB-level rejection -- must check `error` explicitly, a bare
-          // try/catch around the await would not have caught it.
-          const { error: docErr } = await sup.from('case_documents').insert({
-            case_id: matchedCaseId,
-            filename: att.filename, original_name: att.filename,
-            mime_type: att.contentType, size: att.size,
-            file_type: guessFileType(att.filename),
-            source: 'email',
-            ...driveFields, url: driveFields.file_path,
-          });
-          if (docErr) console.error(`[mailPoller] case_documents insert failed for "${att.filename}":`, docErr.message);
+          const { driveFileId, viewUrl } = await uploadInboundAttachment(sup, matchedCaseId, buffer, att.filename, att.contentType, att.size);
+          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, driveFileId, viewUrl });
         } catch (e) {
           console.error(`[mailPoller] attachment upload failed for "${att.filename}":`, e.message);
           storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, error: e.message });
@@ -708,6 +744,41 @@ class MailPoller {
         await this.processMessages(acct.id, messages);
         const after = await sup.from('communications').select('id', { count: 'exact', head: true })
           .eq('email_account_id', acct.id).eq('direction', 'inbound').is('body_html', null);
+        results.push({ account: acct.email, since: since.toISOString(), stillMissingBefore: before.count || 0, stillMissingAfter: after.count || 0 });
+      } catch (e) {
+        results.push({ account: acct.email, error: e.message });
+      }
+    }
+    return results;
+  }
+
+  // Same idea as backfillHtmlBodies, for attachments recorded before this
+  // fix (name/size only, tagged 'unmatched': true, no raw bytes ever
+  // uploaded anywhere -- see the old comment this replaced). Re-fetching the
+  // account's mailbox re-obtains those bytes, and processMessages' dedup
+  // path (the `existing` branch above) uploads them now -- into the
+  // matched case's folder if it has one by now, or the shared "Unmatched
+  // Emails" folder otherwise -- either way making them downloadable. Only
+  // works while the original email is still on the server -- an
+  // already-deleted/expired message can't be recovered this way.
+  async backfillMissingAttachments() {
+    const sup = getSupabase();
+    const { data: allAccounts } = await sup.from('email_accounts').select('*');
+    const accounts = (allAccounts || []).filter(a => a.is_active === true || a.is_active === 1);
+    const results = [];
+    const pendingFilter = (q) => q.eq('direction', 'inbound').ilike('metadata', '%"unmatched":true%');
+
+    for (const acct of accounts) {
+      try {
+        const { data: oldest } = await pendingFilter(sup.from('communications').select('created_at').eq('email_account_id', acct.id))
+          .order('created_at', { ascending: true }).limit(1).maybeSingle();
+        if (!oldest) { results.push({ account: acct.email, skipped: true, reason: 'nothing missing attachments' }); continue; }
+
+        const since = new Date(new Date(oldest.created_at).getTime() - 24 * 60 * 60 * 1000);
+        const messages = await this.pollAccount(acct, since);
+        const before = await pendingFilter(sup.from('communications').select('id', { count: 'exact', head: true }).eq('email_account_id', acct.id));
+        await this.processMessages(acct.id, messages);
+        const after = await pendingFilter(sup.from('communications').select('id', { count: 'exact', head: true }).eq('email_account_id', acct.id));
         results.push({ account: acct.email, since: since.toISOString(), stillMissingBefore: before.count || 0, stillMissingAfter: after.count || 0 });
       } catch (e) {
         results.push({ account: acct.email, error: e.message });

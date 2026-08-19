@@ -21,6 +21,7 @@ export default function EmailAccounts() {
   const [showForm, setShowForm] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [backfillingAttachments, setBackfillingAttachments] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testEmail, setTestEmail] = useState({ account_id: '', to: '', subject: '', body: '' });
@@ -200,6 +201,23 @@ export default function EmailAccounts() {
     setBackfilling(false);
   };
 
+  // Same idea as handleBackfillHtml, for attachments on emails that arrived
+  // BEFORE they were matched/linked to a case -- those never got uploaded to
+  // Drive at the time (no case to file them under yet), only recorded by
+  // name/size, so they show as "غير متاح للتحميل" even though the message
+  // itself is long since linked to a case.
+  const handleBackfillAttachments = async () => {
+    setBackfillingAttachments(true); clearFeedback();
+    try {
+      const r = await fetch(`${BASE}/imap/backfill-attachments`, { method: 'POST', headers: hdrs() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { setError(d.error || 'فشل استرجاع المرفقات'); setBackfillingAttachments(false); return; }
+      const summary = (d.results || []).map(r => r.error ? `${r.account}: ${r.error}` : `${r.account}: ${r.stillMissingBefore ?? '?'} → ${r.stillMissingAfter ?? '?'}`).join(' | ');
+      setSuccess(`تم استرجاع المرفقات — ${summary}`);
+    } catch { setError('خطأ في الاتصال'); }
+    setBackfillingAttachments(false);
+  };
+
   const handleResetCounters = async () => {
     setResetting(true); clearFeedback();
     try {
@@ -252,6 +270,11 @@ export default function EmailAccounts() {
           {getCurrentUser()?.role === 'admin' && (
             <Button variant="secondary" size="sm" icon={RefreshCw} onClick={handleBackfillHtml} disabled={backfilling} title="جلب نسخة HTML كاملة للإيميلات القديمة التي وصلت قبل إضافة هذه الميزة">
               {backfilling ? 'جارٍ الاسترجاع...' : 'استرجاع HTML للإيميلات القديمة'}
+            </Button>
+          )}
+          {getCurrentUser()?.role === 'admin' && (
+            <Button variant="secondary" size="sm" icon={RefreshCw} onClick={handleBackfillAttachments} disabled={backfillingAttachments} title="استرجاع مرفقات الإيميلات القديمة (مربوطة بقضية أو لا) التي لم تُرفع من قبل">
+              {backfillingAttachments ? 'جارٍ الاسترجاع...' : 'استرجاع مرفقات الإيميلات القديمة'}
             </Button>
           )}
           <Button icon={Plus} onClick={() => { setShowForm(true); clearFeedback(); }}>إضافة حساب</Button>
