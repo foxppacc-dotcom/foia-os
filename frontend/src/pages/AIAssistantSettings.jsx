@@ -48,7 +48,7 @@ function ProviderSettings({ toast }) {
   if (loading) return <Spinner />;
 
   return (
-    <Card title="المزودون" icon={Bot}>
+    <Card title="المزودون" icon={<Bot className="w-4 h-4" style={{ color: 'var(--accent)' }} />}>
       <div className="space-y-3">
         {providers.length === 0 ? (
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>لا يوجد أي مزود ذكاء اصطناعي مربوط بعد.</p>
@@ -122,7 +122,7 @@ function CapabilityToggles({ toast }) {
   if (loading) return <Spinner />;
 
   return (
-    <Card title="صلاحيات المساعد الذكي (ما يُسمح له بفعله)" icon={CheckCircle2}>
+    <Card title="صلاحيات المساعد الذكي (ما يُسمح له بفعله)" icon={<CheckCircle2 className="w-4 h-4" style={{ color: 'var(--accent)' }} />}>
       <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
         هذه صلاحيات المساعد نفسه — مفعّلة لكل من يستطيع فتح الدردشة معه، بغض النظر عن دوره. وسّعها أو ضيّقها حسب ثقتك بدقة نتائجه.
       </p>
