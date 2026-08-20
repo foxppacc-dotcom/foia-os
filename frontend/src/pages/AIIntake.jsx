@@ -74,7 +74,7 @@ export default function AIIntake() {
         title="استقبال ذكي"
         meta="كل قضية واردة (رابط/ملف/إدخال يدوي) تُفرز أولًا هنا قبل اعتمادها للعمل"
         actions={<>
-          <Button variant="secondary" icon={Bot} onClick={() => setShowAI(s => !s)}>{showAI ? 'إخفاء الربط الذكي' : 'الربط الذكي'}</Button>
+          <Button variant="secondary" icon={Bot} onClick={() => setShowAI(s => !s)}>{showAI ? 'إخفاء المساعد الذكي' : 'المساعد الذكي'}</Button>
           {canManageCriteria && <Button variant="secondary" icon={Settings2} onClick={() => setShowCriteriaAdmin(true)}>معايير الفرز</Button>}
           {canCreate && !selected && <Button icon={Plus} onClick={() => setShowCreate(true)}>إضافة للفرز</Button>}
         </>}
