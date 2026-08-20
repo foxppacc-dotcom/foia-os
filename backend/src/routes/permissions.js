@@ -20,6 +20,21 @@ const RESOURCES = [
   { key: 'forum', label: 'المنتدى العام', actions: ['view', 'create_topic', 'comment', 'pin', 'delete_any'] },
   { key: 'intake', label: 'الاستقبال الذكي', actions: ['view', 'create', 'edit', 'promote', 'manage_criteria'] },
   { key: 'employee_performance', label: 'أداء الموظفين', actions: ['view'] },
+  // What the AI assistant (الاستقبال الذكي → الربط الذكي) is allowed to do --
+  // each action here is a real, hardcoded tool function (see
+  // services/aiTools.js), never a generic/open-ended capability. Every
+  // action defaults to unchecked for every role until an admin explicitly
+  // grants it, same as every other resource here -- the assistant is inert
+  // until deliberately configured. auto_link_email is deliberately a
+  // SEPARATE row from suggest_email_link: granting suggestion-only access
+  // never implies auto-linking without human confirmation.
+  {
+    key: 'ai_assistant', label: 'المساعد الذكي', actions: [
+      'search_intake', 'create_intake_entry', 'edit_intake_entry',
+      'generate_employee_report', 'list_unreviewed_replies', 'review_unmatched_emails',
+      'suggest_email_link', 'auto_link_email',
+    ]
+  },
 ];
 
 // Navigation visibility catalog — mirrors the Sidebar items exactly.

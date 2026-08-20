@@ -16,6 +16,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Spinner from '../components/ui/Spinner';
 import { TableShell, Thead, Th, Td, Tr } from '../components/ui/Table';
 import { useToast } from '../components/ui/Toast';
+import AIAssistantPanel from '../features/intake/components/AIAssistantPanel';
 
 const tok = () => localStorage.getItem('foia_token');
 async function postMultipart(path, formData) {
@@ -44,6 +45,7 @@ export default function AIIntake() {
   const [showCriteriaAdmin, setShowCriteriaAdmin] = useState(false);
   const [critFilters, setCritFilters] = useState({});
   const [search, setSearch] = useState('');
+  const [showAI, setShowAI] = useState(false);
 
   const has = (action) => isAdmin || !!perms?.permissions?.find(p => p.resource === 'intake' && p.action === action);
   const canCreate = has('create');
@@ -72,10 +74,13 @@ export default function AIIntake() {
         title="استقبال ذكي"
         meta="كل قضية واردة (رابط/ملف/إدخال يدوي) تُفرز أولًا هنا قبل اعتمادها للعمل"
         actions={<>
+          <Button variant="secondary" icon={Bot} onClick={() => setShowAI(s => !s)}>{showAI ? 'إخفاء الربط الذكي' : 'الربط الذكي'}</Button>
           {canManageCriteria && <Button variant="secondary" icon={Settings2} onClick={() => setShowCriteriaAdmin(true)}>معايير الفرز</Button>}
           {canCreate && !selected && <Button icon={Plus} onClick={() => setShowCreate(true)}>إضافة للفرز</Button>}
         </>}
       />
+
+      {showAI && <AIAssistantPanel />}
 
       {selected ? (
         <ReviewDetail item={selected} criteria={criteria} canEdit={canEdit} canPromote={canPromote}

@@ -570,6 +570,7 @@ export default function InboxPage() {
                   {possibleMatches.map((pm, i) => (
                     <div key={i} className="flex items-center justify-between gap-2 py-0.5">
                       <span style={{ color: 'var(--ds-text-secondary)' }}>
+                        {pm.source === 'ai' && <span style={{ color: 'var(--ds-accent)' }}>🤖 اقتراح من المساعد الذكي — </span>}
                         قضية #{pm.caseId} — {(pm.reasons || []).join('، ')}
                       </span>
                       <button onClick={() => handleLink(msg.id, pm.caseId, null)}

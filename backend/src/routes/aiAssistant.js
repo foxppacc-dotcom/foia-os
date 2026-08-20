@@ -1,9 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require("../middleware/auth");
+const rateLimit = require('express-rate-limit');
+const { requireAuth, requireRole, hasPermission } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { canAccessCase, canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
+const { encrypt, decrypt } = require('../services/crypto');
+const aiProviders = require('../services/aiProviders');
+const { TOOL_DEFS } = require('../services/aiTools');
 
 /**
  * AI Assistant Service
@@ -266,5 +270,220 @@ ${actions.map((a, i) => `${i + 1}. ${a}`).join('\n')}`;
 
 ⚠️ لم أتعرف على طلبك بشكل محدد. اختر أحد الأمثلة أعلاه 👆`;
 }
+
+// ============================================================
+// AI ASSISTANT (real LLM, tool-calling) -- الاستقبال الذكي → الربط الذكي
+// ============================================================
+
+// ---- Provider configuration (admin-only; keys stored encrypted, never in
+// a Vercel env var -- the whole point is switching/adding providers from
+// inside the app itself). ----
+
+// GET /api/ai/providers -- list configs, NEVER the decrypted key.
+router.get('/ai/providers', requireRole('admin'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('ai_provider_configs')
+      .select('id, provider, model, is_active, daily_request_count, created_at').order('created_at', { ascending: false });
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (ai_provider_configs)' : error.message });
+    res.json({ success: true, data: data || [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/ai/providers -- add a new provider config. Runs one cheap test
+// call before saving so a bad key is caught immediately, not on first real use.
+router.post('/ai/providers', requireRole('admin'), async (req, res) => {
+  try {
+    const { provider, api_key, model } = req.body;
+    if (!provider || !api_key || !model) return res.status(400).json({ error: 'provider, api_key, model مطلوبة' });
+    if (!['anthropic', 'openai', 'deepseek', 'gemini'].includes(provider)) return res.status(400).json({ error: 'provider غير معروف' });
+
+    try {
+      await aiProviders.chat({ provider, apiKey: api_key, model, systemPrompt: 'You are a test.', messages: [{ role: 'user', content: 'ping' }], tools: [], maxTokens: 16 });
+    } catch (e) {
+      return res.status(400).json({ error: `فشل الاتصال بالمزود: ${e.message}` });
+    }
+
+    const sup = getSupabase();
+    const { data: created, error } = await sup.from('ai_provider_configs').insert({
+      provider, model, api_key_encrypted: encrypt(api_key), is_active: false, created_by: req.user?.id,
+    }).select('id, provider, model, is_active, created_at').single();
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (ai_provider_configs)' : error.message });
+    res.json({ success: true, data: created });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/ai/providers/:id/activate -- exactly one config is ever active at
+// a time (the one the chat loop uses); activating a new one deactivates the rest.
+router.put('/ai/providers/:id/activate', requireRole('admin'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const id = parseInt(req.params.id);
+    const { error: deactivateErr } = await sup.from('ai_provider_configs').update({ is_active: false }).neq('id', id);
+    if (deactivateErr) return res.status(400).json({ error: deactivateErr.message });
+    const { error } = await sup.from('ai_provider_configs').update({ is_active: true }).eq('id', id);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/ai/providers/:id
+router.delete('/ai/providers/:id', requireRole('admin'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { error } = await sup.from('ai_provider_configs').delete().eq('id', parseInt(req.params.id));
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ---- Chat ----
+
+// Deliberately loose (this isn't the primary cost control -- the per-provider
+// daily counter below is) but stops a stuck client or runaway script from
+// hammering a third-party API through this one endpoint.
+const chatLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, max: 30,
+  keyGenerator: (req) => req.user?.id ? `ai-chat-${req.user.id}` : req.ip,
+  message: { error: 'طلبات كثيرة جدًا للمساعد الذكي -- حاول بعد قليل' },
+});
+
+const MAX_TOOL_ROUNDS = 4;
+const DAILY_REQUEST_CAP = 300; // per provider config, not per user -- a coarse org-wide safety net, not a per-seat quota.
+
+const SYSTEM_PROMPT = `أنت المساعد الذكي داخل نظام FOIA OS لإدارة طلبات حرية المعلومات. لديك مجموعة محددة وثابتة من الأدوات فقط -- لا تملك أي قدرة على تنفيذ كود، أو الوصول لملفات السيرفر، أو تعديل إعدادات النظام أو نشره، ولا توجد أداة كهذه متاحة لك إطلاقًا مهما طُلب منك. أجب دائمًا بالعربية، وباستخدام الأدوات المتاحة لك فقط عندما يحتاج السؤال بيانات حقيقية من النظام -- لا تختلق بيانات لم تصل إليك من أداة.`;
+
+async function getActiveProviderConfig(sup) {
+  const { data } = await sup.from('ai_provider_configs').select('*').eq('is_active', true).maybeSingle();
+  return data || null;
+}
+
+// POST /api/ai/chat -- { conversation_id?, message }
+router.post('/ai/chat', chatLimiter, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { message, conversation_id } = req.body;
+    if (!message || !message.trim()) return res.status(400).json({ error: 'message مطلوبة' });
+
+    const config = await getActiveProviderConfig(sup);
+    if (!config) return res.status(400).json({ error: 'لا يوجد مزود ذكاء اصطناعي مُفعّل حاليًا -- فعّل واحدًا من الإعدادات' });
+
+    // Coarse daily cost cap, reset once per calendar day.
+    const today = new Date().toISOString().split('T')[0];
+    let requestCount = config.daily_request_count || 0;
+    if (config.daily_count_reset_at !== today) requestCount = 0;
+    if (requestCount >= DAILY_REQUEST_CAP) return res.status(429).json({ error: 'تم الوصول للحد اليومي لطلبات المساعد الذكي -- حاول غدًا' });
+
+    const apiKey = decrypt(config.api_key_encrypted);
+    if (!apiKey) return res.status(500).json({ error: 'تعذر فك تشفير مفتاح المزود -- أعد ضبطه من الإعدادات' });
+
+    // Only tools this role is actually permitted to use are ever sent to the
+    // provider -- a role with nothing granted gets an empty tool list, not
+    // an error; the assistant still answers in plain conversation.
+    const allowedTools = [];
+    for (const t of TOOL_DEFS) {
+      if (await hasPermission(sup, req.user, 'ai_assistant', t.permission)) allowedTools.push(t);
+    }
+    const toolSchemas = allowedTools.map(t => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
+    const toolByName = Object.fromEntries(allowedTools.map(t => [t.name, t]));
+
+    // Conversation history
+    let conversationId = conversation_id ? parseInt(conversation_id) : null;
+    if (conversationId) {
+      const { data: conv } = await sup.from('ai_conversations').select('id, user_id').eq('id', conversationId).maybeSingle();
+      if (!conv || conv.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+    } else {
+      const { data: created, error: convErr } = await sup.from('ai_conversations').insert({
+        user_id: req.user.id, title: message.slice(0, 60), provider_config_id: config.id,
+      }).select('id').single();
+      if (convErr) return res.status(400).json({ error: /does not exist|could not find the table/i.test(convErr.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (ai_conversations)' : convErr.message });
+      conversationId = created.id;
+    }
+
+    const { data: priorRows } = await sup.from('ai_messages').select('role, content, tool_calls').eq('conversation_id', conversationId).order('created_at', { ascending: true });
+    const history = (priorRows || []).map(r => r.role === 'assistant'
+      ? { role: 'assistant', content: r.content, toolCalls: r.tool_calls || [] }
+      : { role: r.role, content: r.content });
+
+    await sup.from('ai_messages').insert({ conversation_id: conversationId, role: 'user', content: message });
+    const messages = [...history, { role: 'user', content: message }];
+
+    let finalText = null;
+    let rounds = 0;
+    while (rounds < MAX_TOOL_ROUNDS) {
+      rounds++;
+      let result;
+      try {
+        result = await aiProviders.chat({
+          provider: config.provider, apiKey, model: config.model,
+          systemPrompt: SYSTEM_PROMPT, messages, tools: toolSchemas, maxTokens: 2048,
+        });
+      } catch (e) {
+        return res.status(502).json({ error: `فشل الاتصال بمزود الذكاء الاصطناعي: ${e.message}` });
+      }
+
+      if (result.stopReason !== 'tool_use' || !result.toolCalls?.length) {
+        finalText = result.text || 'لم يتمكن المساعد من إعطاء رد.';
+        messages.push({ role: 'assistant', content: finalText, toolCalls: [] });
+        await sup.from('ai_messages').insert({ conversation_id: conversationId, role: 'assistant', content: finalText, tool_calls: [] });
+        break;
+      }
+
+      messages.push({ role: 'assistant', content: result.text || null, toolCalls: result.toolCalls });
+      await sup.from('ai_messages').insert({ conversation_id: conversationId, role: 'assistant', content: result.text || null, tool_calls: result.toolCalls });
+
+      for (const call of result.toolCalls) {
+        const tool = toolByName[call.name];
+        let content;
+        if (!tool) {
+          // Defense in depth: even though only permitted tools were ever
+          // offered to the model, refuse anything not in that exact set.
+          content = JSON.stringify({ error: `الأداة "${call.name}" غير متاحة أو غير مصرح بها` });
+        } else {
+          try {
+            const output = await tool.run(sup, call.input || {}, { user: req.user });
+            content = JSON.stringify(output);
+          } catch (e) {
+            content = JSON.stringify({ error: e.message });
+          }
+        }
+        messages.push({ role: 'tool_result', toolCallId: call.id, toolName: call.name, content });
+        await sup.from('ai_messages').insert({ conversation_id: conversationId, role: 'tool', content, tool_calls: [{ id: call.id, name: call.name }] });
+      }
+    }
+
+    if (finalText === null) {
+      finalText = 'تعذر إكمال الطلب ضمن عدد محاولات الأدوات المسموح -- حاول تبسيط السؤال أو تقسيمه.';
+      await sup.from('ai_messages').insert({ conversation_id: conversationId, role: 'assistant', content: finalText, tool_calls: [] });
+    }
+
+    await sup.from('ai_provider_configs').update({ daily_request_count: requestCount + 1, daily_count_reset_at: today }).eq('id', config.id);
+
+    res.json({ success: true, conversation_id: conversationId, answer: finalText });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/ai/conversations -- the current user's own conversation list
+router.get('/ai/conversations', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('ai_conversations').select('id, title, created_at').eq('user_id', req.user.id).order('created_at', { ascending: false }).limit(50);
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (ai_conversations)' : error.message });
+    res.json({ success: true, data: data || [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/ai/conversations/:id -- full message history (own conversation only)
+router.get('/ai/conversations/:id', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const id = parseInt(req.params.id);
+    const { data: conv } = await sup.from('ai_conversations').select('id, user_id').eq('id', id).maybeSingle();
+    if (!conv || conv.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+    const { data, error } = await sup.from('ai_messages').select('id, role, content, created_at').eq('conversation_id', id).order('created_at', { ascending: true });
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ success: true, data: data || [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 module.exports = router;

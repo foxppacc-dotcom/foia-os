@@ -21,6 +21,14 @@ const ACTION_LABEL = {
   comment: 'التعليق', pin: 'تثبيت الإعلانات المهمة',
   promote: 'اعتماد ونقل القضية للقضايا الجاهزة', manage_criteria: 'إدارة معايير الفرز',
   override_lock: 'فك قيد استخدام حساب بريد لجهة مقفلة على قضية أخرى',
+  search_intake: 'البحث والفلترة في الاستقبال الذكي',
+  create_intake_entry: 'إنشاء إدخال جديد في الاستقبال الذكي',
+  edit_intake_entry: 'تعديل إدخال في الاستقبال الذكي',
+  generate_employee_report: 'إنشاء تقرير عن أداء موظف',
+  list_unreviewed_replies: 'عرض القضايا ذات الردود غير المُطّلع عليها',
+  review_unmatched_emails: 'مراجعة محتوى الإيميلات غير المرتبطة',
+  suggest_email_link: 'اقتراح ربط إيميل بقضية (يتطلب تأكيد الموظف)',
+  auto_link_email: 'ربط إيميل بقضية مباشرة بدون تأكيد',
 };
 
 export default function TeamPermissions() {
