@@ -11,6 +11,7 @@ import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
 import Dashboard from './pages/Dashboard';
 import AIIntake from './pages/AIIntake';
+import AIAssistantSettings from './pages/AIAssistantSettings';
 import Cases from './pages/Cases';
 import CaseDetail from './pages/CaseDetail';
 
@@ -144,6 +145,7 @@ function App() {
             <Route path="/login" element={<Dashboard />} />
             <Route path="/" element={<Dashboard />} />
             <Route path="/intake" element={<AIIntake />} />
+            <Route path="/ai-assistant" element={<AIAssistantSettings />} />
             <Route path="/cases" element={<Cases />} />
             <Route path="/cases/:id" element={<CaseDetail />} />
             <Route path="/pipeline" element={<Pipeline />} />

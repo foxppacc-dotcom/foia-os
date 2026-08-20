@@ -20,21 +20,34 @@ const RESOURCES = [
   { key: 'forum', label: 'المنتدى العام', actions: ['view', 'create_topic', 'comment', 'pin', 'delete_any'] },
   { key: 'intake', label: 'الاستقبال الذكي', actions: ['view', 'create', 'edit', 'promote', 'manage_criteria'] },
   { key: 'employee_performance', label: 'أداء الموظفين', actions: ['view'] },
-  // What the AI assistant (الاستقبال الذكي → الربط الذكي) is allowed to do --
-  // each action here is a real, hardcoded tool function (see
-  // services/aiTools.js), never a generic/open-ended capability. Every
-  // action defaults to unchecked for every role until an admin explicitly
-  // grants it, same as every other resource here -- the assistant is inert
-  // until deliberately configured. auto_link_email is deliberately a
-  // SEPARATE row from suggest_email_link: granting suggestion-only access
-  // never implies auto-linking without human confirmation.
-  {
-    key: 'ai_assistant', label: 'المساعد الذكي', actions: [
-      'search_intake', 'create_intake_entry', 'edit_intake_entry',
-      'generate_employee_report', 'list_unreviewed_replies', 'review_unmatched_emails',
-      'suggest_email_link', 'auto_link_email',
-    ]
-  },
+  // Gates WHO may talk to the AI assistant at all -- a normal per-role
+  // permission like every other resource here. What the assistant is itself
+  // ALLOWED TO DO once someone talks to it is a completely separate,
+  // global on/off per tool (ai_capabilities table, managed from its own
+  // "الربط الذكي" page, not per-role) -- see services/aiTools.js and
+  // routes/aiAssistant.js's GET/PUT /ai/capabilities. That split matches how
+  // the feature was asked for: access to the chat is a per-role grant like
+  // everything else, but the assistant's own capability scope is a single
+  // dial an admin can widen or narrow based on how accurate they find its
+  // results, independent of which role happens to be chatting with it.
+  { key: 'ai_assistant', label: 'المساعد الذكي', actions: ['use_chat'] },
+];
+
+// Every real, hardcoded tool the AI assistant can call (services/aiTools.js
+// TOOL_DEFS) -- this is the GLOBAL capability catalog managed from its own
+// dedicated page (ai_capabilities table), deliberately separate from the
+// per-role RESOURCES matrix above. auto_link_email is kept as its own toggle,
+// off by default: enabling suggest_email_link never implies auto-linking
+// without human confirmation.
+const AI_CAPABILITY_ACTIONS = [
+  { key: 'search_intake', label: 'البحث والفلترة في الاستقبال الذكي' },
+  { key: 'create_intake_entry', label: 'إنشاء إدخال جديد في الاستقبال الذكي' },
+  { key: 'edit_intake_entry', label: 'تعديل إدخال في الاستقبال الذكي' },
+  { key: 'generate_employee_report', label: 'إنشاء تقرير عن أداء موظف' },
+  { key: 'list_unreviewed_replies', label: 'عرض القضايا ذات الردود غير المُطّلع عليها' },
+  { key: 'review_unmatched_emails', label: 'مراجعة محتوى الإيميلات غير المرتبطة' },
+  { key: 'suggest_email_link', label: 'اقتراح ربط إيميل بقضية (يتطلب تأكيد الموظف)' },
+  { key: 'auto_link_email', label: 'ربط إيميل بقضية مباشرة بدون تأكيد' },
 ];
 
 // Navigation visibility catalog — mirrors the Sidebar items exactly.
@@ -44,6 +57,7 @@ const NAV_ITEMS = [
   { key: 'dashboard', label: 'لوحة التحكم' },
   { key: 'settings', label: 'الإعدادات (زر أسفل القائمة الجانبية)' },
   { key: 'intake', label: 'استقبال ذكي' },
+  { key: 'ai_assistant', label: 'الربط الذكي' },
   { key: 'cases', label: 'القضايا' },
   { key: 'pipeline', label: 'خط الإنتاج' },
   { key: 'production', label: 'مونتاج' },
@@ -81,7 +95,13 @@ const PRODUCTION_LISTS = [
 // is derived straight from the resource's view permission instead of its
 // own row. Every other nav item (no matching resource, or no 'view' action)
 // keeps its own independently-configured visibility below.
-const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production', 'settings', 'forum', 'intake'];
+const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production', 'settings', 'forum', 'intake', 'ai_assistant'];
+
+// Which action actually gates each RESOURCE_VIEW_NAV_KEYS item's sidebar
+// visibility -- defaults to 'view' for every key except where a resource's
+// gating action is named differently (ai_assistant's is 'use_chat', since
+// that resource has no 'view' action at all -- see RESOURCES above).
+const NAV_GATE_ACTION = { ai_assistant: 'use_chat' };
 
 // Fallback only for the rare case the roles table is empty/unreachable --
 // the real, editable role list lives in the `roles` table (teamManagement.js
@@ -99,7 +119,7 @@ async function getRoleNames(sup) {
 router.get('/permissions/schema', requireAuth, async (req, res) => {
   const sup = getSupabase();
   const roles = await getRoleNames(sup);
-  res.json({ success: true, resources: RESOURCES, navItems: NAV_ITEMS, productionLists: PRODUCTION_LISTS, roles });
+  res.json({ success: true, resources: RESOURCES, navItems: NAV_ITEMS, productionLists: PRODUCTION_LISTS, roles, aiCapabilityActions: AI_CAPABILITY_ACTIONS });
 });
 
 // GET /api/permissions — full matrix (all roles)
@@ -148,7 +168,8 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
       continue;
     }
     if (RESOURCE_VIEW_NAV_KEYS.includes(item.key)) {
-      const viewRow = (data || []).find(p => p.resource === item.key && p.action === 'view');
+      const gateAction = NAV_GATE_ACTION[item.key] || 'view';
+      const viewRow = (data || []).find(p => p.resource === item.key && p.action === gateAction);
       navVisibility[item.key] = viewRow ? viewRow.allowed !== false : false;
       continue;
     }
@@ -229,3 +250,4 @@ router.put('/nav-layout', requireAuth, requireRole('admin'), async (req, res) =>
 });
 
 module.exports = router;
+module.exports.AI_CAPABILITY_ACTIONS = AI_CAPABILITY_ACTIONS;

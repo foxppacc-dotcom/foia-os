@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
+const multer = require('multer');
+const os = require('os');
+const fs = require('fs');
 const { requireAuth, requireRole, hasPermission } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
@@ -8,6 +11,18 @@ const { canAccessCase, canViewAllCases, getVisibleCaseIds } = require('../servic
 const { encrypt, decrypt } = require('../services/crypto');
 const aiProviders = require('../services/aiProviders');
 const { TOOL_DEFS } = require('../services/aiTools');
+const { extractText } = require('../services/aiIntake');
+
+// Same disk-storage-to-tmpdir convention as intake.js's upload -- OCR/text
+// extraction shells out to a script that needs a real file path, and
+// os.tmpdir() is the one writable directory on Vercel's serverless filesystem.
+const chatUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, os.tmpdir()),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}_${file.originalname}`),
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
 
 /**
  * AI Assistant Service
@@ -337,6 +352,33 @@ router.delete('/ai/providers/:id', requireRole('admin'), async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ---- The assistant's OWN capability set -- global, not per-role. See
+// permissions.js's ai_assistant resource (which only gates who may open the
+// chat at all) vs this table (what the assistant may do once someone does).
+
+// GET /api/ai/capabilities -- {action: allowed} for every real tool
+router.get('/ai/capabilities', requireRole('admin'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('ai_capabilities').select('action, allowed');
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (ai_capabilities)' : error.message });
+    const capMap = Object.fromEntries((data || []).map(r => [r.action, r.allowed]));
+    res.json({ success: true, data: Object.fromEntries(TOOL_DEFS.map(t => [t.permission, capMap[t.permission] === true])) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/ai/capabilities -- { action, allowed }
+router.put('/ai/capabilities', requireRole('admin'), async (req, res) => {
+  try {
+    const { action, allowed } = req.body;
+    if (!action || !TOOL_DEFS.some(t => t.permission === action)) return res.status(400).json({ error: 'action غير معروف' });
+    const sup = getSupabase();
+    const { error } = await sup.from('ai_capabilities').upsert({ action, allowed: !!allowed, updated_at: new Date().toISOString() }, { onConflict: 'action' });
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (ai_capabilities)' : error.message });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ---- Chat ----
 
 // Deliberately loose (this isn't the primary cost control -- the per-provider
@@ -358,12 +400,34 @@ async function getActiveProviderConfig(sup) {
   return data || null;
 }
 
-// POST /api/ai/chat -- { conversation_id?, message }
-router.post('/ai/chat', chatLimiter, async (req, res) => {
+// POST /api/ai/chat -- multipart/form-data: { conversation_id?, message, file? }
+// A file is optional; when present its text is extracted (same OCR pipeline
+// intake.js uses) and folded into this turn's message as context, not stored
+// anywhere -- the assistant reads it once, same as it would read pasted text.
+router.post('/ai/chat', chatLimiter, chatUpload.single('file'), async (req, res) => {
+  const tmpFilePath = req.file?.path || null;
   try {
     const sup = getSupabase();
     const { message, conversation_id } = req.body;
     if (!message || !message.trim()) return res.status(400).json({ error: 'message مطلوبة' });
+
+    // Who may talk to the assistant at all -- a normal per-role permission
+    // like everywhere else. What it's allowed to DO once someone does is a
+    // completely separate, global toggle set (ai_capabilities below), not
+    // tied to the operating user's role at all.
+    if (!(await hasPermission(sup, req.user, 'ai_assistant', 'use_chat'))) {
+      return res.status(403).json({ error: 'Forbidden — لا تملك صلاحية استخدام المساعد الذكي' });
+    }
+
+    let effectiveMessage = message;
+    if (req.file) {
+      try {
+        const fileText = await extractText(req.file.path);
+        if (fileText && fileText.trim()) {
+          effectiveMessage = `[محتوى الملف المرفق: ${req.file.originalname}]\n"""\n${fileText.slice(0, 12000)}\n"""\n\n[رسالة المستخدم]\n${message}`;
+        }
+      } catch (e) { console.error('[ai/chat] file text extraction failed:', e.message); }
+    }
 
     const config = await getActiveProviderConfig(sup);
     if (!config) return res.status(400).json({ error: 'لا يوجد مزود ذكاء اصطناعي مُفعّل حاليًا -- فعّل واحدًا من الإعدادات' });
@@ -377,13 +441,12 @@ router.post('/ai/chat', chatLimiter, async (req, res) => {
     const apiKey = decrypt(config.api_key_encrypted);
     if (!apiKey) return res.status(500).json({ error: 'تعذر فك تشفير مفتاح المزود -- أعد ضبطه من الإعدادات' });
 
-    // Only tools this role is actually permitted to use are ever sent to the
-    // provider -- a role with nothing granted gets an empty tool list, not
-    // an error; the assistant still answers in plain conversation.
-    const allowedTools = [];
-    for (const t of TOOL_DEFS) {
-      if (await hasPermission(sup, req.user, 'ai_assistant', t.permission)) allowedTools.push(t);
-    }
+    // The assistant's OWN global capability set -- an admin widens or
+    // narrows this from "الربط الذكي" based on how accurate they find its
+    // results, independent of which role is currently chatting with it.
+    const { data: capRows } = await sup.from('ai_capabilities').select('action, allowed');
+    const capMap = Object.fromEntries((capRows || []).map(r => [r.action, r.allowed]));
+    const allowedTools = TOOL_DEFS.filter(t => capMap[t.permission] === true);
     const toolSchemas = allowedTools.map(t => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
     const toolByName = Object.fromEntries(allowedTools.map(t => [t.name, t]));
 
@@ -405,8 +468,12 @@ router.post('/ai/chat', chatLimiter, async (req, res) => {
       ? { role: 'assistant', content: r.content, toolCalls: r.tool_calls || [] }
       : { role: r.role, content: r.content });
 
+    // Stored history keeps the short, human-written message (not the
+    // file-content-prefixed version) so a conversation doesn't balloon with
+    // repeated file text on every later turn -- the extracted text is only
+    // ever injected into THIS turn's actual call to the provider below.
     await sup.from('ai_messages').insert({ conversation_id: conversationId, role: 'user', content: message });
-    const messages = [...history, { role: 'user', content: message }];
+    const messages = [...history, { role: 'user', content: effectiveMessage }];
 
     let finalText = null;
     let rounds = 0;
@@ -461,6 +528,9 @@ router.post('/ai/chat', chatLimiter, async (req, res) => {
 
     res.json({ success: true, conversation_id: conversationId, answer: finalText });
   } catch (err) { res.status(500).json({ error: err.message }); }
+  finally {
+    if (tmpFilePath) fs.unlink(tmpFilePath, () => {});
+  }
 });
 
 // GET /api/ai/conversations -- the current user's own conversation list
