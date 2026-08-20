@@ -48,6 +48,7 @@ const AI_CAPABILITY_ACTIONS = [
   { key: 'review_unmatched_emails', label: 'مراجعة محتوى الإيميلات غير المرتبطة' },
   { key: 'suggest_email_link', label: 'اقتراح ربط إيميل بقضية (يتطلب تأكيد الموظف)' },
   { key: 'auto_link_email', label: 'ربط إيميل بقضية مباشرة بدون تأكيد' },
+  { key: 'assign_case_to_employee', label: 'توزيع العمل (تعيين قضية لموظف)' },
 ];
 
 // Navigation visibility catalog — mirrors the Sidebar items exactly.

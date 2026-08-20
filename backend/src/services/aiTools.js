@@ -187,6 +187,62 @@ async function autoLinkEmailToCase(sup, { communication_id, case_id } = {}, ctx)
   return { communication_id: commId, linked_case_id: caseId, case_title: caseRow.title };
 }
 
+// ---- assign_case_to_employee ----
+async function assignCaseToEmployee(sup, { case_id, user_id, name } = {}, ctx) {
+  const caseId = parseInt(case_id);
+  if (!caseId) throw new Error('case_id مطلوب');
+  let userId = parseInt(user_id);
+  if (!userId && name) {
+    const { data: match } = await sup.from('users').select('id, name').ilike('name', `%${name}%`).limit(1).maybeSingle();
+    if (!match) throw new Error(`لم يتم إيجاد موظف باسم "${name}"`);
+    userId = match.id;
+  }
+  if (!userId) throw new Error('user_id أو name مطلوب');
+
+  const [{ data: caseRow }, { data: user }] = await Promise.all([
+    sup.from('cases').select('id, title').eq('id', caseId).maybeSingle(),
+    sup.from('users').select('id, name').eq('id', userId).maybeSingle(),
+  ]);
+  if (!caseRow) throw new Error('Case not found');
+  if (!user) throw new Error('Employee not found');
+
+  const { data: existing } = await sup.from('case_assignees').select('case_id').eq('case_id', caseId).eq('user_id', userId).maybeSingle();
+  if (existing) return { case_id: caseId, user_id: userId, employee_name: user.name, already_assigned: true };
+
+  const { error } = await sup.from('case_assignees').insert({ case_id: caseId, user_id: userId, role: 'member', assigned_at: new Date().toISOString() });
+  if (error) throw error;
+
+  try {
+    await notifyUsers(sup, [userId], {
+      type: 'case_assigned', title: '🤖 تم إسناد قضية إليك (المساعد الذكي)',
+      body: `تم إسنادك للقضية "${caseRow.title}" بواسطة المساعد الذكي`,
+      target_type: 'case', target_id: caseId,
+    });
+  } catch (e) { console.error('[aiTools] assign notification failed:', e.message); }
+
+  return { case_id: caseId, case_title: caseRow.title, user_id: userId, employee_name: user.name };
+}
+
+// ---- record_capability_learning ----
+// NOT gated by ai_capabilities (see aiAssistant.js's chat loop -- this tool
+// is always offered whenever at least one other tool is allowed) since it's
+// purely additive knowledge-keeping, not an action on case data. This is the
+// mechanism behind "مركز الخبرة والتدريب": whatever the assistant notices
+// while doing a task gets appended here, per capability, independent of
+// which provider is active -- so switching from one AI provider to another
+// carries the accumulated experience forward instead of starting over.
+async function recordCapabilityLearning(sup, { action, note } = {}) {
+  if (!action || !note) throw new Error('action و note مطلوبان');
+  const { data: existing } = await sup.from('ai_capability_knowledge').select('learned_notes').eq('action', action).maybeSingle();
+  const stamp = new Date().toISOString().split('T')[0];
+  const appended = existing?.learned_notes ? `${existing.learned_notes}\n[${stamp}] ${note}` : `[${stamp}] ${note}`;
+  const { error } = await sup.from('ai_capability_knowledge').upsert(
+    { action, learned_notes: appended, updated_at: new Date().toISOString() }, { onConflict: 'action' }
+  );
+  if (error) throw error;
+  return { action, recorded: true };
+}
+
 // Fixed tool schema catalog -- see the file-level comment above. `permission`
 // is the ai_assistant action this tool is gated behind (permissions.js).
 const TOOL_DEFS = [
@@ -257,6 +313,36 @@ const TOOL_DEFS = [
     },
     run: (sup, input, ctx) => autoLinkEmailToCase(sup, input, ctx),
   },
+  {
+    name: 'assign_case_to_employee', permission: 'assign_case_to_employee',
+    description: 'توزيع العمل: إسناد قضية لموظف معيّن (بالاسم أو رقم المستخدم). ينبّه الموظف بالإسناد الجديد.',
+    input_schema: {
+      type: 'object',
+      properties: { case_id: { type: 'number' }, user_id: { type: 'number' }, name: { type: 'string' } },
+      required: ['case_id'],
+    },
+    run: (sup, input, ctx) => assignCaseToEmployee(sup, input, ctx),
+  },
 ];
 
-module.exports = { TOOL_DEFS };
+// Always offered regardless of ai_capabilities toggles (see aiAssistant.js's
+// chat loop) -- purely additive knowledge-keeping, not an action on case
+// data, and disabling it would defeat the whole point of "مركز الخبرة
+// والتدريب" surviving a provider switch.
+const ALWAYS_AVAILABLE_TOOL_DEFS = [
+  {
+    name: 'record_capability_learning',
+    description: 'تسجيل ملاحظة أو خبرة مكتسبة أثناء تنفيذ مهمة معينة، لتبقى محفوظة ومتاحة لك ولأي نسخة ذكاء اصطناعي تُستخدم لاحقًا لنفس المهمة.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: 'اسم القدرة/المهمة المرتبطة بهذه الملاحظة (مثال: search_intake)' },
+        note: { type: 'string', description: 'الملاحظة أو الخبرة المكتسبة، بإيجاز' },
+      },
+      required: ['action', 'note'],
+    },
+    run: (sup, input) => recordCapabilityLearning(sup, input),
+  },
+];
+
+module.exports = { TOOL_DEFS, ALWAYS_AVAILABLE_TOOL_DEFS };

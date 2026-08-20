@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
-import { Bot, Plus, Trash2, CheckCircle2, Power } from 'lucide-react';
+import { Bot, Plus, Trash2, CheckCircle2, Power, GraduationCap, ChevronDown, ChevronUp, Save } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
@@ -138,6 +138,93 @@ function CapabilityToggles({ toast }) {
   );
 }
 
+// مركز الخبرة والتدريب — the knowledge base an admin feeds the assistant
+// per capability (instructions/rules/training it operates by), plus a
+// separate field the assistant itself accumulates experience into over
+// time via record_capability_learning. Deliberately independent of any one
+// provider config: switching from one AI provider to another carries this
+// same accumulated knowledge forward, instead of starting cold.
+function KnowledgeCenter({ toast }) {
+  const [actions, setActions] = useState([]);
+  const [knowledge, setKnowledge] = useState({});
+  const [drafts, setDrafts] = useState({});
+  const [expanded, setExpanded] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(null);
+
+  const fetchAll = () => {
+    Promise.all([api.get('/permissions/schema'), api.get('/ai/knowledge')])
+      .then(([schema, kn]) => {
+        setActions(schema.aiCapabilityActions || []);
+        setKnowledge(kn.data || {});
+        setDrafts(Object.fromEntries((schema.aiCapabilityActions || []).map(a => {
+          const k = (kn.data || {})[a.key] || {};
+          return [a.key, { instructions: k.instructions || '', learned_notes: k.learned_notes || '' }];
+        })));
+      })
+      .catch(e => toast.error(e.message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { fetchAll(); }, []);
+
+  const save = async (key) => {
+    setSaving(key);
+    try {
+      await api.put(`/ai/knowledge/${key}`, drafts[key]);
+      toast.success('تم الحفظ');
+      fetchAll();
+    } catch (e) { toast.error(e.message); }
+    setSaving(null);
+  };
+
+  if (loading) return <Spinner />;
+
+  return (
+    <Card title="مركز الخبرة والتدريب" icon={<GraduationCap className="w-4 h-4" style={{ color: 'var(--accent)' }} />}>
+      <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+        هنا تُغذّي المساعد بالتعليمات والقواعد التي يعمل بموجبها في كل مهمة، وهنا أيضًا يحفظ هو خبراته المتراكمة من محاولات سابقة.
+        هذه المعرفة مستقلة عن أي مزود ذكاء اصطناعي معيّن — لو غيّرت المزود من شركة لأخرى، تنتقل نفس التعليمات والخبرات المتراكمة معه.
+      </p>
+      <div className="space-y-1.5">
+        {actions.map(a => {
+          const isOpen = expanded === a.key;
+          const k = knowledge[a.key];
+          return (
+            <div key={a.key} className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+              <button onClick={() => setExpanded(isOpen ? null : a.key)}
+                className="w-full flex items-center justify-between gap-2 p-2.5 text-right" style={{ background: 'var(--bg-secondary)' }}>
+                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{a.label}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  {k?.learned_notes && <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>لديه خبرات مسجّلة</span>}
+                  {isOpen ? <ChevronUp className="w-4 h-4" style={{ color: 'var(--text-muted)' }} /> : <ChevronDown className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />}
+                </div>
+              </button>
+              {isOpen && (
+                <div className="p-3 space-y-2.5" style={{ background: 'var(--bg-primary)' }}>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>التعليمات (تُكتب بواسطتك)</label>
+                    <textarea value={drafts[a.key]?.instructions || ''} onChange={e => setDrafts(d => ({ ...d, [a.key]: { ...d[a.key], instructions: e.target.value } }))}
+                      rows={3} placeholder="مثال: عند فرز إشعارات اليوتيوب، اعتبر أي فيديو منشور بعد تاريخ القبض مخالفة صريحة..."
+                      className="w-full px-3 py-2 rounded-lg text-sm resize-none" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>الخبرات المتراكمة (يسجّلها المساعد بنفسه، وتقدر تعدّلها)</label>
+                    <textarea value={drafts[a.key]?.learned_notes || ''} onChange={e => setDrafts(d => ({ ...d, [a.key]: { ...d[a.key], learned_notes: e.target.value } }))}
+                      rows={4} className="w-full px-3 py-2 rounded-lg text-sm resize-none" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div className="flex justify-end">
+                    <Button size="sm" icon={Save} disabled={saving === a.key} onClick={() => save(a.key)}>{saving === a.key ? 'جارٍ الحفظ...' : 'حفظ'}</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 export default function AIAssistantSettings() {
   const toast = useToast();
   return (
@@ -145,6 +232,7 @@ export default function AIAssistantSettings() {
       <PageHeader eyebrow="ذكاء اصطناعي" title="الربط الذكي" meta="ربط مزودي الذكاء الاصطناعي وضبط ما يُسمح للمساعد الذكي بفعله داخل النظام" />
       <ProviderSettings toast={toast} />
       <CapabilityToggles toast={toast} />
+      <KnowledgeCenter toast={toast} />
     </div>
   );
 }

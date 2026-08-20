@@ -10,7 +10,7 @@ const { getSupabase } = require('../supabase');
 const { canAccessCase, canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
 const { encrypt, decrypt } = require('../services/crypto');
 const aiProviders = require('../services/aiProviders');
-const { TOOL_DEFS } = require('../services/aiTools');
+const { TOOL_DEFS, ALWAYS_AVAILABLE_TOOL_DEFS } = require('../services/aiTools');
 const { extractText } = require('../services/aiIntake');
 
 // Same disk-storage-to-tmpdir convention as intake.js's upload -- OCR/text
@@ -379,6 +379,38 @@ router.put('/ai/capabilities', requireRole('admin'), async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ---- "مركز الخبرة والتدريب" -- per-capability instructions (admin-authored)
+// and accumulated learnings (the assistant's own, via record_capability_
+// learning). Kept independent of any one provider config so it survives a
+// provider switch unchanged. ----
+
+// GET /api/ai/knowledge -- {action: {instructions, learned_notes, updated_at}}
+router.get('/ai/knowledge', requireRole('admin'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('ai_capability_knowledge').select('*');
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (ai_capability_knowledge)' : error.message });
+    res.json({ success: true, data: Object.fromEntries((data || []).map(r => [r.action, r])) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/ai/knowledge/:action -- { instructions?, learned_notes? } --
+// admin can both feed instructions and edit/clear accumulated learnings.
+router.put('/ai/knowledge/:action', requireRole('admin'), async (req, res) => {
+  try {
+    const action = req.params.action;
+    if (!TOOL_DEFS.some(t => t.permission === action)) return res.status(400).json({ error: 'action غير معروف' });
+    const { instructions, learned_notes } = req.body;
+    const sup = getSupabase();
+    const updates = { action, updated_at: new Date().toISOString() };
+    if (instructions !== undefined) updates.instructions = instructions;
+    if (learned_notes !== undefined) updates.learned_notes = learned_notes;
+    const { error } = await sup.from('ai_capability_knowledge').upsert(updates, { onConflict: 'action' });
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (ai_capability_knowledge)' : error.message });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ---- Chat ----
 
 // Deliberately loose (this isn't the primary cost control -- the per-provider
@@ -447,8 +479,31 @@ router.post('/ai/chat', chatLimiter, chatUpload.single('file'), async (req, res)
     const { data: capRows } = await sup.from('ai_capabilities').select('action, allowed');
     const capMap = Object.fromEntries((capRows || []).map(r => [r.action, r.allowed]));
     const allowedTools = TOOL_DEFS.filter(t => capMap[t.permission] === true);
-    const toolSchemas = allowedTools.map(t => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
-    const toolByName = Object.fromEntries(allowedTools.map(t => [t.name, t]));
+
+    // "مركز الخبرة والتدريب" -- per-capability instructions an admin fed the
+    // assistant, plus whatever it has itself accumulated via
+    // record_capability_learning, folded straight into that tool's own
+    // description. Stored independent of which provider is active, so this
+    // context carries over identically if the provider is ever switched.
+    const { data: knowledgeRows } = allowedTools.length
+      ? await sup.from('ai_capability_knowledge').select('action, instructions, learned_notes').in('action', allowedTools.map(t => t.permission))
+      : { data: [] };
+    const knowledgeMap = Object.fromEntries((knowledgeRows || []).map(r => [r.action, r]));
+    const enrichedTools = allowedTools.map(t => {
+      const k = knowledgeMap[t.permission];
+      if (!k || (!k.instructions && !k.learned_notes)) return t;
+      const extra = [
+        k.instructions ? `تعليمات مخصصة لهذه المهمة:\n${k.instructions}` : null,
+        k.learned_notes ? `خبرات متراكمة من محاولات سابقة:\n${k.learned_notes}` : null,
+      ].filter(Boolean).join('\n\n');
+      return { ...t, description: `${t.description}\n\n${extra}` };
+    });
+
+    // record_capability_learning is always offered alongside whatever the
+    // assistant is actually permitted to do -- see aiTools.js's own comment.
+    const allTools = [...enrichedTools, ...ALWAYS_AVAILABLE_TOOL_DEFS];
+    const toolSchemas = allTools.map(t => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
+    const toolByName = Object.fromEntries([...allowedTools, ...ALWAYS_AVAILABLE_TOOL_DEFS].map(t => [t.name, t]));
 
     // Conversation history
     let conversationId = conversation_id ? parseInt(conversation_id) : null;
