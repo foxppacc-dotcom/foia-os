@@ -531,6 +531,7 @@ router.post('/ai/chat', chatLimiter, chatUpload.single('file'), async (req, res)
     const messages = [...history, { role: 'user', content: effectiveMessage }];
 
     let finalText = null;
+    let uiAction = null; // last navigate_to_page call in this turn wins, if called more than once
     let rounds = 0;
     while (rounds < MAX_TOOL_ROUNDS) {
       rounds++;
@@ -564,6 +565,7 @@ router.post('/ai/chat', chatLimiter, chatUpload.single('file'), async (req, res)
         } else {
           try {
             const output = await tool.run(sup, call.input || {}, { user: req.user });
+            if (call.name === 'navigate_to_page' && output?.navigate) uiAction = output.navigate;
             content = JSON.stringify(output);
           } catch (e) {
             content = JSON.stringify({ error: e.message });
@@ -581,7 +583,7 @@ router.post('/ai/chat', chatLimiter, chatUpload.single('file'), async (req, res)
 
     await sup.from('ai_provider_configs').update({ daily_request_count: requestCount + 1, daily_count_reset_at: today }).eq('id', config.id);
 
-    res.json({ success: true, conversation_id: conversationId, answer: finalText });
+    res.json({ success: true, conversation_id: conversationId, answer: finalText, ui_action: uiAction });
   } catch (err) { res.status(500).json({ error: err.message }); }
   finally {
     if (tmpFilePath) fs.unlink(tmpFilePath, () => {});

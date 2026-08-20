@@ -187,6 +187,38 @@ async function autoLinkEmailToCase(sup, { communication_id, case_id } = {}, ctx)
   return { communication_id: commId, linked_case_id: caseId, case_title: caseRow.title };
 }
 
+// ---- navigate_to_page ----
+// Deliberately a single tool with a `page` enum rather than one tool per
+// destination -- keeps the ai_capabilities/permission surface from growing
+// per page while still validating filters per-destination (the switch
+// below) instead of accepting an arbitrary bag of keys the model could
+// hallucinate. Runs its OWN small, scoped count query rather than reusing
+// or refactoring cases.js's much larger filter-resolution logic (agency/
+// employee/classification intersection) -- that stays untouched. Uses the
+// exact same query param names GET /cases and Cases.jsx already use, so the
+// frontend needs zero param-name translation when it navigates to the URL
+// this returns.
+async function navigateToPage(sup, { page, filters } = {}) {
+  if (page !== 'cases') throw new Error(`الصفحة "${page}" غير مدعومة للتنقل حاليًا`);
+  const f = filters || {};
+  const asList = (v) => Array.isArray(v) ? v : String(v).split(',').map(s => s.trim()).filter(Boolean);
+
+  let query = sup.from('cases').select('id', { count: 'exact', head: true }).not('in_intake_review', 'is', true);
+  const params = new URLSearchParams();
+  if (f.status) { const l = asList(f.status); if (l.length) { query = query.in('status', l); params.set('status', l.join(',')); } }
+  if (f.priority) { const l = asList(f.priority); if (l.length) { query = query.in('priority', l); params.set('priority', l.join(',')); } }
+  if (f.date_from) { query = query.gte('created_at', f.date_from); params.set('date_from', f.date_from); }
+  if (f.date_to) { query = query.lt('created_at', `${f.date_to}T23:59:59.999`); params.set('date_to', f.date_to); }
+  // Single-column ilike, no .or() -- same injection-safety reasoning as the
+  // main cases search fix earlier this session (a hand-rolled .or() string
+  // breaks on a search term containing its own comma/paren).
+  if (f.search) { query = query.ilike('title', `%${f.search}%`); params.set('search', f.search); }
+
+  const { count, error } = await query;
+  if (error) throw error;
+  return { count: count || 0, navigate: { type: 'navigate', url: `/cases?${params.toString()}` } };
+}
+
 // ---- assign_case_to_employee ----
 async function assignCaseToEmployee(sup, { case_id, user_id, name } = {}, ctx) {
   const caseId = parseInt(case_id);
@@ -322,6 +354,25 @@ const TOOL_DEFS = [
       required: ['case_id'],
     },
     run: (sup, input, ctx) => assignCaseToEmployee(sup, input, ctx),
+  },
+  {
+    name: 'navigate_to_page', permission: 'navigate_ui',
+    description: 'فتح صفحة حقيقية في واجهة النظام أمام المستخدم مباشرة، مفلترة حسب المطلوب -- وليس فقط وصف النتائج نصيًا. مدعوم حاليًا: page="cases" مع فلاتر status (comma-separated: open, in_progress, in_production, closed), priority (high, medium, low), date_from/date_to (YYYY-MM-DD), search (نص في العنوان). لاحظ: "حصلت على سجلات/ردود" هو مفهوم على مستوى الطلب الواحد (requests.status) وليس حالة القضية نفسها -- هذه الأداة لا تدعم فلترته حاليًا.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        page: { type: 'string', enum: ['cases'] },
+        filters: {
+          type: 'object',
+          properties: {
+            status: { type: 'string' }, priority: { type: 'string' },
+            date_from: { type: 'string' }, date_to: { type: 'string' }, search: { type: 'string' },
+          },
+        },
+      },
+      required: ['page'],
+    },
+    run: (sup, input) => navigateToPage(sup, input),
   },
 ];
 

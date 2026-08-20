@@ -12,6 +12,7 @@ import Topbar from './components/Topbar';
 import Dashboard from './pages/Dashboard';
 import AIIntake from './pages/AIIntake';
 import AIAssistantSettings from './pages/AIAssistantSettings';
+import AIAssistantWidget from './components/AIAssistantWidget';
 import Cases from './pages/Cases';
 import CaseDetail from './pages/CaseDetail';
 
@@ -171,6 +172,7 @@ function App() {
           </ErrorBoundary>
         </main>
       </div>
+      <AIAssistantWidget />
     </div>
   );
 }

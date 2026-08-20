@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
-import { Bot, Plus, Trash2, CheckCircle2, Power, GraduationCap, ChevronDown, ChevronUp, Save } from 'lucide-react';
+import { Bot, Plus, Trash2, CheckCircle2, Power, GraduationCap, ChevronDown, ChevronUp, Save, Eye, EyeOff } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Spinner from '../components/ui/Spinner';
 import { useToast } from '../components/ui/Toast';
+import { AI_WIDGET_VISIBILITY_EVENT } from '../components/AIAssistantWidget';
+
+const WIDGET_HIDDEN_KEY = 'ai_widget_hidden';
 
 const PROVIDER_LABEL = { anthropic: 'Claude (Anthropic)', openai: 'ChatGPT (OpenAI)', deepseek: 'DeepSeek', gemini: 'Gemini (Google)' };
 
@@ -225,11 +228,38 @@ function KnowledgeCenter({ toast }) {
   );
 }
 
+// The floating widget's own show/hide is a plain localStorage flag (see
+// AIAssistantWidget.jsx) -- this is the ONLY control surface to bring it
+// back once hidden, per the standing request. Dispatches a window event so
+// the already-mounted widget (which lives outside this page, in App.jsx's
+// shell) picks up the change live, no reload needed.
+function WidgetVisibilityToggle() {
+  const [hidden, setHidden] = useState(() => localStorage.getItem(WIDGET_HIDDEN_KEY) === '1');
+  const toggle = () => {
+    const next = !hidden;
+    localStorage.setItem(WIDGET_HIDDEN_KEY, next ? '1' : '0');
+    setHidden(next);
+    window.dispatchEvent(new Event(AI_WIDGET_VISIBILITY_EVENT));
+  };
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>الفقاعة العائمة للمساعد الذكي</p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>تظهر في كل الشاشات، وتقدر تسحبها لأي مكان. لو أخفيتها، هنا هو المكان الوحيد لإرجاعها.</p>
+        </div>
+        <Button variant="secondary" size="sm" icon={hidden ? Eye : EyeOff} onClick={toggle}>{hidden ? 'إظهار المساعد الذكي' : 'إخفاء المساعد الذكي'}</Button>
+      </div>
+    </Card>
+  );
+}
+
 export default function AIAssistantSettings() {
   const toast = useToast();
   return (
     <div className="space-y-4 animate-fadeIn">
       <PageHeader eyebrow="ذكاء اصطناعي" title="الربط الذكي" meta="ربط مزودي الذكاء الاصطناعي وضبط ما يُسمح للمساعد الذكي بفعله داخل النظام" />
+      <WidgetVisibilityToggle />
       <ProviderSettings toast={toast} />
       <CapabilityToggles toast={toast} />
       <KnowledgeCenter toast={toast} />

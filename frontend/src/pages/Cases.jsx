@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Plus, Search, Upload, Building2, Trash2, Filter, Users, ChevronLeft, ChevronRight, ChevronDown, Bell } from 'lucide-react';
 
@@ -196,6 +196,7 @@ export default function Cases() {
     selectedAgencies: []
   });
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   // Advanced filter panel: status/priority/agencies/employees/date range.
   // Staged in `pendingFilters` and only take effect once "تطبيق الفلترة" is
@@ -207,6 +208,32 @@ export default function Cases() {
   const blankCaseFilters = { status: [], priority: [], agencyIds: [], employeeIds: [], classificationIds: [], dateFrom: '', dateTo: '' };
   const [pendingFilters, setPendingFilters] = useState(blankCaseFilters);
   const [appliedFilters, setAppliedFilters] = useState(blankCaseFilters);
+
+  // Seeds filters straight from the URL's query string -- the entry point
+  // for the AI assistant's navigate_to_page tool, which sends the browser
+  // here with e.g. /cases?status=open,in_progress. Guarded by a ref (not
+  // `[]`) so navigating /cases?a -> /cases?b while already on this route
+  // (no remount) still re-applies, but the in-page "تطبيق الفلترة" button
+  // (which never touches the URL) never re-triggers this.
+  const seededSearchRef = useRef(null);
+  useEffect(() => {
+    const qs = searchParams.toString();
+    if (!qs || qs === seededSearchRef.current) return;
+    seededSearchRef.current = qs;
+    const seeded = {
+      status: (searchParams.get('status') || '').split(',').filter(Boolean),
+      priority: (searchParams.get('priority') || '').split(',').filter(Boolean),
+      agencyIds: (searchParams.get('agency_ids') || '').split(',').filter(Boolean).map(Number),
+      employeeIds: (searchParams.get('employee_ids') || '').split(',').filter(Boolean).map(Number),
+      classificationIds: (searchParams.get('classification_ids') || '').split(',').filter(Boolean),
+      dateFrom: searchParams.get('date_from') || '',
+      dateTo: searchParams.get('date_to') || '',
+    };
+    setPendingFilters(seeded);
+    setAppliedFilters(seeded);
+    setSearchTerm(searchParams.get('search') || '');
+    setPage(0);
+  }, [searchParams]);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [employees, setEmployees] = useState([]);
   const [classifications, setClassifications] = useState([]);

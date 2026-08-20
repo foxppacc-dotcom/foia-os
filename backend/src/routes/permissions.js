@@ -49,6 +49,7 @@ const AI_CAPABILITY_ACTIONS = [
   { key: 'suggest_email_link', label: 'اقتراح ربط إيميل بقضية (يتطلب تأكيد الموظف)' },
   { key: 'auto_link_email', label: 'ربط إيميل بقضية مباشرة بدون تأكيد' },
   { key: 'assign_case_to_employee', label: 'توزيع العمل (تعيين قضية لموظف)' },
+  { key: 'navigate_ui', label: 'التنقل وفتح الصفحات بفلاتر (يغيّر الشاشة أمامك مباشرة)' },
 ];
 
 // Navigation visibility catalog — mirrors the Sidebar items exactly.
