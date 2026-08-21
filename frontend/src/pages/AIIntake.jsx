@@ -382,7 +382,7 @@ function CriteriaAdminPanel({ onChanged, toast }) {
 
   const fetchItems = () => {
     setLoading(true);
-    api.get('/intake/criteria-definitions').then(d => setItems(d.data || [])).catch(() => {}).finally(() => setLoading(false));
+    api.get('/intake/criteria-definitions').then(d => setItems(d.data || [])).catch(e => toast.error(e.message)).finally(() => setLoading(false));
   };
   useEffect(() => { fetchItems(); }, []);
 

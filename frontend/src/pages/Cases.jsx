@@ -419,13 +419,15 @@ export default function Cases() {
         headers: { 'Authorization': 'Bearer ' + localStorage.getItem('foia_token') },
         body: formData
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert('❌ ' + (data.error || 'فشل رفع الملف')); return; }
       alert(data.message || `✅ تم استيراد ${data.imported} قضية`);
       fetchCases();
     } catch (err) {
       alert('❌ فشل الرفع: ' + err.message);
+    } finally {
+      e.target.value = '';
     }
-    e.target.value = '';
   };
 
   // Search now runs server-side (see fetchCases's `search` param) since

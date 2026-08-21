@@ -6,9 +6,7 @@ import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Spinner from '../components/ui/Spinner';
 import { useToast } from '../components/ui/Toast';
-import { AI_WIDGET_VISIBILITY_EVENT } from '../components/AIAssistantWidget';
-
-const WIDGET_HIDDEN_KEY = 'ai_widget_hidden';
+import { DASHBOARD_BUTTON_HIDDEN_KEY, DASHBOARD_BUTTON_VISIBILITY_EVENT } from '../aiWidgetVisibility';
 
 const PROVIDER_LABEL = { anthropic: 'Claude (Anthropic)', openai: 'ChatGPT (OpenAI)', deepseek: 'DeepSeek', gemini: 'Gemini (Google)' };
 
@@ -228,27 +226,30 @@ function KnowledgeCenter({ toast }) {
   );
 }
 
-// The floating widget's own show/hide is a plain localStorage flag (see
-// AIAssistantWidget.jsx) -- this is the ONLY control surface to bring it
-// back once hidden, per the standing request. Dispatches a window event so
-// the already-mounted widget (which lives outside this page, in App.jsx's
-// shell) picks up the change live, no reload needed.
-function WidgetVisibilityToggle() {
-  const [hidden, setHidden] = useState(() => localStorage.getItem(WIDGET_HIDDEN_KEY) === '1');
+// Two independent layers of control, deliberately not the same switch:
+// this one controls whether the Dashboard's own "المساعد الذكي" button is
+// shown at all (a plain localStorage flag + window event -- Dashboard.jsx
+// lives on a completely different route, so it can't be reached directly
+// from here; it just listens for the same event live, no reload needed).
+// The Dashboard button itself, when shown, is the thing that shows/hides
+// the floating bubble -- see Dashboard.jsx. This page is the only recovery
+// path if the Dashboard button itself gets hidden.
+function DashboardButtonVisibilityToggle() {
+  const [hidden, setHidden] = useState(() => localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1');
   const toggle = () => {
     const next = !hidden;
-    localStorage.setItem(WIDGET_HIDDEN_KEY, next ? '1' : '0');
+    localStorage.setItem(DASHBOARD_BUTTON_HIDDEN_KEY, next ? '1' : '0');
     setHidden(next);
-    window.dispatchEvent(new Event(AI_WIDGET_VISIBILITY_EVENT));
+    window.dispatchEvent(new Event(DASHBOARD_BUTTON_VISIBILITY_EVENT));
   };
   return (
     <Card>
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>الفقاعة العائمة للمساعد الذكي</p>
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>تظهر في كل الشاشات، وتقدر تسحبها لأي مكان. لو أخفيتها، هنا هو المكان الوحيد لإرجاعها.</p>
+          <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>زر المساعد الذكي في لوحة التحكم</p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>هذا الزر هو اللي بيظهر/يخفي الفقاعة العائمة. لو أخفيته من هنا، هنا هو المكان الوحيد لإرجاعه.</p>
         </div>
-        <Button variant="secondary" size="sm" icon={hidden ? Eye : EyeOff} onClick={toggle}>{hidden ? 'إظهار المساعد الذكي' : 'إخفاء المساعد الذكي'}</Button>
+        <Button variant="secondary" size="sm" icon={hidden ? Eye : EyeOff} onClick={toggle}>{hidden ? 'إظهار الزر' : 'إخفاء الزر'}</Button>
       </div>
     </Card>
   );
@@ -259,7 +260,7 @@ export default function AIAssistantSettings() {
   return (
     <div className="space-y-4 animate-fadeIn">
       <PageHeader eyebrow="ذكاء اصطناعي" title="الربط الذكي" meta="ربط مزودي الذكاء الاصطناعي وضبط ما يُسمح للمساعد الذكي بفعله داخل النظام" />
-      <WidgetVisibilityToggle />
+      <DashboardButtonVisibilityToggle />
       <ProviderSettings toast={toast} />
       <CapabilityToggles toast={toast} />
       <KnowledgeCenter toast={toast} />

@@ -3,10 +3,9 @@ import { api } from '../api';
 import { Send, Paperclip, X, Mic, Minus, GripHorizontal } from 'lucide-react';
 import FoxBotIcon from './icons/FoxBotIcon';
 import { useAIChat } from '../hooks/useAIChat';
+import { WIDGET_HIDDEN_KEY as HIDDEN_KEY, WIDGET_VISIBILITY_EVENT as AI_WIDGET_VISIBILITY_EVENT } from '../aiWidgetVisibility';
 
 const POS_KEY = 'ai_widget_position';
-const HIDDEN_KEY = 'ai_widget_hidden';
-export const AI_WIDGET_VISIBILITY_EVENT = 'ai-widget-visibility-changed';
 
 const defaultPosition = () => ({ x: Math.max(16, window.innerWidth - 90), y: Math.max(16, window.innerHeight - 100) });
 
@@ -30,6 +29,7 @@ export default function AIAssistantWidget() {
   const [collapsed, setCollapsed] = useState(true);
   const [position, setPosition] = useState(loadPosition);
   const [hasActiveProvider, setHasActiveProvider] = useState(null);
+  const [providerCheckFailed, setProviderCheckFailed] = useState(false);
   const [hasUnread, setHasUnread] = useState(false);
   const [listening, setListening] = useState(false);
   const listRef = useRef(null);
@@ -53,9 +53,15 @@ export default function AIAssistantWidget() {
     return () => window.removeEventListener(AI_WIDGET_VISIBILITY_EVENT, onVisibility);
   }, []);
 
-  useEffect(() => {
-    api.get('/ai/providers').then(d => setHasActiveProvider((d.data || []).some(p => p.is_active))).catch(() => setHasActiveProvider(true));
-  }, []);
+  const checkActiveProvider = () => {
+    // A failed check previously assumed `true` (provider configured) so the
+    // chat UI rendered anyway -- indistinguishable from a genuinely healthy
+    // state, and the first real symptom would be every message failing with
+    // a confusing error instead of the clear "لا يوجد مزود مفعّل" notice.
+    api.get('/ai/providers').then(d => { setHasActiveProvider((d.data || []).some(p => p.is_active)); setProviderCheckFailed(false); })
+      .catch(() => setProviderCheckFailed(true));
+  };
+  useEffect(() => { checkActiveProvider(); }, []);
 
   useEffect(() => { if (!collapsed) listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, [messages, collapsed]);
 
@@ -66,10 +72,21 @@ export default function AIAssistantWidget() {
   useEffect(() => { if (!file && fileInputRef.current) fileInputRef.current.value = ''; }, [file]);
 
   // ---- Drag handling (bubble when collapsed, header when expanded) ----
+  // pointercancel matters as much as pointerup: a touch-scroll takeover, an
+  // alt-tab, or the pointer leaving the viewport mid-drag in some browsers
+  // fires cancel instead of up -- without listening for it too, these two
+  // window listeners never got removed and unrelated pointer movement
+  // anywhere on the page kept silently repositioning the widget forever.
+  const cleanupDragListeners = () => {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerCancel);
+  };
   const onPointerDown = (e) => {
     dragState.current = { startX: e.clientX, startY: e.clientY, origX: position.x, origY: position.y, moved: false };
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
   };
   const onPointerMove = (e) => {
     const d = dragState.current;
@@ -78,9 +95,12 @@ export default function AIAssistantWidget() {
     if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
     if (d.moved) setPosition({ x: Math.max(4, d.origX + dx), y: Math.max(4, d.origY + dy) });
   };
+  const onPointerCancel = () => {
+    cleanupDragListeners();
+    dragState.current = null;
+  };
   const onPointerUp = () => {
-    window.removeEventListener('pointermove', onPointerMove);
-    window.removeEventListener('pointerup', onPointerUp);
+    cleanupDragListeners();
     const wasMoved = dragState.current?.moved;
     dragState.current = null;
     if (wasMoved) { localStorage.setItem(POS_KEY, JSON.stringify(position)); return; }
@@ -88,6 +108,9 @@ export default function AIAssistantWidget() {
     if (collapsed) { setCollapsed(false); setHasUnread(false); }
   };
   useEffect(() => { localStorage.setItem(POS_KEY, JSON.stringify(position)); }, [position]);
+  // Also clean up if the component itself unmounts mid-drag (route swap
+  // wouldn't do this since the widget is global, but defensive regardless).
+  useEffect(() => () => cleanupDragListeners(), []);
 
   // ---- Voice input (Chrome/Edge only -- Web Speech API has no Firefox/Safari equivalent) ----
   const SpeechRecognitionCtor = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
@@ -137,7 +160,12 @@ export default function AIAssistantWidget() {
             </div>
           </div>
 
-          {hasActiveProvider === false ? (
+          {providerCheckFailed ? (
+            <div className="p-4 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <p className="mb-2">⚠️ تعذر التحقق من حالة المساعد الذكي.</p>
+              <button onClick={checkActiveProvider} className="underline" style={{ color: 'var(--accent)' }}>إعادة المحاولة</button>
+            </div>
+          ) : hasActiveProvider === false ? (
             <p className="text-xs p-4" style={{ color: 'var(--text-muted)' }}>
               لا يوجد مزود ذكاء اصطناعي مفعّل حاليًا. اطلب من المسؤول تفعيل واحد من صفحة "الربط الذكي".
             </p>

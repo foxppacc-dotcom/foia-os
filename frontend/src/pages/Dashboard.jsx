@@ -7,9 +7,10 @@ import {
   Calendar, ArrowRight, FileText, History
 } from 'lucide-react';
 import FoxBotIcon from '../components/icons/FoxBotIcon';
-import { AI_WIDGET_VISIBILITY_EVENT } from '../components/AIAssistantWidget';
-
-const WIDGET_HIDDEN_KEY = 'ai_widget_hidden';
+import {
+  WIDGET_HIDDEN_KEY, WIDGET_VISIBILITY_EVENT,
+  DASHBOARD_BUTTON_HIDDEN_KEY, DASHBOARD_BUTTON_VISIBILITY_EVENT,
+} from '../aiWidgetVisibility';
 
 function timeAgo(dateStr) {
   const diffMs = Date.now() - new Date(dateStr).getTime();
@@ -36,17 +37,27 @@ export default function Dashboard() {
   const [error, setError] = useState('');
   const navigate = useNavigate();
   // Doesn't navigate anywhere -- this button only toggles the floating
-  // widget's own visibility (same localStorage flag + event AIAssistantWidget.jsx
-  // and its settings-page toggle already use), so the state stays in sync
-  // regardless of which of the three controls last changed it. Color-only
-  // feedback (filled = shown, outline = hidden) -- the label never changes.
+  // widget's own visibility (same localStorage flag + event
+  // AIAssistantWidget.jsx also reads), so the state stays in sync regardless
+  // of which control last changed it. Color-only feedback (filled = shown,
+  // outline = hidden) -- the label never changes.
   const [widgetHidden, setWidgetHidden] = useState(() => localStorage.getItem(WIDGET_HIDDEN_KEY) === '1');
   const toggleWidget = () => {
     const next = !widgetHidden;
     localStorage.setItem(WIDGET_HIDDEN_KEY, next ? '1' : '0');
     setWidgetHidden(next);
-    window.dispatchEvent(new Event(AI_WIDGET_VISIBILITY_EVENT));
+    window.dispatchEvent(new Event(WIDGET_VISIBILITY_EVENT));
   };
+  // Whether THIS button itself even renders -- a separate, independent
+  // toggle living on "الربط الذكي" (DashboardButtonVisibilityToggle), since
+  // once this button is hidden there'd be no other way to reach the bubble
+  // toggle at all otherwise.
+  const [buttonHidden, setButtonHidden] = useState(() => localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1');
+  useEffect(() => {
+    const onVisibility = () => setButtonHidden(localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1');
+    window.addEventListener(DASHBOARD_BUTTON_VISIBILITY_EVENT, onVisibility);
+    return () => window.removeEventListener(DASHBOARD_BUTTON_VISIBILITY_EVENT, onVisibility);
+  }, []);
 
   const fetchDashboard = () => {
     setError('');
@@ -106,12 +117,14 @@ export default function Dashboard() {
           <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>FOIA OS — نظام إدارة طلبات السجلات</p>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={toggleWidget} title={widgetHidden ? 'إظهار المساعد الذكي' : 'إخفاء المساعد الذكي'}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all active:scale-[0.97] ${widgetHidden ? '' : 'btn-accent'}`}
-            style={widgetHidden ? { background: 'var(--bg-tertiary)', color: 'var(--text-muted)', border: '1px solid var(--border)' } : undefined}>
-            <FoxBotIcon className="w-4 h-4" />
-            المساعد الذكي
-          </button>
+          {!buttonHidden && (
+            <button onClick={toggleWidget} title={widgetHidden ? 'إظهار المساعد الذكي' : 'إخفاء المساعد الذكي'}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all active:scale-[0.97] ${widgetHidden ? '' : 'btn-accent'}`}
+              style={widgetHidden ? { background: 'var(--bg-tertiary)', color: 'var(--text-muted)', border: '1px solid var(--border)' } : undefined}>
+              <FoxBotIcon className="w-4 h-4" />
+              المساعد الذكي
+            </button>
+          )}
         </div>
       </div>
 
