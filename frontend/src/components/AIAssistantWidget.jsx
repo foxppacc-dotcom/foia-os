@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { api, getApiBase } from '../api';
+import { api } from '../api';
 import { Send, Paperclip, X, Mic, Minus, GripHorizontal } from 'lucide-react';
 import FoxBotIcon from './icons/FoxBotIcon';
+import { useAIChat } from '../hooks/useAIChat';
 
-const tok = () => localStorage.getItem('foia_token');
 const POS_KEY = 'ai_widget_position';
 const HIDDEN_KEY = 'ai_widget_hidden';
 export const AI_WIDGET_VISIBILITY_EVENT = 'ai-widget-visibility-changed';
@@ -27,22 +26,26 @@ function loadPosition() {
 // the same component instance, so the reply always lands regardless of
 // which page they're on by the time it arrives.
 export default function AIAssistantWidget() {
-  const navigate = useNavigate();
   const [hidden, setHidden] = useState(() => localStorage.getItem(HIDDEN_KEY) === '1');
   const [collapsed, setCollapsed] = useState(true);
   const [position, setPosition] = useState(loadPosition);
   const [hasActiveProvider, setHasActiveProvider] = useState(null);
-  const [conversationId, setConversationId] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [file, setFile] = useState(null);
-  const [sending, setSending] = useState(false);
   const [hasUnread, setHasUnread] = useState(false);
   const [listening, setListening] = useState(false);
   const listRef = useRef(null);
   const fileInputRef = useRef(null);
   const recognitionRef = useRef(null);
   const dragState = useRef(null); // { startX, startY, origX, origY, moved }
+  const collapsedRef = useRef(collapsed);
+  useEffect(() => { collapsedRef.current = collapsed; }, [collapsed]);
+
+  const { messages, input, setInput, file, setFile, sending, send } = useAIChat({
+    // Reads a ref, not the `collapsed` state directly -- this callback is
+    // captured once inside the hook's closure at whatever render created it,
+    // a stale `collapsed` would wrongly skip the unread badge if the user
+    // expanded the panel between sending and the reply landing.
+    onReply: () => { if (collapsedRef.current) setHasUnread(true); },
+  });
 
   useEffect(() => {
     const onVisibility = () => setHidden(localStorage.getItem(HIDDEN_KEY) === '1');
@@ -55,6 +58,12 @@ export default function AIAssistantWidget() {
   }, []);
 
   useEffect(() => { if (!collapsed) listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, [messages, collapsed]);
+
+  // The hook clears `file` state after sending, but the native <input
+  // type="file"> element keeps its own .value -- without resetting it too,
+  // re-picking the exact same file afterward fires no change event at all
+  // (the browser considers the value unchanged), silently failing to attach it.
+  useEffect(() => { if (!file && fileInputRef.current) fileInputRef.current.value = ''; }, [file]);
 
   // ---- Drag handling (bubble when collapsed, header when expanded) ----
   const onPointerDown = (e) => {
@@ -95,30 +104,10 @@ export default function AIAssistantWidget() {
     setListening(true);
     rec.start();
   };
-
-  const send = async () => {
-    if ((!input.trim() && !file) || sending) return;
-    const userMsg = input.trim() || `📎 ${file?.name}`;
-    setMessages(m => [...m, { role: 'user', content: userMsg }]);
-    const fd = new FormData();
-    fd.append('message', input.trim() || 'حلّل هذا الملف المرفق.');
-    if (conversationId) fd.append('conversation_id', conversationId);
-    if (file) fd.append('file', file);
-    setInput(''); setFile(null); setSending(true);
-    try {
-      const res = await fetch(`${getApiBase()}/ai/chat`, { method: 'POST', headers: { Authorization: 'Bearer ' + tok() }, body: fd });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.error || 'فشل الطلب');
-      setConversationId(d.conversation_id);
-      setMessages(m => [...m, { role: 'assistant', content: d.answer }]);
-      if (collapsed) setHasUnread(true);
-      if (d.ui_action?.type === 'navigate' && d.ui_action.url) navigate(d.ui_action.url);
-    } catch (e) {
-      setMessages(m => [...m, { role: 'assistant', content: `⚠️ ${e.message}` }]);
-      if (collapsed) setHasUnread(true);
-    }
-    setSending(false);
-  };
+  // Stop any in-progress recognition if the widget unmounts mid-listen --
+  // otherwise the mic session (and its onresult callback, which closes over
+  // this unmounted instance's setInput) keeps running invisibly.
+  useEffect(() => () => recognitionRef.current?.stop(), []);
 
   if (hidden) return null;
 

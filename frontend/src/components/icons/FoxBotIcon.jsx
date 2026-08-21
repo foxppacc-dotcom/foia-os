@@ -1,8 +1,12 @@
 // Small custom mascot icon for the AI assistant widget -- a modern
-// robot-fox face (no stock lucide icon fits). Two-tone: `currentColor` for
-// the body/ears (inherits whatever color the parent button sets, same as
-// any lucide icon), a fixed light visor plate for the robot face so the
-// eyes/muzzle read clearly at small sizes.
+// robot-fox face (no stock lucide icon fits). The ears/head/antenna use
+// `currentColor` (inherits whatever color the parent button sets, same as
+// any lucide icon) -- but the visor and eyes are FIXED colors (not
+// currentColor), always a light plate with dark eye-dots, regardless of
+// context. That's deliberate: when currentColor is itself white (e.g. the
+// floating bubble's white-on-accent icon), eyes drawn in currentColor would
+// vanish against the light visor -- fixed colors guarantee the "face" always
+// reads clearly no matter what color surrounds the icon.
 export default function FoxBotIcon({ className = 'w-5 h-5', style }) {
   return (
     <svg viewBox="0 0 32 32" fill="none" className={className} style={style} xmlns="http://www.w3.org/2000/svg">
@@ -15,16 +19,16 @@ export default function FoxBotIcon({ className = 'w-5 h-5', style }) {
       {/* Head -- rounded-square robot plate */}
       <rect x="4" y="10" width="24" height="18" rx="7" fill="currentColor" />
 
-      {/* Visor / face plate */}
-      <rect x="7.5" y="15" width="17" height="10" rx="4.5" fill="var(--visor-bg, white)" fillOpacity="0.94" />
+      {/* Visor / face plate -- fixed light tone, never currentColor */}
+      <rect x="7.5" y="14.5" width="17" height="11.5" rx="4.5" fill="#F4F4F5" />
 
-      {/* Robot eyes on the visor */}
-      <rect x="10.5" y="18.3" width="3.4" height="3.4" rx="1" fill="currentColor" />
-      <rect x="18.1" y="18.3" width="3.4" height="3.4" rx="1" fill="currentColor" />
+      {/* Robot eyes -- fixed dark tone, always contrasts with the visor above */}
+      <rect x="10.4" y="18" width="3.6" height="3.6" rx="1" fill="#27272A" />
+      <rect x="18" y="18" width="3.6" height="3.6" rx="1" fill="#27272A" />
 
-      {/* Fox muzzle -- small tapered snout below the visor */}
-      <path d="M14 24.5C14 24.5 14.7 26 16 26C17.3 26 18 24.5 18 24.5"
-        stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      {/* Fox muzzle -- small tapered mark inside the visor, same fixed dark tone */}
+      <path d="M14 22.8C14 22.8 14.7 24.2 16 24.2C17.3 24.2 18 22.8 18 22.8"
+        stroke="#27272A" strokeWidth="1.3" strokeLinecap="round" />
 
       {/* Small antenna -- reads as robot */}
       <line x1="16" y1="10" x2="16" y2="6.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />

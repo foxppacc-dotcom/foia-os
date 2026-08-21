@@ -8,10 +8,12 @@ import {
   FolderOpen, LayoutDashboard, GitBranch, Building2, Sparkles, Users, Mail,
   Timer, Key, Cloud, UserCog, Phone, MailPlus, AtSign, ListChecks, Palette, Megaphone, Bot,
 } from 'lucide-react';
+import FoxBotIcon from './components/icons/FoxBotIcon';
 
 export const NAV_CATALOG = [
   { key: 'dashboard', path: '/', label: 'لوحة التحكم', icon: LayoutDashboard, roles: ['admin', 'manager', 'member', 'viewer'], end: true },
   { key: 'intake', path: '/intake', label: 'استقبال ذكي', icon: Sparkles, roles: ['admin', 'manager', 'member'] },
+  { key: 'ai_assistant_chat', path: '/ai-assistant/chat', label: 'المساعد الذكي', icon: FoxBotIcon, roles: ['admin', 'manager', 'member'] },
   { key: 'ai_assistant', path: '/ai-assistant', label: 'الربط الذكي', icon: Bot, roles: ['admin'] },
   { key: 'cases', path: '/cases', label: 'القضايا', icon: FolderOpen, roles: ['admin', 'manager', 'member'] },
   { key: 'pipeline', path: '/pipeline', label: 'خط الإنتاج', icon: GitBranch, roles: ['admin', 'manager', 'member'] },

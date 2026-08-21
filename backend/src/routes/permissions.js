@@ -60,6 +60,7 @@ const NAV_ITEMS = [
   { key: 'settings', label: 'الإعدادات (زر أسفل القائمة الجانبية)' },
   { key: 'intake', label: 'استقبال ذكي' },
   { key: 'ai_assistant', label: 'الربط الذكي' },
+  { key: 'ai_assistant_chat', label: 'المساعد الذكي (محادثة)' },
   { key: 'cases', label: 'القضايا' },
   { key: 'pipeline', label: 'خط الإنتاج' },
   { key: 'production', label: 'مونتاج' },
@@ -97,13 +98,18 @@ const PRODUCTION_LISTS = [
 // is derived straight from the resource's view permission instead of its
 // own row. Every other nav item (no matching resource, or no 'view' action)
 // keeps its own independently-configured visibility below.
-const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production', 'settings', 'forum', 'intake', 'ai_assistant'];
+const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production', 'settings', 'forum', 'intake', 'ai_assistant', 'ai_assistant_chat'];
 
-// Which action actually gates each RESOURCE_VIEW_NAV_KEYS item's sidebar
-// visibility -- defaults to 'view' for every key except where a resource's
-// gating action is named differently (ai_assistant's is 'use_chat', since
-// that resource has no 'view' action at all -- see RESOURCES above).
-const NAV_GATE_ACTION = { ai_assistant: 'use_chat' };
+// Which {resource, action} actually gates each RESOURCE_VIEW_NAV_KEYS item's
+// sidebar visibility -- defaults to {resource: item.key, action: 'view'} for
+// every key except where that's wrong. ai_assistant has no 'view' action at
+// all (see RESOURCES above), so both it AND the separate full-page chat nav
+// item (ai_assistant_chat -- a different sidebar entry, same underlying
+// capability) are gated by the one real permission, ai_assistant:use_chat.
+const NAV_GATE = {
+  ai_assistant: { resource: 'ai_assistant', action: 'use_chat' },
+  ai_assistant_chat: { resource: 'ai_assistant', action: 'use_chat' },
+};
 
 // Fallback only for the rare case the roles table is empty/unreachable --
 // the real, editable role list lives in the `roles` table (teamManagement.js
@@ -170,8 +176,8 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
       continue;
     }
     if (RESOURCE_VIEW_NAV_KEYS.includes(item.key)) {
-      const gateAction = NAV_GATE_ACTION[item.key] || 'view';
-      const viewRow = (data || []).find(p => p.resource === item.key && p.action === gateAction);
+      const gate = NAV_GATE[item.key] || { resource: item.key, action: 'view' };
+      const viewRow = (data || []).find(p => p.resource === gate.resource && p.action === gate.action);
       navVisibility[item.key] = viewRow ? viewRow.allowed !== false : false;
       continue;
     }
