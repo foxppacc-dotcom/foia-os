@@ -130,7 +130,7 @@ class GoogleDriveService {
     if (!drive) return { configured: false, files: [] };
 
     const res = await drive.files.list({
-      q: `'${folderId}' in parents and trashed=false`,
+      q: `'${String(folderId).replace(/'/g, "\\'")}' in parents and trashed=false`,
       fields: 'files(id, name, mimeType, size, webViewLink, iconLink, modifiedTime)',
       pageSize: 100,
     });
@@ -293,7 +293,7 @@ class GoogleDriveService {
     const drive = await this.initRealDrive();
     if (!drive) return null;
     try {
-      const q = `'${folderId}' in parents and name='${String(fileName).replace(/'/g, "\\'")}' and trashed=false`;
+      const q = `'${String(folderId).replace(/'/g, "\\'")}' in parents and name='${String(fileName).replace(/'/g, "\\'")}' and trashed=false`;
       const res = await drive.files.list({ q, fields: 'files(id, name, size)', pageSize: 10 });
       const files = res.data.files || [];
       if (fileSize != null) {

@@ -401,7 +401,15 @@ export default function InboxPage() {
               <div className="flex items-center justify-between">
                 <label className="flex items-center gap-1 text-[11px] cursor-pointer" style={{ color: 'var(--ds-accent)' }}>
                   <Paperclip className="w-3.5 h-3.5" />مرفقات
-                  <input type="file" multiple hidden onChange={e => setComposeFiles([...composeFiles, ...Array.from(e.target.files || [])])} />
+                  <input type="file" multiple hidden onChange={e => {
+                    setComposeFiles([...composeFiles, ...Array.from(e.target.files || [])]);
+                    // Reset immediately (append pattern, never fully empties
+                    // on its own) -- otherwise re-picking the same file(s)
+                    // after removing them from the list fires no change
+                    // event, since the browser sees the input's value as
+                    // unchanged.
+                    e.target.value = '';
+                  }} />
                 </label>
               </div>
 

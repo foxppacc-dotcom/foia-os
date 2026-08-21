@@ -57,7 +57,13 @@ async function imageProxyHandler(req, res) {
   try {
     const { fileId } = req.params;
     const meta = await gdrive.getFileMetadata(fileId);
-    if (!meta.mimeType || !meta.mimeType.startsWith('image/')) {
+    // SVG excluded even though it's technically 'image/*' -- it can embed
+    // <script>, and serving it same-origin with its own content-type lets
+    // that script run if the URL is ever opened directly (not just used as
+    // an <img src>, which wouldn't execute it). Checked here regardless of
+    // whatever mimetype was recorded at upload time, so this is the one
+    // place that actually decides what's safe to serve inline.
+    if (!meta.mimeType || !meta.mimeType.startsWith('image/') || meta.mimeType === 'image/svg+xml') {
       return res.status(400).json({ error: 'This endpoint only serves image files' });
     }
     res.setHeader('Content-Type', meta.mimeType);
@@ -455,7 +461,27 @@ router.post('/gdrive/case/:caseId/create-folder', requireAuth, async (req, res) 
 // GET /api/gdrive/list/:folderId — list files in a Drive folder
 router.get('/gdrive/list/:folderId', requireAuth, async (req, res) => {
   try {
-    const result = await gdrive.listFolder(req.params.folderId);
+    const folderId = req.params.folderId;
+    const sup = getSupabase();
+    // This folderId isn't a case_id -- it's a raw Drive folder id, so
+    // resolve it back to the case that owns it (its own root folder or one
+    // of its cached subfolders) before deciding access, same as every other
+    // route in this file already does via assertCaseAccess.
+    const { data: caseRow } = await sup.from('cases').select('id').eq('drive_folder_id', folderId).maybeSingle();
+    let caseId = caseRow?.id || null;
+    if (!caseId) {
+      const { data: cacheRow } = await sup.from('folder_cache').select('case_id').eq('drive_folder_id', folderId).maybeSingle();
+      caseId = cacheRow?.case_id || null;
+    }
+    if (caseId) {
+      if (!(await assertCaseAccess(req, res, caseId))) return;
+    } else if (req.user.role !== 'admin') {
+      // Unrecognized folder (e.g. a system folder, not tied to any case) --
+      // no case-level check applies, so fail closed to admin-only rather
+      // than letting any authenticated user list an arbitrary Drive folder.
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const result = await gdrive.listFolder(folderId);
     res.json({ success: true, configured: result.configured, data: result.files });
   } catch (err) {
     res.status(500).json({ error: err.message });

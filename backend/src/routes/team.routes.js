@@ -161,6 +161,7 @@ router.get('/attendance', async (req, res) => {
   try {
     const sup = getSupabase();
     const userId = parseInt(req.query.user_id) || req.user.id;
+    if (!(await canViewOtherProfile(req, res, userId))) return;
     let query = sup.from('attendance_logs').select('*').eq('user_id', userId).order('date', { ascending: false });
     if (req.query.month && req.query.year) {
       const start = `${req.query.year}-${String(req.query.month).padStart(2, '0')}-01`;
@@ -211,10 +212,16 @@ router.get('/tasks/mine', async (req, res) => {
 router.put('/tasks/:id/status', async (req, res) => {
   try {
     const sup = getSupabase();
+    const taskId = parseInt(req.params.id);
+    const { data: task } = await sup.from('case_tasks').select('assigned_to').eq('id', taskId).maybeSingle();
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (task.assigned_to !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden — لا يمكنك تعديل مهمة موظف آخر' });
+    }
     const { status } = req.body;
     const updates = { status };
     if (status === 'completed') updates.completed_at = new Date().toISOString();
-    const { error } = await sup.from('case_tasks').update(updates).eq('id', parseInt(req.params.id));
+    const { error } = await sup.from('case_tasks').update(updates).eq('id', taskId);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }

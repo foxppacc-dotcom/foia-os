@@ -46,8 +46,17 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
   const notifRef = useRef(null);
   const meta = getPageMeta(pathname);
 
+  // Guards against a slow poll's response landing AFTER a later, faster
+  // poll's response -- without this, the stale one would silently overwrite
+  // the fresher notification list/unread count (e.g. right after markAllRead
+  // reset it locally to 0).
+  const notifRequestRef = useRef(0);
   const loadNotifications = () => {
-    api.get('/notifications').then(d => { setNotifications(d.data || []); setUnreadCount(d.unreadCount || 0); }).catch(() => {});
+    const requestId = ++notifRequestRef.current;
+    api.get('/notifications').then(d => {
+      if (requestId !== notifRequestRef.current) return;
+      setNotifications(d.data || []); setUnreadCount(d.unreadCount || 0);
+    }).catch(() => {});
   };
 
   useEffect(() => {

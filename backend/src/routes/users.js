@@ -90,6 +90,13 @@ router.put('/users/:id', requirePermission('users', 'edit'), async (req, res) =>
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   if (role) {
+    // `users:edit` is grantable to any custom role for ordinary
+    // team-management (name/email/team/active-status) -- role assignment
+    // itself is a separate, higher-privilege action (it's how you'd become
+    // admin), so require actual admin regardless of what users:edit allows.
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden — تغيير الدور متاح فقط للمسؤول (admin)' });
+    }
     const validRoles = await getValidRoleNames(sup);
     if (!validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
   }

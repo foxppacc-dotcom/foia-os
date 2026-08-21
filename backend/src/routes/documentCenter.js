@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const multer = require('multer');
 const storage = require('../services/storage');
@@ -98,7 +98,7 @@ router.get('/cases/:caseId/documents', requireAuth, caseGate, async (req, res) =
 router.post('/cases/:caseId/upload', requireAuth, caseGate, async (req, res) => {
   const sup = getSupabase();
   const { file_name, file_type, file_url, file_size, category_id, notes } = req.body;
-  const user = res.locals.user;
+  const user = req.user;
   const { data, error } = await sup.from('case_documents').insert({
     case_id: parseInt(req.params.caseId), file_name, file_type, file_url, file_size, category_id,
     notes, uploaded_by: user.id, version: 1,
@@ -113,7 +113,7 @@ router.post('/cases/:caseId/upload', requireAuth, caseGate, async (req, res) => 
 // POST /api/documents/:id/verify — mark document as verified
 router.post('/documents/:id/verify', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const user = res.locals.user;
+  const user = req.user;
   const { data: docRow } = await sup.from('case_documents').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
   if (docRow && !(await canAccessCase(sup, req.user, docRow.case_id))) {
     return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
@@ -255,7 +255,7 @@ router.get('/imap/folders/:accountId', requireAuth, async (req, res) => {
 });
 
 // GET /api/imap/compare/:accountId — compare SMTP vs IMAP credentials securely
-router.get('/imap/compare/:accountId', requireAuth, async (req, res) => {
+router.get('/imap/compare/:accountId', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
@@ -267,7 +267,7 @@ router.get('/imap/compare/:accountId', requireAuth, async (req, res) => {
 });
 
 // POST /api/imap/fix-credentials/:accountId — fix IMAP password + auto-test
-router.post('/imap/fix-credentials/:accountId', requireAuth, async (req, res) => {
+router.post('/imap/fix-credentials/:accountId', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { encrypt, decrypt } = require('../services/crypto');

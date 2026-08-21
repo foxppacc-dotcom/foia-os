@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, getCurrentUser, getApiBase } from '../api';
 import {
@@ -262,6 +262,12 @@ function CreateTopicForm({ onDone, toast }) {
   const [showLinkInput, setShowLinkInput] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
   const [saving, setSaving] = useState(false);
+  const fileInputRef = useRef(null);
+  // Without resetting the native input's own .value too, re-picking the
+  // exact same file after clearing it via the X button fires no change
+  // event (the browser sees the value as unchanged), silently failing to
+  // re-attach it.
+  useEffect(() => { if (!file && fileInputRef.current) fileInputRef.current.value = ''; }, [file]);
 
   const submit = async () => {
     if (!title.trim() || saving) return;
@@ -306,7 +312,7 @@ function CreateTopicForm({ onDone, toast }) {
       <div className="flex items-center gap-1">
         <label className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
           <Paperclip className="w-3.5 h-3.5" /> مرفق
-          <input type="file" hidden onChange={e => setFile(e.target.files?.[0] || null)} />
+          <input ref={fileInputRef} type="file" hidden onChange={e => setFile(e.target.files?.[0] || null)} />
         </label>
         <button onClick={() => setShowLinkInput(s => !s)} className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg" style={{ color: showLinkInput ? 'var(--accent)' : 'var(--text-secondary)' }}>
           <Link2 className="w-3.5 h-3.5" /> رابط
@@ -331,6 +337,8 @@ function TopicDetail({ topicId, onBack, me, isAdmin, canComment, canPin, canDele
   const [confirmDeleteComment, setConfirmDeleteComment] = useState(null);
   const [confirmDeleteTopic, setConfirmDeleteTopic] = useState(false);
   const [, forceTick] = useState(0);
+  const fileInputRef = useRef(null);
+  useEffect(() => { if (!file && fileInputRef.current) fileInputRef.current.value = ''; }, [file]);
 
   const fetchTopic = () => {
     api.get(`/forum/topics/${topicId}`).then(d => setTopic(d.data)).catch(e => toast.error(e.message)).finally(() => setLoading(false));
@@ -494,7 +502,7 @@ function TopicDetail({ topicId, onBack, me, isAdmin, canComment, canPin, canDele
                 className="flex-1 bg-transparent text-sm outline-none" style={{ color: 'var(--text-primary)' }} />
               <label className="cursor-pointer shrink-0" style={{ color: 'var(--text-muted)' }}>
                 <Paperclip className="w-4 h-4" />
-                <input type="file" hidden onChange={e => setFile(e.target.files?.[0] || null)} />
+                <input ref={fileInputRef} type="file" hidden onChange={e => setFile(e.target.files?.[0] || null)} />
               </label>
               <button onClick={() => setShowLinkInput(s => !s)} className="shrink-0" style={{ color: showLinkInput || linkUrl ? 'var(--accent)' : 'var(--text-muted)' }}>
                 <Link2 className="w-4 h-4" />

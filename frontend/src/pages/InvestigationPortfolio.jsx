@@ -114,19 +114,19 @@ export default function InvestigationPortfolio() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="rounded-lg p-2 text-center" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)' }}>
             <div className="text-lg font-bold" style={{ color: '#22c55e' }}>{portfolio.healthy || 0}</div>
-            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}">صحي</div>
+            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>صحي</div>
           </div>
           <div className="rounded-lg p-2 text-center" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
             <div className="text-lg font-bold" style={{ color: '#ef4444' }}>{portfolio.atRisk || 0}</div>
-            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}">في خطر</div>
+            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>في خطر</div>
           </div>
           <div className="rounded-lg p-2 text-center" style={{ background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.2)' }}>
             <div className="text-lg font-bold" style={{ color: '#eab308' }}>{portfolio.followUps || 0}</div>
-            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}">متابعة</div>
+            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>متابعة</div>
           </div>
           <div className="rounded-lg p-2 text-center" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.2)' }}>
             <div className="text-lg font-bold" style={{ color: '#8b5cf6' }}>{portfolio.ready || 0}</div>
-            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}">جاهز</div>
+            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>جاهز</div>
           </div>
         </div>
       )}

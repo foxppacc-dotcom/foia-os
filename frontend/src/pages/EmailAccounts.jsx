@@ -42,7 +42,8 @@ export default function EmailAccounts() {
   const fetchAccounts = async () => {
     try {
       const r = await fetch(`${BASE}/email-accounts`, { headers: hdrs() });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setError(d.error || 'فشل تحميل الحسابات'); setLoading(false); return; }
       setAccounts(Array.isArray(d) ? d : d.data || d.accounts || []);
     } catch (e) { setError('فشل تحميل الحسابات'); }
     setLoading(false);
@@ -82,10 +83,11 @@ export default function EmailAccounts() {
 
   const toggleActive = async (account) => {
     try {
-      await fetch(`${BASE}/email-accounts/${account.id}`, {
+      const r = await fetch(`${BASE}/email-accounts/${account.id}`, {
         method: 'PUT', headers: hdrs(),
         body: JSON.stringify({ is_active: !account.is_active }),
       });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); setError(d.error || 'فشل تغيير حالة الحساب'); return; }
       fetchAccounts();
     } catch { setError('فشل تغيير حالة الحساب'); }
   };

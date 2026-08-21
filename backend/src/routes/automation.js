@@ -8,7 +8,7 @@ const { canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess')
 router.use(requireAuth);
 
 // GET /api/automations — list all
-router.get('/automations', async (req, res) => {
+router.get('/automations', requireRole('admin'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data, error } = await sup.from('automations').select('*').order('created_at', { ascending: false });
@@ -189,7 +189,7 @@ async function executeAutomation(a, sup) {
 
   // CASE 3: Auto-classify newly created cases without classification
   else if (a.action_type === 'auto_classify') {
-    const { data: openCases } = await sup.from('cases').select('id, title, description').eq('status', 'open');
+    const { data: openCases } = await sup.from('cases').select('id, title, description').eq('status', 'open').limit(20);
     const openIds = (openCases || []).map(c => c.id);
     const caseMap = {}; (openCases || []).forEach(c => caseMap[c.id] = c);
 
@@ -244,7 +244,7 @@ async function executeAutomation(a, sup) {
 
   // CASE 5: Auto-close cases where all requests are responded
   else if (a.action_type === 'auto_close_completed') {
-    const { data: openCases } = await sup.from('cases').select('id, title').neq('status', 'closed');
+    const { data: openCases } = await sup.from('cases').select('id, title').neq('status', 'closed').limit(20);
     for (const c of openCases || []) {
       const { data: reqs } = await sup.from('requests').select('status').eq('case_id', c.id);
       if (!reqs || reqs.length === 0) continue;

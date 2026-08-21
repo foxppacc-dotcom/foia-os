@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
+const { canAccessCase } = require('../services/caseAccess');
 
 /**
  * Email Auto-Classifier Service
@@ -207,6 +208,13 @@ router.post('/classifier/analyze', requireAuth, async (req, res) => {
 router.post('/classifier/auto-classify', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   const sup = getSupabase();
   const { case_id } = req.body;
+  // requireRole('admin','manager') only confirms the ROLE may classify at
+  // all -- if 'manager' is ever restricted to specific cases via
+  // role_permissions, this still let it write to any case by id, unlike
+  // every other case-scoped mutation in this codebase.
+  if (case_id && !(await canAccessCase(sup, req.user, parseInt(case_id)))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
 
   let query = sup.from('communications').select('id, case_id, subject, body')
     .eq('direction', 'inbound').eq('type', 'email').order('created_at', { ascending: false });

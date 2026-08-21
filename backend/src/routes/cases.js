@@ -937,7 +937,7 @@ const uploadCases = multer2({
 });
 
 // POST /api/cases/upload — رفع Excel بقضايا
-router.post('/cases/upload', requireAuth, uploadCases.single('file'), async (req, res) => {
+router.post('/cases/upload', requireAuth, requirePermission('cases', 'create'), uploadCases.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'لم يتم رفع ملف' });
 

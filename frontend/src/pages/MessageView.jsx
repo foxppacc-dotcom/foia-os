@@ -219,7 +219,14 @@ export default function MessageView() {
               )}
               <label className="flex items-center gap-1 text-[11px] cursor-pointer w-fit" style={{ color: 'var(--ds-accent)' }}>
                 <Paperclip className="w-3.5 h-3.5" />مرفقات
-                <input type="file" multiple hidden onChange={e => setComposeFiles([...composeFiles, ...Array.from(e.target.files || [])])} />
+                <input type="file" multiple hidden onChange={e => {
+                  setComposeFiles([...composeFiles, ...Array.from(e.target.files || [])]);
+                  // Reset immediately -- otherwise re-picking the same
+                  // file(s) after removing them from the list fires no
+                  // change event, since the browser sees the input's value
+                  // as unchanged.
+                  e.target.value = '';
+                }} />
               </label>
 
               {composeError && <div className="text-[11px] p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>{composeError}</div>}

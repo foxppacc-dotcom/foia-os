@@ -23,7 +23,7 @@ const routes = [
   'auth', 'cases', 'requests', 'pipeline', 'agencies', 'communications',
   'dashboard', 'intake', 'email', 'emailProduction', 'aiAssistant', 'users',
   'automation', 'gdrive', 'phoneAndMail', 'portals', 'production',
-  'settings', 'activity', 'classifier', 'cleanup', 'migration',
+  'settings', 'activity', 'classifier',
   'case_detail.routes', 'checklist', 'assignees', 'teamManagement', 'team.routes',
   'teams', 'permissions', 'pipelineLists', 'forum',
 ];

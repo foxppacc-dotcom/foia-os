@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, getCurrentUser, getApiBase } from '../api';
 import {
@@ -51,14 +51,23 @@ export default function AIIntake() {
   const canPromote = has('promote');
   const canManageCriteria = has('manage_criteria');
 
+  const queueRequestRef = useRef(0);
   const fetchQueue = () => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     Object.entries(critFilters).forEach(([k, v]) => { if (v) params.set(`criteria_${k}`, v); });
+    const requestId = ++queueRequestRef.current;
     api.get(`/intake/queue?${params}`)
-      .then(d => { setQueue(d.data || []); setCriteria(d.criteria || []); })
-      .catch(e => toast.error(e.message))
-      .finally(() => setLoading(false));
+      .then(d => {
+        // A faster later request (e.g. the last keystroke) can resolve
+        // before an earlier, slower one -- applying whichever response
+        // lands last, rather than whichever was requested last, would show
+        // results for a stale, already-abandoned search term.
+        if (requestId !== queueRequestRef.current) return;
+        setQueue(d.data || []); setCriteria(d.criteria || []);
+      })
+      .catch(e => { if (requestId === queueRequestRef.current) toast.error(e.message); })
+      .finally(() => { if (requestId === queueRequestRef.current) setLoading(false); });
   };
   useEffect(() => { fetchQueue(); }, [search, critFilters]);
   useEffect(() => { api.get('/permissions/mine').then(setPerms).catch(() => setPerms({ permissions: [] })); }, []);

@@ -36,10 +36,15 @@ async function extractText(filePath) {
 }
 
 async function extractViaPython(filePath) {
-  const { execSync } = require('child_process');
+  const { execFileSync } = require('child_process');
   try {
-    const result = execSync(
-      `python "${PYTHON_EXTRACT_SCRIPT}" "${filePath}"`,
+    // execFileSync (argv array, no shell) instead of execSync (shell string)
+    // -- a shell string interpolating filePath would let a filename
+    // containing shell metacharacters (quotes, semicolons, pipes) execute
+    // arbitrary commands. execFileSync passes filePath as a single argv
+    // entry, never through a shell, so it's inert regardless of its content.
+    const result = execFileSync(
+      'python', [PYTHON_EXTRACT_SCRIPT, filePath],
       { timeout: 30000, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
     );
     return result.trim();

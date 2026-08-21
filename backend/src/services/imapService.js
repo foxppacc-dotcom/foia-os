@@ -28,7 +28,12 @@ class ImapService {
           result.smtp.exists = true;
           result.smtp.length = p.length;
           result.smtp.hash = crypto.createHash('sha256').update(p).digest('hex').substring(0, 8);
-          result.smtp.invisibleChars = JSON.stringify(p);
+          // Detect invisible/whitespace corruption WITHOUT ever putting the
+          // real plaintext password in a response body -- this used to be
+          // `JSON.stringify(p)`, which for a string is just that string in
+          // quotes, i.e. the actual cleartext password shipped verbatim to
+          // whoever calls this route.
+          result.smtp.hasLeadingOrTrailingWhitespace = p !== p.trim();
         } else {
           result.smtp.decryptError = 'Decrypt returned empty/null';
         }
@@ -47,7 +52,7 @@ class ImapService {
           result.imap.exists = true;
           result.imap.length = p.length;
           result.imap.hash = crypto.createHash('sha256').update(p).digest('hex').substring(0, 8);
-          result.imap.invisibleChars = JSON.stringify(p);
+          result.imap.hasLeadingOrTrailingWhitespace = p !== p.trim();
         } else {
           result.imap.decryptError = 'Decrypt returned empty/null';
         }

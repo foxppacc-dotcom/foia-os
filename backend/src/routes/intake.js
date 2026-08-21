@@ -24,8 +24,14 @@ const INTAKE_DIR = os.tmpdir();
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, INTAKE_DIR),
   filename: (req, file, cb) => {
+    // Never write the client-supplied original filename to disk verbatim --
+    // it flows straight into extractViaPython's argv, and even with
+    // execFileSync (no shell) an attacker-controlled name is unnecessary
+    // risk with zero functional benefit (nothing downstream needs the
+    // original name). Keep only the extension the fileFilter already validated.
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `${uniqueSuffix}_${file.originalname}`);
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${uniqueSuffix}${ext}`);
   }
 });
 

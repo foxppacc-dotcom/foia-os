@@ -11,7 +11,10 @@ async function saveForumFile({ buffer, fileName, mimeType }) {
   const folderId = await gdrive.ensureSystemFolder('Forum Attachments');
   const driveFile = await gdrive.uploadBytes(buffer, fileName, mimeType, folderId);
   const checksum = crypto.createHash('sha256').update(buffer).digest('hex');
-  const isImage = (mimeType || '').startsWith('image/');
+  // SVG excluded despite the image/* mimetype -- it can embed <script> and
+  // the proxy route (gdrive.js's imageProxyHandler) refuses to serve it
+  // inline for that reason, so treat it as a regular file link instead.
+  const isImage = (mimeType || '').startsWith('image/') && mimeType !== 'image/svg+xml';
 
   return {
     // webViewLink opens Drive's HTML viewer page, not raw bytes -- unusable

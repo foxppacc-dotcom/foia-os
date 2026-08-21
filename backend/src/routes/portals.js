@@ -7,7 +7,7 @@ const { encrypt, decrypt } = require('../services/crypto');
 // ============ PORTAL CREDENTIALS MANAGEMENT ============
 
 // GET /api/portals — list all (passwords NOT in response)
-router.get('/portals', requireAuth, async (req, res) => {
+router.get('/portals', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   const sup = getSupabase();
   const { data, error } = await sup
     .from('portal_credentials')

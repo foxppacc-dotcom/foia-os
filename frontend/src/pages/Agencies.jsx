@@ -108,7 +108,8 @@ export default function Agencies() {
         headers: { 'Authorization': 'Bearer ' + localStorage.getItem('foia_token') },
         body: formData
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert('❌ ' + (data.error || 'فشل رفع الملف')); e.target.value = ''; return; }
       alert(data.message || `✅ تم استيراد ${data.imported} جهة`);
       fetchAgencies();
     } catch (err) {
