@@ -3,9 +3,10 @@ import { api } from '../api';
 import { useNavigate } from 'react-router-dom';
 import {
   BarChart3, FolderOpen, Clock, AlertTriangle, TrendingUp,
-  Activity, Building2, Mail, Target, Sparkles, CheckCircle2,
+  Activity, Building2, Mail, Target, CheckCircle2,
   Calendar, ArrowRight, FileText, History
 } from 'lucide-react';
+import FoxBotIcon from '../components/icons/FoxBotIcon';
 
 function timeAgo(dateStr) {
   const diffMs = Date.now() - new Date(dateStr).getTime();
@@ -90,10 +91,10 @@ export default function Dashboard() {
           <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>FOIA OS — نظام إدارة طلبات السجلات</p>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/intake')} 
+          <button onClick={() => navigate('/ai-assistant')}
             className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all active:scale-[0.97] btn-accent">
-            <Sparkles className="w-4 h-4" />
-            استقبال ذكي
+            <FoxBotIcon className="w-4 h-4" />
+            المساعد الذكي
           </button>
         </div>
       </div>

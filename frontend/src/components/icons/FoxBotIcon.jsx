@@ -1,22 +1,34 @@
-// Small custom mascot icon for the AI assistant widget -- a minimalist
-// robot face with fox-shaped (triangular) ears, since lucide-react has no
-// stock icon for this. Uses currentColor so it inherits whatever color the
-// parent button sets, same as any lucide icon would.
+// Small custom mascot icon for the AI assistant widget -- a modern
+// robot-fox face (no stock lucide icon fits). Two-tone: `currentColor` for
+// the body/ears (inherits whatever color the parent button sets, same as
+// any lucide icon), a fixed light visor plate for the robot face so the
+// eyes/muzzle read clearly at small sizes.
 export default function FoxBotIcon({ className = 'w-5 h-5', style }) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} style={style} xmlns="http://www.w3.org/2000/svg">
-      {/* Ears */}
-      <path d="M5 3.5L8.5 9.5H4L5 3.5Z" fill="currentColor" />
-      <path d="M19 3.5L15.5 9.5H20L19 3.5Z" fill="currentColor" />
-      {/* Head */}
-      <rect x="4" y="8.5" width="16" height="12" rx="5" fill="currentColor" />
-      {/* Eyes (cut-outs) */}
-      <circle cx="9" cy="14.5" r="1.6" fill="var(--eye-bg, white)" />
-      <circle cx="15" cy="14.5" r="1.6" fill="var(--eye-bg, white)" />
-      <circle cx="9" cy="14.5" r="0.7" fill="currentColor" />
-      <circle cx="15" cy="14.5" r="0.7" fill="currentColor" />
-      {/* Snout/mouth */}
-      <path d="M10.5 18C10.5 18 11 19 12 19C13 19 13.5 18 13.5 18" stroke="var(--eye-bg, white)" strokeWidth="1" strokeLinecap="round" />
+    <svg viewBox="0 0 32 32" fill="none" className={className} style={style} xmlns="http://www.w3.org/2000/svg">
+      {/* Ears -- pointed fox silhouette with a lighter inner-ear notch */}
+      <path d="M6 4L11.5 13.5H4.5L6 4Z" fill="currentColor" />
+      <path d="M26 4L20.5 13.5H27.5L26 4Z" fill="currentColor" />
+      <path d="M6.6 8L9.3 12.7H5.7L6.6 8Z" fill="currentColor" fillOpacity="0.35" />
+      <path d="M25.4 8L22.7 12.7H26.3L25.4 8Z" fill="currentColor" fillOpacity="0.35" />
+
+      {/* Head -- rounded-square robot plate */}
+      <rect x="4" y="10" width="24" height="18" rx="7" fill="currentColor" />
+
+      {/* Visor / face plate */}
+      <rect x="7.5" y="15" width="17" height="10" rx="4.5" fill="var(--visor-bg, white)" fillOpacity="0.94" />
+
+      {/* Robot eyes on the visor */}
+      <rect x="10.5" y="18.3" width="3.4" height="3.4" rx="1" fill="currentColor" />
+      <rect x="18.1" y="18.3" width="3.4" height="3.4" rx="1" fill="currentColor" />
+
+      {/* Fox muzzle -- small tapered snout below the visor */}
+      <path d="M14 24.5C14 24.5 14.7 26 16 26C17.3 26 18 24.5 18 24.5"
+        stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+
+      {/* Small antenna -- reads as robot */}
+      <line x1="16" y1="10" x2="16" y2="6.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="16" cy="6" r="1.4" fill="currentColor" />
     </svg>
   );
 }
