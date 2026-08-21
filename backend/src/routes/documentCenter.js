@@ -26,11 +26,20 @@ function parseMetadata(raw) {
 // ============ AGENCY COMMUNICATION CONFIG ============
 
 // PUT /api/requests/:id/communication-config — save agency settings
+// Previously only requireAuth -- a role restricted to its own assigned
+// cases could reconfigure the send account/method/SLA on ANY request in
+// the system just by knowing its id, same class of gap the earlier
+// case-scoping audit fixed elsewhere -- requests.case_id is NOT NULL, so
+// resolving it first and gating on it is always possible.
 router.put('/requests/:id/communication-config', requireAuth, async (req, res) => {
   const sup = getSupabase();
+  const requestId = parseInt(req.params.id);
+  const { data: reqRow } = await sup.from('requests').select('case_id').eq('id', requestId).maybeSingle();
+  if (!reqRow) return res.status(404).json({ error: 'Request not found' });
+  if (!(await canAccessCase(sup, req.user, reqRow.case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
   const { email_account_id, comm_method, sla_days } = req.body;
   const configStr = JSON.stringify({ _comm: { email_account_id: email_account_id || null, method: comm_method || 'email', sla_days: sla_days || 20, updated_at: new Date().toISOString() }});
-  const { error } = await sup.from('requests').update({ notes: configStr }).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('requests').update({ notes: configStr }).eq('id', requestId);
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
@@ -38,11 +47,15 @@ router.put('/requests/:id/communication-config', requireAuth, async (req, res) =
 // PUT /api/requests/:id/status — quick actions (send, reminder, escalate, verify, close)
 router.put('/requests/:id/status', requireAuth, async (req, res) => {
   const sup = getSupabase();
+  const requestId = parseInt(req.params.id);
+  const { data: reqRow } = await sup.from('requests').select('case_id').eq('id', requestId).maybeSingle();
+  if (!reqRow) return res.status(404).json({ error: 'Request not found' });
+  if (!(await canAccessCase(sup, req.user, reqRow.case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
   const { status } = req.body;
   if (!status) return res.status(400).json({ error: 'status required' });
   const update = { status };
   if (status === 'sent' || status === 'reminder') update.sent_date = new Date().toISOString();
-  const { error } = await sup.from('requests').update(update).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('requests').update(update).eq('id', requestId);
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
@@ -697,6 +710,13 @@ router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10
         if (!linkedCaseId) linkedCaseId = original.case_id || null;
         linkedAgencyId = original.agency_id || null;
       }
+    }
+    // Same class of gap the earlier case-scoping audit fixed on every other
+    // compose/link route -- an unchecked case_id here (whether passed
+    // directly or inherited from a replied-to message) would let a
+    // restricted-role user fabricate a communications row on any case.
+    if (linkedCaseId && !(await canAccessCase(sup, req.user, linkedCaseId))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
     }
 
     // Attached straight to the outgoing email only -- there's no case here

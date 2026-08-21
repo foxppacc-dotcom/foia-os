@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { api } from '../api';
 import { Send, Paperclip, X, Mic } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import FoxBotIcon from '../components/icons/FoxBotIcon';
 import { useAIChat } from '../hooks/useAIChat';
+import { useActiveProviderStatus } from '../hooks/useActiveProviderStatus';
 
 // The dedicated, full-page place to talk to the assistant -- separate from
 // "الربط الذكي" (provider keys, capability toggles, knowledge center) and
@@ -11,17 +11,13 @@ import { useAIChat } from '../hooks/useAIChat';
 // same useAIChat() hook so both surfaces stay behaviorally identical, just
 // with a roomier layout here.
 export default function AIAssistantChat() {
-  const [hasActiveProvider, setHasActiveProvider] = useState(null);
   const [listening, setListening] = useState(false);
   const listRef = useRef(null);
   const fileInputRef = useRef(null);
   const recognitionRef = useRef(null);
 
   const { messages, input, setInput, file, setFile, sending, send } = useAIChat();
-
-  useEffect(() => {
-    api.get('/ai/providers').then(d => setHasActiveProvider((d.data || []).some(p => p.is_active))).catch(() => setHasActiveProvider(true));
-  }, []);
+  const { hasActiveProvider, checkFailed, recheck } = useActiveProviderStatus();
 
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, [messages]);
   useEffect(() => { if (!file && fileInputRef.current) fileInputRef.current.value = ''; }, [file]);
@@ -46,7 +42,12 @@ export default function AIAssistantChat() {
     <div className="space-y-4 animate-fadeIn h-full flex flex-col">
       <PageHeader eyebrow="ذكاء اصطناعي" title="المساعد الذكي" meta="اسأل، اطلب تقارير، أو اطلب فتح وتصفية أقسام النظام مباشرة" />
 
-      {hasActiveProvider === false ? (
+      {checkFailed ? (
+        <div className="text-sm p-4 rounded-2xl" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
+          <p className="mb-2">⚠️ تعذر التحقق من حالة المساعد الذكي.</p>
+          <button onClick={recheck} className="underline" style={{ color: 'var(--accent)' }}>إعادة المحاولة</button>
+        </div>
+      ) : hasActiveProvider === false ? (
         <p className="text-sm p-4 rounded-2xl" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
           لا يوجد مزود ذكاء اصطناعي مفعّل حاليًا. فعّل واحدًا من صفحة "الربط الذكي".
         </p>

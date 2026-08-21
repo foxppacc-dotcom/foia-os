@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { api } from '../api';
 import { Send, Paperclip, X, Mic, Minus, GripHorizontal } from 'lucide-react';
 import FoxBotIcon from './icons/FoxBotIcon';
 import { useAIChat } from '../hooks/useAIChat';
+import { useActiveProviderStatus } from '../hooks/useActiveProviderStatus';
 import { WIDGET_HIDDEN_KEY as HIDDEN_KEY, WIDGET_VISIBILITY_EVENT as AI_WIDGET_VISIBILITY_EVENT } from '../aiWidgetVisibility';
 
 const POS_KEY = 'ai_widget_position';
@@ -28,8 +28,6 @@ export default function AIAssistantWidget() {
   const [hidden, setHidden] = useState(() => localStorage.getItem(HIDDEN_KEY) === '1');
   const [collapsed, setCollapsed] = useState(true);
   const [position, setPosition] = useState(loadPosition);
-  const [hasActiveProvider, setHasActiveProvider] = useState(null);
-  const [providerCheckFailed, setProviderCheckFailed] = useState(false);
   const [hasUnread, setHasUnread] = useState(false);
   const [listening, setListening] = useState(false);
   const listRef = useRef(null);
@@ -46,22 +44,13 @@ export default function AIAssistantWidget() {
     // expanded the panel between sending and the reply landing.
     onReply: () => { if (collapsedRef.current) setHasUnread(true); },
   });
+  const { hasActiveProvider, checkFailed: providerCheckFailed, recheck: checkActiveProvider } = useActiveProviderStatus();
 
   useEffect(() => {
     const onVisibility = () => setHidden(localStorage.getItem(HIDDEN_KEY) === '1');
     window.addEventListener(AI_WIDGET_VISIBILITY_EVENT, onVisibility);
     return () => window.removeEventListener(AI_WIDGET_VISIBILITY_EVENT, onVisibility);
   }, []);
-
-  const checkActiveProvider = () => {
-    // A failed check previously assumed `true` (provider configured) so the
-    // chat UI rendered anyway -- indistinguishable from a genuinely healthy
-    // state, and the first real symptom would be every message failing with
-    // a confusing error instead of the clear "لا يوجد مزود مفعّل" notice.
-    api.get('/ai/providers').then(d => { setHasActiveProvider((d.data || []).some(p => p.is_active)); setProviderCheckFailed(false); })
-      .catch(() => setProviderCheckFailed(true));
-  };
-  useEffect(() => { checkActiveProvider(); }, []);
 
   useEffect(() => { if (!collapsed) listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, [messages, collapsed]);
 

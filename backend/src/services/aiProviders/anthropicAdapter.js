@@ -7,17 +7,32 @@ async function chat({ apiKey, model, systemPrompt, messages, tools, maxTokens })
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
 
-  const anthropicMessages = messages.map(m => {
-    if (m.role === 'user') return { role: 'user', content: m.content };
+  // Anthropic requires strict user/assistant alternation. A single round of
+  // the chat loop can produce several tool calls at once, each arriving here
+  // as its own separate 'tool_result' entry -- mapping each to its own
+  // {role:'user'} message produced back-to-back user turns and a 400 from
+  // the API. Consecutive tool_result entries are merged into ONE user
+  // message's content array instead, matching how Anthropic expects a
+  // multi-tool round's results to be reported back.
+  const anthropicMessages = [];
+  for (const m of messages) {
+    if (m.role === 'user') { anthropicMessages.push({ role: 'user', content: m.content }); continue; }
     if (m.role === 'assistant') {
       const blocks = [];
       if (m.content) blocks.push({ type: 'text', text: m.content });
       for (const tc of m.toolCalls || []) blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
-      return { role: 'assistant', content: blocks };
+      anthropicMessages.push({ role: 'assistant', content: blocks });
+      continue;
     }
     // tool_result
-    return { role: 'user', content: [{ type: 'tool_result', tool_use_id: m.toolCallId, content: m.content }] };
-  });
+    const block = { type: 'tool_result', tool_use_id: m.toolCallId, content: m.content };
+    const last = anthropicMessages[anthropicMessages.length - 1];
+    if (last?.role === 'user' && Array.isArray(last.content) && last.content[0]?.type === 'tool_result') {
+      last.content.push(block);
+    } else {
+      anthropicMessages.push({ role: 'user', content: [block] });
+    }
+  }
 
   const anthropicTools = (tools || []).map(t => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
 

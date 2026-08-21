@@ -8,17 +8,30 @@ async function chat({ apiKey, model, systemPrompt, messages, tools, maxTokens })
   const { GoogleGenAI } = require('@google/genai');
   const client = new GoogleGenAI({ apiKey });
 
-  const contents = messages.map(m => {
-    if (m.role === 'user') return { role: 'user', parts: [{ text: m.content }] };
+  // Gemini expects every function response from the SAME model turn grouped
+  // into one user-role content entry (multiple functionResponse parts), the
+  // same reasoning as Anthropic's tool_result merging below -- a round with
+  // several tool calls would otherwise produce back-to-back single-part user
+  // entries instead of one multi-part entry.
+  const contents = [];
+  for (const m of messages) {
+    if (m.role === 'user') { contents.push({ role: 'user', parts: [{ text: m.content }] }); continue; }
     if (m.role === 'assistant') {
       const parts = [];
       if (m.content) parts.push({ text: m.content });
       for (const tc of m.toolCalls || []) parts.push({ functionCall: { name: tc.name, args: tc.input } });
-      return { role: 'model', parts };
+      contents.push({ role: 'model', parts });
+      continue;
     }
     // tool_result
-    return { role: 'user', parts: [{ functionResponse: { name: m.toolName, response: { result: m.content } } }] };
-  });
+    const part = { functionResponse: { name: m.toolName, response: { result: m.content } } };
+    const last = contents[contents.length - 1];
+    if (last?.role === 'user' && last.parts?.[0]?.functionResponse) {
+      last.parts.push(part);
+    } else {
+      contents.push({ role: 'user', parts: [part] });
+    }
+  }
 
   const geminiTools = (tools || []).length
     ? [{ functionDeclarations: tools.map(t => ({ name: t.name, description: t.description, parameters: t.input_schema })) }]

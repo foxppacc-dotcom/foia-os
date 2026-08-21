@@ -15,6 +15,7 @@
  */
 const { hasPermission } = require('../middleware/auth');
 const { getCaseActivityRecipients, notifyUsers } = require('./notificationService');
+const { canAccessCase } = require('./caseAccess');
 const { classifyIntakeText, blankAnswers } = require('./aiClassifier');
 
 async function getActiveCriteriaDefs(sup) {
@@ -34,6 +35,7 @@ async function searchIntake(sup, { query } = {}) {
 
 // ---- create_intake_entry ----
 async function createIntakeEntry(sup, { title, defendant_name, source_agency_name, story_hook, case_summary } = {}, ctx) {
+  if (!(await hasPermission(sup, ctx.user, 'intake', 'create'))) throw new Error('Forbidden — لا تملك صلاحية الإضافة للاستقبال الذكي');
   if (!title || !title.trim()) throw new Error('title مطلوب');
   const criteriaDefs = await getActiveCriteriaDefs(sup);
   const text = [story_hook, case_summary].filter(Boolean).join('\n\n');
@@ -53,9 +55,15 @@ async function createIntakeEntry(sup, { title, defendant_name, source_agency_nam
 
 // ---- edit_intake_entry ----
 const EDITABLE_FIELDS = ['title', 'defendant_name', 'source_agency_name', 'story_hook', 'case_summary'];
-async function editIntakeEntry(sup, { case_id, fields } = {}) {
+async function editIntakeEntry(sup, { case_id, fields } = {}, ctx) {
   const caseId = parseInt(case_id);
   if (!caseId || !fields || typeof fields !== 'object') throw new Error('case_id و fields مطلوبان');
+  // Matches the human-facing route's own gate (PUT /intake/cases/:caseId/criteria
+  // requires intake:edit while an entry is still in review) -- the global
+  // ai_capabilities toggle only says the assistant MAY edit intake entries in
+  // general, not that the specific operating user is one of the roles
+  // actually granted intake-editing rights.
+  if (!(await hasPermission(sup, ctx.user, 'intake', 'edit'))) throw new Error('Forbidden — لا تملك صلاحية تعديل الاستقبال الذكي');
   const { data: existing } = await sup.from('cases').select('id, in_intake_review').eq('id', caseId).maybeSingle();
   if (!existing) throw new Error('Case not found');
   if (!existing.in_intake_review) throw new Error('هذه القضية لم تعد في الاستقبال الذكي -- لا يمكن تعديلها عبر هذه الأداة');
@@ -134,9 +142,16 @@ async function reviewUnmatchedEmails(sup, { since_days } = {}) {
 }
 
 // ---- suggest_email_case_link ----
-async function suggestEmailCaseLink(sup, { communication_id, case_id, reason } = {}) {
+async function suggestEmailCaseLink(sup, { communication_id, case_id, reason } = {}, ctx) {
   const commId = parseInt(communication_id); const caseId = parseInt(case_id);
   if (!commId || !caseId || !reason) throw new Error('communication_id و case_id و reason مطلوبون');
+  // The operating user must actually have access to the TARGET case -- this
+  // tool executes with the same trust as any other backend action, and
+  // without this check a role restricted to its own cases could ask the
+  // assistant to suggest (or, via auto_link, directly perform) a link onto
+  // a case that isn't theirs, same class of gap every other case-scoped
+  // route in this app already guards against.
+  if (!(await canAccessCase(sup, ctx.user, caseId))) throw new Error('Forbidden — هذه القضية غير مسندة إليك');
   const { data: comm } = await sup.from('communications').select('id, case_id, metadata').eq('id', commId).maybeSingle();
   if (!comm) throw new Error('Communication not found');
   if (comm.case_id) throw new Error('هذه الرسالة مرتبطة بقضية بالفعل');
@@ -159,6 +174,7 @@ async function suggestEmailCaseLink(sup, { communication_id, case_id, reason } =
 async function autoLinkEmailToCase(sup, { communication_id, case_id } = {}, ctx) {
   const commId = parseInt(communication_id); const caseId = parseInt(case_id);
   if (!commId || !caseId) throw new Error('communication_id و case_id مطلوبان');
+  if (!(await canAccessCase(sup, ctx.user, caseId))) throw new Error('Forbidden — هذه القضية غير مسندة إليك');
   const { data: comm } = await sup.from('communications').select('id, case_id, metadata, subject, sender').eq('id', commId).maybeSingle();
   if (!comm) throw new Error('Communication not found');
   if (comm.case_id) throw new Error('هذه الرسالة مرتبطة بقضية بالفعل');
@@ -223,6 +239,7 @@ async function navigateToPage(sup, { page, filters } = {}) {
 async function assignCaseToEmployee(sup, { case_id, user_id, name } = {}, ctx) {
   const caseId = parseInt(case_id);
   if (!caseId) throw new Error('case_id مطلوب');
+  if (!(await canAccessCase(sup, ctx.user, caseId))) throw new Error('Forbidden — هذه القضية غير مسندة إليك');
   let userId = parseInt(user_id);
   if (!userId && name) {
     const { data: match } = await sup.from('users').select('id, name').ilike('name', `%${name}%`).limit(1).maybeSingle();
@@ -305,7 +322,7 @@ const TOOL_DEFS = [
       properties: { case_id: { type: 'number' }, fields: { type: 'object' } },
       required: ['case_id', 'fields'],
     },
-    run: (sup, input) => editIntakeEntry(sup, input),
+    run: (sup, input, ctx) => editIntakeEntry(sup, input, ctx),
   },
   {
     name: 'generate_employee_report', permission: 'generate_employee_report',
@@ -333,7 +350,7 @@ const TOOL_DEFS = [
       properties: { communication_id: { type: 'number' }, case_id: { type: 'number' }, reason: { type: 'string', description: 'سبب الاقتراح بإيجاز' } },
       required: ['communication_id', 'case_id', 'reason'],
     },
-    run: (sup, input) => suggestEmailCaseLink(sup, input),
+    run: (sup, input, ctx) => suggestEmailCaseLink(sup, input, ctx),
   },
   {
     name: 'auto_link_email_to_case', permission: 'auto_link_email',

@@ -519,9 +519,19 @@ router.post('/ai/chat', chatLimiter, chatUpload.single('file'), async (req, res)
     }
 
     const { data: priorRows } = await sup.from('ai_messages').select('role, content, tool_calls').eq('conversation_id', conversationId).order('created_at', { ascending: true });
-    const history = (priorRows || []).map(r => r.role === 'assistant'
-      ? { role: 'assistant', content: r.content, toolCalls: r.tool_calls || [] }
-      : { role: r.role, content: r.content });
+    // 'tool' rows must come back as the normalized 'tool_result' shape the
+    // provider adapters expect (toolCallId/toolName), not the raw stored
+    // row -- falling through to {role: r.role, content} left every adapter
+    // reading undefined tool_use_id/tool_call_id on the SECOND message of
+    // any conversation that had used a tool, breaking that turn outright.
+    const history = (priorRows || []).map(r => {
+      if (r.role === 'assistant') return { role: 'assistant', content: r.content, toolCalls: r.tool_calls || [] };
+      if (r.role === 'tool') {
+        const tc = (r.tool_calls || [])[0] || {};
+        return { role: 'tool_result', toolCallId: tc.id, toolName: tc.name, content: r.content };
+      }
+      return { role: r.role, content: r.content };
+    });
 
     // Stored history keeps the short, human-written message (not the
     // file-content-prefixed version) so a conversation doesn't balloon with
@@ -577,11 +587,34 @@ router.post('/ai/chat', chatLimiter, chatUpload.single('file'), async (req, res)
     }
 
     if (finalText === null) {
-      finalText = 'تعذر إكمال الطلب ضمن عدد محاولات الأدوات المسموح -- حاول تبسيط السؤال أو تقسيمه.';
+      // Ran out of rounds, but the LAST round's tool calls already executed
+      // and committed real side effects (assign a case, auto-link an email,
+      // create an intake entry...) before the while-condition failed --
+      // reporting a flat "couldn't complete" here would be actively wrong,
+      // not just unhelpful. Force one more call with no tools offered so the
+      // model must summarize whatever it already did instead of the loop
+      // silently ending on an action it can no longer describe.
+      try {
+        const closing = await aiProviders.chat({
+          provider: config.provider, apiKey, model: config.model,
+          systemPrompt: SYSTEM_PROMPT, messages, tools: [], maxTokens: 2048,
+        });
+        finalText = closing.text || 'تم تنفيذ الإجراءات المطلوبة.';
+      } catch (e) {
+        finalText = 'تم تنفيذ بعض الإجراءات أعلاه، لكن تعذر الحصول على ملخص نهائي منها.';
+      }
       await sup.from('ai_messages').insert({ conversation_id: conversationId, role: 'assistant', content: finalText, tool_calls: [] });
     }
 
-    await sup.from('ai_provider_configs').update({ daily_request_count: requestCount + 1, daily_count_reset_at: today }).eq('id', config.id);
+    // Re-read the count right before writing rather than reusing the value
+    // captured at the start of this request (which could be several seconds
+    // and multiple tool rounds stale) -- doesn't make the increment fully
+    // atomic (still a real read-then-write race under true concurrency), but
+    // narrows the window from "the whole request" to "one extra query",
+    // proportionate to this being a coarse safety net, not a hard limit.
+    const { data: freshConfig } = await sup.from('ai_provider_configs').select('daily_request_count, daily_count_reset_at').eq('id', config.id).maybeSingle();
+    const freshCount = freshConfig?.daily_count_reset_at === today ? (freshConfig.daily_request_count || 0) : 0;
+    await sup.from('ai_provider_configs').update({ daily_request_count: freshCount + 1, daily_count_reset_at: today }).eq('id', config.id);
 
     res.json({ success: true, conversation_id: conversationId, answer: finalText, ui_action: uiAction });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -611,6 +644,21 @@ router.get('/ai/conversations/:id', async (req, res) => {
     if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true, data: data || [] });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// A Multer error (oversized/invalid /ai/chat attachment) thrown by
+// chatUpload's middleware bypasses the route handler entirely -- without
+// this, Express's default error page (not this app's {error: "..."} shape)
+// would answer instead, and the tmpFilePath cleanup in the route's own
+// finally block never runs since that handler body is never reached. Same
+// pattern as cases.js/documentCenter.js/forum.js's own upload routes;
+// registered last so it only intercepts errors from this router.
+router.use((err, req, res, next) => {
+  if (err && err.name === 'MulterError') {
+    const message = err.code === 'LIMIT_FILE_SIZE' ? 'حجم الملف المرفق أكبر من الحد المسموح (20 ميجابايت)' : err.message;
+    return res.status(400).json({ error: message });
+  }
+  next(err);
 });
 
 module.exports = router;

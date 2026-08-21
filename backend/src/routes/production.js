@@ -3,7 +3,7 @@ const router = express.Router();
 const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { notifyUsers, getCaseRecipients } = require('../services/notificationService');
-const { canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
+const { canViewAllCases, getVisibleCaseIds, canAccessCase } = require('../services/caseAccess');
 
 // ============ PRODUCTION / MONTAGE QUEUE ============
 
@@ -68,6 +68,11 @@ router.post('/production/add', requireAuth, requirePermission('production', 'edi
 
     const { data: caseRow } = await sup.from('cases').select('id, title, status, drive_folder_id, drive_folder_status').eq('id', caseId).maybeSingle();
     if (!caseRow) return res.status(404).json({ error: 'Case not found' });
+    // requirePermission('production','edit') only confirms the role can add
+    // things to the production queue at all, not that THIS specific case is
+    // one the role can see -- GET /production already scopes this correctly,
+    // this route (and PUT/DELETE below) didn't.
+    if (!(await canAccessCase(sup, req.user, caseId))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
 
     const { data: existing } = await sup.from('production_queue').select('id, status').eq('case_id', caseId).maybeSingle();
     if (existing) return res.status(409).json({ error: 'القضية موجودة مسبقاً في قائمة الإنتاج', id: existing.id });
@@ -115,6 +120,7 @@ router.put('/production/:id', requireAuth, requirePermission('production', 'edit
 
     const { data: existing } = await sup.from('production_queue').select('*').eq('id', id).maybeSingle();
     if (!existing) return res.status(404).json({ error: 'Not found' });
+    if (!(await canAccessCase(sup, req.user, existing.case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
 
     const updates = {};
     if (status) {
@@ -169,6 +175,7 @@ router.delete('/production/:id', requireAuth, requirePermission('production', 'e
     const sup = getSupabase();
     const { data: item } = await sup.from('production_queue').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
     if (item) {
+      if (!(await canAccessCase(sup, req.user, item.case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
       await sup.from('cases').update({ status: 'open', updated_at: new Date().toISOString() }).eq('id', item.case_id);
     }
     const { error } = await sup.from('production_queue').delete().eq('id', parseInt(req.params.id));
