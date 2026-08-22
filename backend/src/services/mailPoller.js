@@ -7,6 +7,59 @@ const caseFileStorage = require('./caseFileStorage');
 const gdrive = require('./googleDriveService');
 const { notifyUsers, getCaseRecipients, getUsersWithPermission, getCaseActivityRecipients } = require('./notificationService');
 
+// Loaded once per poll batch (not once per message) and threaded into every
+// matchToCase() call -- an admin-disabled tier must actually stop matching,
+// not just stop being shown as "on" somewhere. Tolerates the migration not
+// having been run yet (email_matching_criteria/email_matching_custom_keywords
+// may not exist), same defensive pattern used elsewhere in this codebase --
+// falls back to "every built-in tier active, no custom rules" rather than
+// breaking matching entirely.
+async function loadMatchingCriteria(sup) {
+  let criteriaMap = {};
+  let customKeywords = [];
+  try {
+    const { data } = await sup.from('email_matching_criteria').select('tier_key, is_active');
+    criteriaMap = Object.fromEntries((data || []).map(r => [r.tier_key, r.is_active]));
+  } catch (e) { /* migrations/033 may not have been run yet */ }
+  try {
+    const { data } = await sup.from('email_matching_custom_keywords').select('id, keyword_phrase, case_id').eq('is_active', true);
+    customKeywords = data || [];
+  } catch (e) { /* migrations/033 may not have been run yet */ }
+  return { criteriaMap, customKeywords };
+}
+// A tier only gets skipped when EXPLICITLY disabled (=== false) -- a missing
+// row (undefined, before the migration seeds it, or a newly-added tier) must
+// default to active, not silently off.
+function tierActive(criteria, tierKey) {
+  return criteria.criteriaMap[tierKey] !== false;
+}
+// A single resolved fuzzy candidate can carry more than one reason (e.g.
+// both the case title AND the defendant name matched) -- classified by
+// whichever reason string is used first (see addCandidate's reasons array)
+// purely to attribute ONE tier_key for the confirmed_count stat; the full
+// set of reasons is still shown to the user via label_ar regardless.
+function classifyFuzzyReason(reasonText) {
+  if (reasonText.startsWith('عنوان القضية:')) return 'fuzzy_title';
+  if (reasonText.startsWith('اسم المتهم:')) return 'fuzzy_defendant';
+  if (reasonText.startsWith('الجهة المصدر:') || reasonText.startsWith('اسم الجهة:')) return 'fuzzy_agency_name';
+  if (reasonText.startsWith('نفس اسم المرسل')) return 'sender_continuity';
+  return 'fuzzy_title';
+}
+// Increments confirmed_count for whichever tier produced a match -- purely
+// a stat for the admin panel, so a failed update (table missing, race) is
+// swallowed rather than breaking the actual match.
+async function bumpConfirmed(sup, tierKey) {
+  if (!tierKey || tierKey === 'thread_reply' || tierKey === 'thread_references' || tierKey === 'manual') return;
+  // A read-then-write race here can only under-count an admin-facing stat,
+  // never affect matching itself -- an approximate ratio is enough to
+  // decide whether a tier is noisy, so this doesn't need the same
+  // re-read-before-write treatment as an actual enforced cap.
+  try {
+    const { data } = await sup.from('email_matching_criteria').select('confirmed_count').eq('tier_key', tierKey).maybeSingle();
+    if (data) await sup.from('email_matching_criteria').update({ confirmed_count: (data.confirmed_count || 0) + 1 }).eq('tier_key', tierKey);
+  } catch (e) { /* migrations/033 may not have been run yet */ }
+}
+
 function guessFileType(filename) {
   const dotIdx = (filename || '').lastIndexOf('.');
   const ext = dotIdx >= 0 ? filename.slice(dotIdx).toLowerCase() : '';
@@ -127,6 +180,30 @@ class MailPoller {
     }
   }
 
+  // Real production callers (pollAll, the two backfill passes) always fetch
+  // THEN immediately process the same batch -- locking only pollAccount's
+  // own fetch phase (above) left a gap where the fetch for run A finishes,
+  // releases the lock, and run B's fetch starts (and finishes, and starts
+  // processing) before run A has even reached processMessages, so both still
+  // race the dedup check there. One lock spanning fetch-through-process for
+  // an account closes that gap. Kept separate from pollAccount() itself
+  // since /imap/raw-fetch's diagnostic route only ever wants the fetch half,
+  // never inserts anything, and shouldn't have to also run matching to use it.
+  async pollAndProcessAccount(account, sinceOverride = null) {
+    if (this.activeAccountPolls.has(account.id)) {
+      console.warn(`[mailPoller] skipping poll+process for account ${account.id} -- already in progress`);
+      return { messages: [], count: 0, errors: [] };
+    }
+    this.activeAccountPolls.add(account.id);
+    try {
+      const messages = await this._pollAccountInner(account, sinceOverride);
+      const { count, errors } = await this.processMessages(account.id, messages);
+      return { messages, count, errors };
+    } finally {
+      this.activeAccountPolls.delete(account.id);
+    }
+  }
+
   async _pollAccountInner(account, sinceOverride = null) {
     const { decrypt } = require('./crypto');
     const imapPass = decrypt(account.imap_pass);
@@ -222,10 +299,16 @@ class MailPoller {
   // the moment a message was first fetched. A channel/keyword/defendant
   // name added to a case AFTER an email already arrived could never
   // retroactively catch it; the email just sat unlinked forever.
-  async matchToCase(sup, msg, forceCaseId = null) {
+  async matchToCase(sup, msg, forceCaseId = null, criteria = { criteriaMap: {}, customKeywords: [] }) {
     let matchedCaseId = forceCaseId || null;
     let matchedAgencyId = null;
     let matchedRequestId = null;
+    // Which tier resolved the match, and a human-readable reason -- shown to
+    // the user next to a linked email so a wrong link can actually be told
+    // apart from a correct one, instead of just appearing with no
+    // explanation. Not set for forceCaseId (an explicit override from a
+    // case-specific channel's rescan trigger, not a heuristic decision).
+    let matchReason = forceCaseId ? { tier_key: 'manual', label_ar: 'تم الربط يدويًا' } : null;
     // Collected by any tier that finds more than one plausible case instead
     // of confidently picking one -- declared up front so both tier 3 below
     // and the fuzzy tiers further down share the same "don't guess, ask a
@@ -233,18 +316,19 @@ class MailPoller {
     let possibleMatches = [];
     const extractedRefNumber = extractReferenceNumber(msg.subject) || extractReferenceNumber(msg.text);
 
-    // 1. By Message-ID (already sent from this system)
+    // 1. By Message-ID (already sent from this system) -- structural, not a
+    // heuristic, so never gated by criteria.criteriaMap (nothing to disable).
     if (!matchedCaseId && msg.inReplyTo) {
       const { data: ref } = await sup.from('communications').select('case_id, agency_id').eq('thread_id', msg.inReplyTo).maybeSingle();
-      if (ref) { matchedCaseId = ref.case_id; matchedAgencyId = ref.agency_id; }
+      if (ref) { matchedCaseId = ref.case_id; matchedAgencyId = ref.agency_id; matchReason = { tier_key: 'thread_reply', label_ar: 'رد على رسالة سابقة من هذه القضية' }; }
     }
 
-    // 2. By References
+    // 2. By References -- same as tier 1, structural.
     if (!matchedCaseId && msg.references) {
       const refs = msg.references.split(/[,\s]+/).filter(Boolean);
       for (const ref of refs) {
         const { data: refComm } = await sup.from('communications').select('case_id, agency_id').eq('thread_id', ref).maybeSingle();
-        if (refComm) { matchedCaseId = refComm.case_id; matchedAgencyId = refComm.agency_id; break; }
+        if (refComm) { matchedCaseId = refComm.case_id; matchedAgencyId = refComm.agency_id; matchReason = { tier_key: 'thread_references', label_ar: 'جزء من محادثة سابقة لهذه القضية' }; break; }
       }
     }
 
@@ -253,10 +337,10 @@ class MailPoller {
     // (see case_agency_channels, added from a case's الجهات tab), which is
     // a direct, unambiguous hit and takes priority over the generic
     // agency-level tiers below.
-    if (!matchedCaseId && msg.from) {
+    if (!matchedCaseId && msg.from && tierActive(criteria, 'case_channel_email')) {
       try {
         const { data: channel } = await sup.from('case_agency_channels').select('case_id, agency_id').eq('email', msg.from).maybeSingle();
-        if (channel) { matchedCaseId = channel.case_id; matchedAgencyId = channel.agency_id; }
+        if (channel) { matchedCaseId = channel.case_id; matchedAgencyId = channel.agency_id; matchReason = { tier_key: 'case_channel_email', label_ar: 'عنوان بريد مسجل كقناة تواصل لهذه القضية' }; }
       } catch (e) { /* case_agency_channels may not exist yet */ }
     }
 
@@ -265,13 +349,13 @@ class MailPoller {
     // an email from that same portal's domain (e.g. a notification/reply
     // sent by the portal itself) is a direct signal even with no exact
     // address on file.
-    if (!matchedCaseId && msg.from) {
+    if (!matchedCaseId && msg.from && tierActive(criteria, 'case_channel_portal')) {
       const senderDomain = emailDomain(msg.from);
       if (senderDomain) {
         try {
           const { data: channels } = await sup.from('case_agency_channels').select('case_id, agency_id, portal_link').not('portal_link', 'is', null);
           const match = (channels || []).find(ch => domainFromUrl(ch.portal_link) === senderDomain);
-          if (match) { matchedCaseId = match.case_id; matchedAgencyId = match.agency_id; }
+          if (match) { matchedCaseId = match.case_id; matchedAgencyId = match.agency_id; matchReason = { tier_key: 'case_channel_portal', label_ar: 'وارد من نطاق بوابة إلكترونية مسجلة لهذه القضية' }; }
         } catch (e) { /* case_agency_channels may not exist yet */ }
       }
     }
@@ -281,16 +365,37 @@ class MailPoller {
     // the broader agency-name/case-title heuristics below, since these
     // phrases were deliberately configured by a user for this exact
     // purpose rather than inferred.
-    if (!matchedCaseId) {
+    if (!matchedCaseId && tierActive(criteria, 'case_channel_keywords')) {
       const haystack = `${msg.subject || ''} ${msg.text || ''}`.toLowerCase();
       if (haystack.trim()) {
         try {
           const { data: channels } = await sup.from('case_agency_channels').select('case_id, agency_id, filter_keywords').not('filter_keywords', 'is', null);
           for (const ch of channels || []) {
             const phrases = (ch.filter_keywords || '').split(/[,\n]+/).map(p => p.trim().toLowerCase()).filter(Boolean);
-            if (phrases.some(p => haystack.includes(p))) { matchedCaseId = ch.case_id; matchedAgencyId = ch.agency_id; break; }
+            const hit = phrases.find(p => haystack.includes(p));
+            if (hit) { matchedCaseId = ch.case_id; matchedAgencyId = ch.agency_id; matchReason = { tier_key: 'case_channel_keywords', label_ar: `تطابق كلمة مفتاحية مسجلة لهذه القضية: "${hit}"` }; break; }
           }
         } catch (e) { /* case_agency_channels may not exist yet */ }
+      }
+    }
+
+    // 2d. By an admin-added GLOBAL keyword rule tied to a specific case --
+    // same idea as 2c but not scoped to one case's own registered channel
+    // (the self-service "ضيف معيار فلترة" ask). Always tied to exactly one
+    // case (enforced NOT NULL at the DB level) -- a keyword with no case to
+    // point at can't do anything, so the admin panel requires one up front
+    // rather than accepting an unscoped rule that would silently never match.
+    if (!matchedCaseId && tierActive(criteria, 'custom_keywords')) {
+      const haystack = `${msg.subject || ''} ${msg.text || ''}`.toLowerCase();
+      if (haystack.trim()) {
+        for (const k of criteria.customKeywords) {
+          const phrase = (k.keyword_phrase || '').trim().toLowerCase();
+          if (phrase && haystack.includes(phrase)) {
+            matchedCaseId = k.case_id;
+            matchReason = { tier_key: 'custom_keywords', label_ar: `تطابق كلمة مفتاحية مخصصة: "${k.keyword_phrase}"` };
+            break;
+          }
+        }
       }
     }
 
@@ -298,7 +403,7 @@ class MailPoller {
     // individual contacts' emails (agency_contacts), since replies
     // legitimately come from a named person at the agency, not always
     // the generic address on file.
-    if (!matchedCaseId && msg.from) {
+    if (!matchedCaseId && msg.from && tierActive(criteria, 'agency_email')) {
       let agencyId = null;
       const { data: agency } = await sup.from('agencies').select('id').eq('email', msg.from).maybeSingle();
       if (agency) agencyId = agency.id;
@@ -323,6 +428,7 @@ class MailPoller {
           matchedAgencyId = agencyId;
           matchedCaseId = distinctCaseIds[0];
           matchedRequestId = agencyReqs[0].id;
+          matchReason = { tier_key: 'agency_email', label_ar: 'وارد من عنوان جهة لها قضية واحدة مفتوحة فقط' };
         } else if (distinctCaseIds.length > 1) {
           const { data: agencyRow } = await sup.from('agencies').select('name_ar, name_en').eq('id', agencyId).maybeSingle();
           const agencyName = agencyRow?.name_ar || agencyRow?.name_en || `جهة #${agencyId}`;
@@ -338,17 +444,17 @@ class MailPoller {
     // from a completely different, previously-unknown address. Also
     // covers a portal-submitted confirmation number saved on the request
     // (case_agency_channels' portal_link flow) getting quoted back.
-    if (!matchedCaseId && extractedRefNumber) {
+    if (!matchedCaseId && extractedRefNumber && tierActive(criteria, 'reference_number')) {
       const { data: reqByRef } = await sup.from('requests').select('id, case_id, agency_id').eq('reference_number', extractedRefNumber).maybeSingle();
-      if (reqByRef) { matchedCaseId = reqByRef.case_id; matchedAgencyId = reqByRef.agency_id; matchedRequestId = reqByRef.id; }
+      if (reqByRef) { matchedCaseId = reqByRef.case_id; matchedAgencyId = reqByRef.agency_id; matchedRequestId = reqByRef.id; matchReason = { tier_key: 'reference_number', label_ar: `يحتوي رقم مرجع مسجل لطلب في هذه القضية: ${extractedRefNumber}` }; }
     }
 
     // 5. By case number in subject
-    if (!matchedCaseId) {
+    if (!matchedCaseId && tierActive(criteria, 'case_number_subject')) {
       const caseMatch = (msg.subject || '').match(/#(\d+)|Case[:\s]*(\d+)/i) || msg.text?.match(/#(\d+)|Case[:\s]*(\d+)/i);
       if (caseMatch) {
         const cid = parseInt(caseMatch[1] || caseMatch[2]);
-        if (cid) { const { data: c } = await sup.from('cases').select('id').eq('id', cid).maybeSingle(); if (c) matchedCaseId = c.id; }
+        if (cid) { const { data: c } = await sup.from('cases').select('id').eq('id', cid).maybeSingle(); if (c) { matchedCaseId = c.id; matchReason = { tier_key: 'case_number_subject', label_ar: `رقم القضية #${cid} مذكور في الرسالة` }; } }
       }
     }
 
@@ -387,35 +493,37 @@ class MailPoller {
       if (haystackLower.trim()) {
         const { data: openCases } = await sup.from('cases').select('id, title, defendant_name, source_agency_name').in('status', ['open', 'in_progress']);
         for (const c of openCases || []) {
-          if (c.title && c.title.trim().length > 6) {
+          if (tierActive(criteria, 'fuzzy_title') && c.title && c.title.trim().length > 6) {
             const t = c.title.trim().toLowerCase();
             if (haystackLower.includes(t) || haystackNorm.includes(normalizeForMatch(t))) addCandidate(c.id, null, `عنوان القضية: ${c.title}`);
           }
-          if (c.defendant_name && c.defendant_name.trim().length > 3) {
+          if (tierActive(criteria, 'fuzzy_defendant') && c.defendant_name && c.defendant_name.trim().length > 3) {
             const d = c.defendant_name.trim().toLowerCase();
             if (haystackLower.includes(d) || haystackNorm.includes(normalizeForMatch(d))) addCandidate(c.id, null, `اسم المتهم: ${c.defendant_name}`);
           }
-          if (c.source_agency_name && c.source_agency_name.trim().length > 3) {
+          if (tierActive(criteria, 'fuzzy_agency_name') && c.source_agency_name && c.source_agency_name.trim().length > 3) {
             const s = c.source_agency_name.trim().toLowerCase();
             if (haystackLower.includes(s) || haystackNorm.includes(normalizeForMatch(s))) addCandidate(c.id, null, `الجهة المصدر: ${c.source_agency_name}`);
           }
         }
 
-        const { data: linkedAgencies } = await sup.from('requests')
-          .select('case_id, cases!inner(status), agencies!inner(id, name_ar, name_en)')
-          .in('cases.status', ['open', 'in_progress'])
-          .limit(500);
-        for (const r of linkedAgencies || []) {
-          const names = [r.agencies?.name_ar, r.agencies?.name_en].filter(n => n && n.trim().length > 6);
-          for (const n of names) {
-            const nl = n.trim().toLowerCase();
-            if (haystackLower.includes(nl) || haystackNorm.includes(normalizeForMatch(nl))) addCandidate(r.case_id, r.agencies?.id, `اسم الجهة: ${n}`);
+        if (tierActive(criteria, 'fuzzy_agency_name')) {
+          const { data: linkedAgencies } = await sup.from('requests')
+            .select('case_id, cases!inner(status), agencies!inner(id, name_ar, name_en)')
+            .in('cases.status', ['open', 'in_progress'])
+            .limit(500);
+          for (const r of linkedAgencies || []) {
+            const names = [r.agencies?.name_ar, r.agencies?.name_en].filter(n => n && n.trim().length > 6);
+            for (const n of names) {
+              const nl = n.trim().toLowerCase();
+              if (haystackLower.includes(nl) || haystackNorm.includes(normalizeForMatch(nl))) addCandidate(r.case_id, r.agencies?.id, `اسم الجهة: ${n}`);
+            }
           }
         }
       }
 
       const senderLocal = emailLocalPart(msg.from);
-      if (senderLocal && !GENERIC_LOCAL_PARTS.has(senderLocal)) {
+      if (tierActive(criteria, 'sender_continuity') && senderLocal && !GENERIC_LOCAL_PARTS.has(senderLocal)) {
         const { data: pastComms } = await sup.from('communications')
           .select('case_id, sender')
           .not('case_id', 'is', null).eq('direction', 'inbound')
@@ -434,6 +542,8 @@ class MailPoller {
       if (candidateIds.length === 1) {
         matchedCaseId = candidateIds[0];
         matchedAgencyId = candidates.get(matchedCaseId).agencyId;
+        const reasons = candidates.get(matchedCaseId).reasons;
+        matchReason = { tier_key: classifyFuzzyReason(reasons[0]), label_ar: reasons.join('، ') };
       } else if (candidateIds.length > 1) {
         possibleMatches = candidateIds.map(id => ({ caseId: id, reasons: candidates.get(id).reasons }));
       }
@@ -459,7 +569,7 @@ class MailPoller {
       }
     }
 
-    return { matchedCaseId, matchedAgencyId, matchedRequestId, possibleMatches };
+    return { matchedCaseId, matchedAgencyId, matchedRequestId, possibleMatches, matchReason: matchedCaseId ? matchReason : null };
   }
 
   // Re-run the matching pipeline against messages that are STILL unlinked
@@ -476,6 +586,7 @@ class MailPoller {
       .gte('created_at', since);
     if (error) { console.error('[mailPoller] rescanUnmatched failed to load candidates:', error.message); return { scanned: 0, linked: 0, ambiguous: 0 }; }
 
+    const criteria = await loadMatchingCriteria(sup);
     let linked = 0;
     let ambiguous = 0;
     for (const row of candidates || []) {
@@ -487,10 +598,10 @@ class MailPoller {
         // reuse it as the inReplyTo signal for tier 1; there's no equivalent
         // for tier 2 (References) on already-stored rows.
         const wasReply = row.thread_id && row.thread_id !== row.message_id;
-        const { matchedCaseId, matchedAgencyId, matchedRequestId, possibleMatches } = await this.matchToCase(sup, {
+        const { matchedCaseId, matchedAgencyId, matchedRequestId, possibleMatches, matchReason } = await this.matchToCase(sup, {
           subject: row.subject, text: row.body, from: row.sender,
           inReplyTo: wasReply ? row.thread_id : null, references: null,
-        });
+        }, null, criteria);
         if (!matchedCaseId) {
           // Not a confident match, but if the fuzzy tiers found more than
           // one plausible case, save that as a hint on the row's metadata
@@ -506,10 +617,18 @@ class MailPoller {
           }
           continue;
         }
-        const { error: updateErr } = await sup.from('communications').update({
-          case_id: matchedCaseId, agency_id: matchedAgencyId, request_id: matchedRequestId,
+        let { error: updateErr } = await sup.from('communications').update({
+          case_id: matchedCaseId, agency_id: matchedAgencyId, request_id: matchedRequestId, match_reason: matchReason,
         }).eq('id', row.id);
+        // migrations/033 (match_reason column) may not have been run yet --
+        // retry without it rather than losing the link entirely.
+        if (updateErr && /match_reason/.test(updateErr.message)) {
+          ({ error: updateErr } = await sup.from('communications').update({
+            case_id: matchedCaseId, agency_id: matchedAgencyId, request_id: matchedRequestId,
+          }).eq('id', row.id));
+        }
         if (updateErr) { console.error(`[mailPoller] rescanUnmatched: failed to link communication ${row.id}:`, updateErr.message); continue; }
+        await bumpConfirmed(sup, matchReason?.tier_key);
         linked++;
       } catch (e) {
         console.error(`[mailPoller] rescanUnmatched: matching threw for communication ${row.id}:`, e.message);
@@ -522,6 +641,10 @@ class MailPoller {
     const sup = getSupabase();
     let newCount = 0;
     const errors = [];
+    // Loaded once for the whole batch, not once per message -- an admin's
+    // disabled tier or added keyword rule applies uniformly across every
+    // message this poll pass touches.
+    const criteria = messages.length ? await loadMatchingCriteria(sup) : null;
 
     for (const msg of messages) {
      try {
@@ -538,7 +661,17 @@ class MailPoller {
       // actually recover and store the file now, not just its name --
       // whether the email has a case_id or not (uploadInboundAttachment
       // below picks the right destination either way).
-      const { data: existing } = await sup.from('communications').select('id, body_html, case_id, metadata').eq('message_id', msg.messageId).maybeSingle();
+      // .maybeSingle() errors out (returns no data, only an error) once MORE
+      // THAN ONE row matches -- and that error was never checked here, only
+      // `data` was. Once a message had even one duplicate row (from the
+      // TOCTOU race this same lock is meant to close), every future poll's
+      // dedup check silently broke, read as "not found", and reinserted
+      // ANOTHER duplicate -- confirmed live: 4 messages each duplicated
+      // exactly 16 times this way. .limit(1) never errors on multiple
+      // matches, so this stays correct (and self-healing) even against an
+      // already-duplicated row.
+      const { data: existingRows } = await sup.from('communications').select('id, body_html, case_id, metadata').eq('message_id', msg.messageId).order('id', { ascending: true }).limit(1);
+      const existing = existingRows?.[0] || null;
       if (existing) {
         if (!existing.body_html && msg.html) {
           const { error: backfillErr } = await sup.from('communications').update({ body_html: msg.html }).eq('id', existing.id);
@@ -569,7 +702,7 @@ class MailPoller {
         continue;
       }
 
-      const { matchedCaseId, matchedAgencyId, matchedRequestId, possibleMatches } = await this.matchToCase(sup, msg, forceCaseId);
+      const { matchedCaseId, matchedAgencyId, matchedRequestId, possibleMatches, matchReason } = await this.matchToCase(sup, msg, forceCaseId, criteria);
       const extractedRefNumber = extractReferenceNumber(msg.subject) || extractReferenceNumber(msg.text);
 
       // Persist attachment content to Google Drive (was previously uploaded
@@ -619,14 +752,20 @@ class MailPoller {
       // it), leaving request_id permanently NULL for anything matched
       // through the normal "جلب الإيميلات" flow.
       if (matchedRequestId) insertData.request_id = matchedRequestId;
+      if (matchReason) insertData.match_reason = matchReason;
 
-      // migrations/026 (body_html) may not have been run yet in this
-      // environment -- retry without it rather than losing the whole
-      // message, same self-healing pattern used for case_comments/
-      // case_documents inserts elsewhere in this codebase.
+      // migrations/026 (body_html) / migrations/033 (match_reason) may not
+      // have been run yet in this environment -- retry without whichever
+      // one is missing rather than losing the whole message, same
+      // self-healing pattern used for case_comments/case_documents inserts
+      // elsewhere in this codebase.
       let { error: insertError } = await sup.from('communications').insert(insertData);
       if (insertError && /body_html/.test(insertError.message)) {
         delete insertData.body_html;
+        ({ error: insertError } = await sup.from('communications').insert(insertData));
+      }
+      if (insertError && /match_reason/.test(insertError.message)) {
+        delete insertData.match_reason;
         ({ error: insertError } = await sup.from('communications').insert(insertData));
       }
       if (insertError) {
@@ -635,6 +774,7 @@ class MailPoller {
         continue; // do not count a failed insert as a new message
       }
       newCount++;
+      if (matchedCaseId) await bumpConfirmed(sup, matchReason?.tier_key);
 
       // Create timeline event + notify assignees for matched emails
       if (matchedCaseId) {
@@ -693,8 +833,7 @@ class MailPoller {
     const errors = [];
     for (const acct of accounts) {
       try {
-        const messages = await this.pollAccount(acct);
-        const { count, errors: msgErrors } = await this.processMessages(acct.id, messages);
+        const { count, errors: msgErrors } = await this.pollAndProcessAccount(acct);
         if (count > 0) console.log(`IMAP: ${count} new messages from ${acct.email}`);
         total += count;
         for (const e of msgErrors) errors.push({ account: acct.email, ...e });
@@ -762,10 +901,9 @@ class MailPoller {
         if (!oldest) { results.push({ account: acct.email, skipped: true, reason: 'nothing missing body_html' }); continue; }
 
         const since = new Date(new Date(oldest.created_at).getTime() - 24 * 60 * 60 * 1000);
-        const messages = await this.pollAccount(acct, since);
         const before = await sup.from('communications').select('id', { count: 'exact', head: true })
           .eq('email_account_id', acct.id).eq('direction', 'inbound').is('body_html', null);
-        await this.processMessages(acct.id, messages);
+        await this.pollAndProcessAccount(acct, since);
         const after = await sup.from('communications').select('id', { count: 'exact', head: true })
           .eq('email_account_id', acct.id).eq('direction', 'inbound').is('body_html', null);
         results.push({ account: acct.email, since: since.toISOString(), stillMissingBefore: before.count || 0, stillMissingAfter: after.count || 0 });
@@ -799,9 +937,8 @@ class MailPoller {
         if (!oldest) { results.push({ account: acct.email, skipped: true, reason: 'nothing missing attachments' }); continue; }
 
         const since = new Date(new Date(oldest.created_at).getTime() - 24 * 60 * 60 * 1000);
-        const messages = await this.pollAccount(acct, since);
         const before = await pendingFilter(sup.from('communications').select('id', { count: 'exact', head: true }).eq('email_account_id', acct.id));
-        await this.processMessages(acct.id, messages);
+        await this.pollAndProcessAccount(acct, since);
         const after = await pendingFilter(sup.from('communications').select('id', { count: 'exact', head: true }).eq('email_account_id', acct.id));
         results.push({ account: acct.email, since: since.toISOString(), stillMissingBefore: before.count || 0, stillMissingAfter: after.count || 0 });
       } catch (e) {

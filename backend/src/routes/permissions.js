@@ -16,6 +16,11 @@ const RESOURCES = [
   { key: 'settings', label: 'الإعدادات', actions: ['view', 'manage'] },
   { key: 'users', label: 'المستخدمين', actions: ['invite', 'edit', 'delete'] },
   { key: 'email_accounts', label: 'حسابات البريد', actions: ['manage', 'override_lock'] },
+  // Self-service control over the email auto-matching heuristics
+  // (mailPoller.js's matchToCase) -- who may toggle a built-in matching
+  // tier on/off, or add/remove a custom global keyword rule, from the
+  // "معايير ربط الإيميلات" panel in صندوق البريد.
+  { key: 'email_matching', label: 'معايير ربط الإيميلات', actions: ['manage_criteria'] },
   { key: 'case_comments', label: 'نقاش الفريق (داخل القضية)', actions: ['delete_any'] },
   { key: 'forum', label: 'المنتدى العام', actions: ['view', 'create_topic', 'comment', 'pin', 'delete_any'] },
   { key: 'intake', label: 'الاستقبال الذكي', actions: ['view', 'create', 'edit', 'promote', 'manage_criteria'] },

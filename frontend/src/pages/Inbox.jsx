@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { api, getApiBase } from '../api';
+import { api, getApiBase, getCurrentUser } from '../api';
 import { Mail, Search, Inbox, Archive, ArchiveRestore, Link2, Unlink, ChevronDown, RefreshCw, Loader2, ExternalLink, Trash2, Send, X, Paperclip, Download, CheckCircle2, ChevronLeft, ChevronRight, AlertTriangle, Filter } from 'lucide-react';
 import AppSection from '../components/ds/AppSection';
 import AppButton from '../components/ds/AppButton';
 import AppBadge from '../components/ds/AppBadge';
 import AppEmptyState from '../components/ds/AppEmptyState';
+import AppDialog from '../components/ds/AppDialog';
 import EmailBodyView from '../components/EmailBodyView';
 
 const BASE = getApiBase();
@@ -119,6 +120,14 @@ export default function InboxPage() {
   const [page, setPage] = useState(0);
   const [pageInput, setPageInput] = useState('1');
   const [accounts, setAccounts] = useState([]);
+  const [canManageCriteria, setCanManageCriteria] = useState(false);
+  const [showCriteriaPanel, setShowCriteriaPanel] = useState(false);
+  useEffect(() => {
+    api.get('/permissions/mine').then(d => {
+      const isAdmin = getCurrentUser()?.role === 'admin';
+      setCanManageCriteria(isAdmin || !!(d.permissions || []).find(p => p.resource === 'email_matching' && p.action === 'manage_criteria'));
+    }).catch(() => {});
+  }, []);
 
   // Filters are staged in `pending` and only take effect once "تطبيق
   // الفلترة" is pressed, copying into `applied` (which fetchInbox actually
@@ -241,6 +250,18 @@ export default function InboxPage() {
     } catch (e) { alert('❌ ' + e.message); }
   };
 
+  // Distinct from a plain unlink -- also tells the matching-criteria system
+  // the reason behind this link was wrong, so "معايير ربط الإيميلات" can
+  // show which tiers actually produce bad matches.
+  const handleRejectMatch = async (id) => {
+    if (!confirm('هذا الربط غير صحيح -- فك الارتباط وتسجيل الملاحظة؟')) return;
+    try {
+      const r = await fetch(`${BASE}/inbox/${id}/reject-match`, { method: 'PUT', headers: hdrs() });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر تسجيل الملاحظة')); return; }
+      fetchInbox();
+    } catch (e) { alert('❌ ' + e.message); }
+  };
+
   const handleReview = async (id) => {
     try {
       const r = await fetch(`${BASE}/inbox/${id}/review`, { method: 'PUT', headers: hdrs() });
@@ -358,6 +379,11 @@ export default function InboxPage() {
           <h1 className="text-lg font-semibold" style={{ color: 'var(--ds-text-primary)' }}>صندوق البريد</h1>
         </div>
         <div className="flex items-center gap-2">
+          {canManageCriteria && (
+            <AppButton size="sm" variant="secondary" icon={<Filter className="w-3.5 h-3.5" />} onClick={() => setShowCriteriaPanel(true)}>
+              معايير ربط الإيميلات
+            </AppButton>
+          )}
           <AppButton size="sm" variant="secondary" icon={<Send className="w-3.5 h-3.5" />} onClick={() => { setShowComposer(true); setComposeError(''); }}>
             رسالة جديدة
           </AppButton>
@@ -366,6 +392,8 @@ export default function InboxPage() {
           </AppButton>
         </div>
       </div>
+
+      <MatchingCriteriaPanel open={showCriteriaPanel} onClose={() => setShowCriteriaPanel(false)} />
 
       {/* Standalone composer -- not tied to any case */}
       {showComposer && (
@@ -472,7 +500,7 @@ export default function InboxPage() {
           <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--ds-text-muted)' }} />
           <input value={pending.search} onChange={e => setPending(p => ({ ...p, search: e.target.value }))}
             onKeyDown={e => { if (e.key === 'Enter') applyFilters(); }}
-            placeholder="بحث في البريد..."
+            placeholder="بحث بالموضوع، المرسل، أو رقم الإيميل..."
             className="w-full text-xs p-2 pl-8 rounded-lg ds-transition-colors"
             style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
         </div>
@@ -512,6 +540,7 @@ export default function InboxPage() {
                 <Mail className="w-4 h-4 shrink-0 mt-0.5" style={{ color: msg.is_read === false ? '#3b82f6' : 'var(--ds-text-muted)' }} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                    <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }} title="رقم الإيميل">#{msg.id}</span>
                     <span className="text-xs font-semibold" style={{ color: 'var(--ds-text-primary)' }}>{msg.sender || 'مجهول'}</span>
                     <AppBadge variant={msg.direction === 'inbound' ? 'info' : 'success'} size="xs">{msg.direction === 'inbound' ? 'وارد' : 'صادر'}</AppBadge>
                     {msg.case_id && <AppBadge variant="success" size="xs">مرتبط (#{msg.case_id})</AppBadge>}
@@ -571,6 +600,20 @@ export default function InboxPage() {
                   </button>
                 </div>
               </div>
+
+              {/* Confirmed-match reason -- previously a linked email showed
+                  no explanation at all, so a wrong auto-link was
+                  indistinguishable from a correct one. */}
+              {msg.case_id && msg.match_reason && (
+                <div className="mt-2 p-2 rounded text-[11px] flex items-center justify-between gap-2" style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }} onClick={e => e.stopPropagation()}>
+                  <span style={{ color: 'var(--ds-text-secondary)' }}>بسبب: {msg.match_reason.label_ar}</span>
+                  {msg.match_reason.tier_key !== 'manual' && (
+                    <button onClick={() => handleRejectMatch(msg.id)} className="px-2 py-0.5 rounded shrink-0 text-[10px]" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
+                      ❌ هذا الربط غير صحيح
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* Ambiguous-match hint: the smart matcher found more than one
                   plausible case and deliberately did NOT auto-link, so the
@@ -647,5 +690,101 @@ export default function InboxPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// "معايير ربط الإيميلات" -- self-service control over mailPoller.js's
+// matching heuristics, mirroring AIIntake.jsx's CriteriaAdminPanel pattern
+// (list/toggle criteria) plus a second section for admin-added global
+// keyword rules, since built-in tiers can only be toggled/relabeled (they
+// map to real code paths) while custom rules are fully admin-managed.
+function MatchingCriteriaPanel({ open, onClose }) {
+  const [criteria, setCriteria] = useState([]);
+  const [keywords, setKeywords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [newKeyword, setNewKeyword] = useState('');
+  const [newCaseId, setNewCaseId] = useState('');
+
+  const fetchAll = () => {
+    setLoading(true);
+    Promise.all([api.get('/inbox/matching-criteria'), api.get('/inbox/matching-keywords')])
+      .then(([c, k]) => { setCriteria(c.data || []); setKeywords(k.data || []); })
+      .catch(e => alert('❌ ' + e.message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { if (open) fetchAll(); }, [open]);
+
+  const toggleCriterion = async (item) => {
+    try { await api.put(`/inbox/matching-criteria/${item.tier_key}`, { is_active: !item.is_active }); fetchAll(); }
+    catch (e) { alert('❌ ' + e.message); }
+  };
+
+  const addKeyword = async () => {
+    if (!newKeyword.trim() || !newCaseId) return;
+    try {
+      await api.post('/inbox/matching-keywords', { keyword_phrase: newKeyword.trim(), case_id: parseInt(newCaseId) });
+      setNewKeyword(''); setNewCaseId(''); fetchAll();
+    } catch (e) { alert('❌ ' + e.message); }
+  };
+
+  const deleteKeyword = async (id) => {
+    if (!confirm('حذف هذه الكلمة المفتاحية؟')) return;
+    try { await api.delete(`/inbox/matching-keywords/${id}`); fetchAll(); }
+    catch (e) { alert('❌ ' + e.message); }
+  };
+
+  return (
+    <AppDialog open={open} onClose={onClose} title="معايير ربط الإيميلات" width="640px">
+      {loading ? (
+        <div className="flex items-center justify-center p-8"><Loader2 className="w-5 h-5 animate-spin" style={{ color: 'var(--ds-accent)' }} /></div>
+      ) : (
+        <div className="space-y-5">
+          <div>
+            <p className="text-xs mb-2" style={{ color: 'var(--ds-text-muted)' }}>
+              كل معيار هو أسلوب يستخدمه النظام لربط إيميل وارد بقضية تلقائيًا. تعطيل معيار يوقف استخدامه في أي ربط جديد فورًا. الأرقام أسفل كل معيار توضح كم مرة نجح (✅) وكم مرة رفضه أحد الموظفين لاحقًا (❌) عبر زر "هذا الربط غير صحيح".
+            </p>
+            <div className="space-y-1.5 max-h-72 overflow-y-auto">
+              {criteria.map(c => (
+                <div key={c.tier_key} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)', opacity: c.is_active ? 1 : 0.5 }}>
+                  <div className="min-w-0">
+                    <div className="text-sm" style={{ color: 'var(--ds-text-primary)' }}>{c.label_ar}</div>
+                    <div className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>
+                      {c.description} — ✅ {c.confirmed_count || 0} · ❌ {c.rejected_count || 0}
+                    </div>
+                  </div>
+                  <button onClick={() => toggleCriterion(c)} className="text-[11px] px-2 py-1 rounded-lg shrink-0" style={{ background: 'var(--ds-bg-secondary)', color: c.is_active ? '#22c55e' : 'var(--ds-text-muted)' }}>
+                    {c.is_active ? 'مفعّل' : 'معطّل'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs mb-2 font-medium" style={{ color: 'var(--ds-text-primary)' }}>كلمات مفتاحية مخصصة</p>
+            <p className="text-[11px] mb-2" style={{ color: 'var(--ds-text-muted)' }}>أي إيميل وارد يحتوي هذه الكلمة/العبارة يُربط تلقائيًا بالقضية المحددة.</p>
+            <div className="flex gap-2 mb-2">
+              <input value={newKeyword} onChange={e => setNewKeyword(e.target.value)} placeholder="كلمة أو عبارة"
+                className="flex-1 px-2.5 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+              <input value={newCaseId} onChange={e => setNewCaseId(e.target.value)} placeholder="رقم القضية" type="number"
+                className="w-28 px-2.5 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
+              <AppButton size="sm" onClick={addKeyword}>إضافة</AppButton>
+            </div>
+            <div className="space-y-1.5 max-h-56 overflow-y-auto">
+              {keywords.map(k => (
+                <div key={k.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
+                  <span className="text-xs" style={{ color: 'var(--ds-text-primary)' }}>"{k.keyword_phrase}" ← قضية #{k.case_id}{k.case_title ? ` (${k.case_title})` : ''}</span>
+                  <button onClick={() => deleteKeyword(k.id)} className="p-1 rounded-lg shrink-0" style={{ color: 'var(--ds-text-muted)' }}
+                    onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = 'var(--ds-text-muted)'}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+              {keywords.length === 0 && <p className="text-[11px] text-center py-2" style={{ color: 'var(--ds-text-muted)' }}>لا توجد كلمات مفتاحية مخصصة بعد</p>}
+            </div>
+          </div>
+        </div>
+      )}
+    </AppDialog>
   );
 }

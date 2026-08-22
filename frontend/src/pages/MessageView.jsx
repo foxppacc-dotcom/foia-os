@@ -53,6 +53,15 @@ export default function MessageView() {
   };
 
   useEffect(() => { fetchMessage(); }, [id]);
+
+  const handleRejectMatch = async () => {
+    if (!confirm('هذا الربط غير صحيح -- فك الارتباط وتسجيل الملاحظة؟')) return;
+    try {
+      const r = await fetch(`${BASE}/inbox/${id}/reject-match`, { method: 'PUT', headers: hdrs() });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر تسجيل الملاحظة')); return; }
+      fetchMessage();
+    } catch (e) { alert('❌ ' + e.message); }
+  };
   useEffect(() => {
     fetch(`${BASE}/email-accounts`, { headers: hdrs() }).then(r => r.json()).then(d => setAccounts(d.data || [])).catch(() => {});
   }, []);
@@ -132,6 +141,7 @@ export default function MessageView() {
             <div className="flex items-center gap-2 min-w-0">
               <Mail className="w-5 h-5 shrink-0" style={{ color: msg.direction === 'inbound' ? '#22c55e' : '#3b82f6' }} />
               <h1 className="text-base font-semibold truncate" style={{ color: 'var(--ds-text-primary)' }}>{msg.subject || '(بدون موضوع)'}</h1>
+              <span className="text-[10px] shrink-0" style={{ color: 'var(--ds-text-muted)' }} title="رقم الإيميل">#{msg.id}</span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               <span className="text-[10px] px-2 py-0.5 rounded-full font-medium" style={{ background: msg.direction === 'inbound' ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)', color: msg.direction === 'inbound' ? '#22c55e' : '#3b82f6' }}>
@@ -152,6 +162,17 @@ export default function MessageView() {
             {msg.cc && <div><span style={{ color: 'var(--ds-text-muted)' }}>نسخة: </span>{msg.cc}</div>}
             <div><span style={{ color: 'var(--ds-text-muted)' }}>التاريخ: </span>{formatDateTime(msg.created_at)}</div>
           </div>
+
+          {msg.case_id && msg.match_reason && (
+            <div className="mb-3 p-2.5 rounded-lg text-[11px] flex items-center justify-between gap-2" style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }}>
+              <span style={{ color: 'var(--ds-text-secondary)' }}>بسبب: {msg.match_reason.label_ar}</span>
+              {msg.match_reason.tier_key !== 'manual' && (
+                <button onClick={handleRejectMatch} className="px-2 py-0.5 rounded shrink-0 text-[10px]" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
+                  ❌ هذا الربط غير صحيح
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Full body, matching the source (rendered HTML with clickable
               links/portal buttons when available, plain text otherwise) */}

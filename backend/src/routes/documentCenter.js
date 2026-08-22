@@ -606,6 +606,14 @@ router.get('/inbox', requireAuth, async (req, res) => {
         sup.from('communications').select('id').ilike('body', `%${search}%`),
       ]);
       searchIds = new Set([...(bySubject.data || []), ...(bySender.data || []), ...(byBody.data || [])].map(r => r.id));
+      // Email number: not text, so ilike can't match it directly -- same
+      // pattern as cases.js's search-by-case-number (fetch every id once,
+      // compare as a string), only when the search term actually contains a
+      // digit (skips the wasted round-trip otherwise).
+      if (/\d/.test(search)) {
+        const { data: allIds } = await sup.from('communications').select('id');
+        (allIds || []).forEach(c => { if (String(c.id).includes(search.trim())) searchIds.add(c.id); });
+      }
     }
 
     // migrations/012 (is_archived/reviewed_by) may not have been run yet in
@@ -764,6 +772,10 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
     if (case_id) updates.case_id = parseInt(case_id);
     if (agency_id) updates.agency_id = parseInt(agency_id);
     updates.is_read = true;
+    // A manual link is just as much a "why is this linked" fact as an
+    // automatic one -- previously only automatic matches carried any reason
+    // at all, and even those were thrown away once resolved.
+    if (case_id) updates.match_reason = { tier_key: 'manual', label_ar: 'تم الربط يدويًا بواسطة موظف' };
 
     // A manual link resolves whatever ambiguity the automatic matcher
     // flagged (see mailPoller.js's possibleMatches) -- clear it so a
@@ -779,7 +791,13 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
       if (meta.possible_matches) { delete meta.possible_matches; updates.metadata = JSON.stringify(meta); }
     }
 
-    const { error } = await sup.from('communications').update(updates).eq('id', parseInt(req.params.id));
+    let { error } = await sup.from('communications').update(updates).eq('id', parseInt(req.params.id));
+    // migrations/033 (match_reason column) may not have been run yet --
+    // retry without it rather than failing the link entirely.
+    if (error && /match_reason/.test(error.message)) {
+      delete updates.match_reason;
+      ({ error } = await sup.from('communications').update(updates).eq('id', parseInt(req.params.id)));
+    }
     if (error) return res.status(400).json({ error: error.message });
 
     // A manually-linked email is exactly the same "email arrived on this
@@ -870,11 +888,116 @@ router.put('/inbox/:id/unlink', requireAuth, async (req, res) => {
   if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
     return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
   }
-  const { error } = await sup.from('communications')
-    .update({ case_id: null, agency_id: null, request_id: null })
+  let { error } = await sup.from('communications')
+    .update({ case_id: null, agency_id: null, request_id: null, match_reason: null })
     .eq('id', parseInt(req.params.id));
+  if (error && /match_reason/.test(error.message)) {
+    ({ error } = await sup.from('communications').update({ case_id: null, agency_id: null, request_id: null }).eq('id', parseInt(req.params.id)));
+  }
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
+});
+
+// PUT /api/inbox/:id/reject-match -- "هذا الربط غير صحيح": same effect as
+// unlink, but also tells the matching-criteria system the reason that
+// produced this link was wrong, so an admin reviewing "معايير ربط
+// الإيميلات" can see which tiers are actually noisy instead of guessing.
+// Structural tiers (thread_reply/thread_references) and manual links aren't
+// heuristics to tune, so rejecting one just unlinks without affecting any
+// criterion's stats.
+router.put('/inbox/:id/reject-match', requireAuth, async (req, res) => {
+  const sup = getSupabase();
+  const { data: comm } = await sup.from('communications').select('case_id, match_reason').eq('id', parseInt(req.params.id)).maybeSingle();
+  if (!comm) return res.status(404).json({ error: 'Message not found' });
+  if (comm.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
+    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+  }
+  let { error } = await sup.from('communications')
+    .update({ case_id: null, agency_id: null, request_id: null, match_reason: null })
+    .eq('id', parseInt(req.params.id));
+  if (error && /match_reason/.test(error.message)) {
+    ({ error } = await sup.from('communications').update({ case_id: null, agency_id: null, request_id: null }).eq('id', parseInt(req.params.id)));
+  }
+  if (error) return res.status(400).json({ error: error.message });
+
+  const tierKey = comm.match_reason?.tier_key;
+  if (tierKey && !['thread_reply', 'thread_references', 'manual'].includes(tierKey)) {
+    try {
+      const { data: crit } = await sup.from('email_matching_criteria').select('rejected_count').eq('tier_key', tierKey).maybeSingle();
+      if (crit) await sup.from('email_matching_criteria').update({ rejected_count: (crit.rejected_count || 0) + 1 }).eq('tier_key', tierKey);
+    } catch (e) { /* migrations/033 may not have been run yet */ }
+  }
+  res.json({ success: true });
+});
+
+// ---- معايير ربط الإيميلات: self-service control over mailPoller.js's
+// matching heuristics, mirroring intake.js's /intake/criteria-definitions
+// CRUD pattern exactly. Built-in tiers are pre-seeded by migrations/033 and
+// can only be toggled/relabeled (they map to real code paths, not
+// admin-invented rules); custom keyword rules are fully admin-managed.
+
+// GET /api/inbox/matching-criteria — list built-in tiers with their
+// confirmed/rejected stats, so an admin can see which ones are noisy.
+router.get('/inbox/matching-criteria', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('email_matching_criteria').select('*').order('id', { ascending: true });
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (email_matching_criteria)' : error.message });
+    res.json({ success: true, data: data || [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/inbox/matching-criteria/:tierKey — toggle on/off, edit label.
+router.put('/inbox/matching-criteria/:tierKey', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+  try {
+    const { is_active, label_ar, description } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (is_active !== undefined) updates.is_active = is_active;
+    if (label_ar !== undefined) updates.label_ar = label_ar;
+    if (description !== undefined) updates.description = description;
+    const sup = getSupabase();
+    const { error } = await sup.from('email_matching_criteria').update(updates).eq('tier_key', req.params.tierKey);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET/POST/DELETE /api/inbox/matching-keywords — custom global keyword
+// rules (the "ضيف معيار فلترة" ask). No PUT -- edited via delete+recreate,
+// same as case_agency_channels' own channel rows.
+router.get('/inbox/matching-keywords', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('email_matching_custom_keywords').select('*, cases(title)').order('created_at', { ascending: false });
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (email_matching_custom_keywords)' : error.message });
+    res.json({ success: true, data: (data || []).map(r => ({ ...r, case_title: r.cases?.title || null, cases: undefined })) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/inbox/matching-keywords', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+  try {
+    const { keyword_phrase, case_id } = req.body;
+    if (!keyword_phrase || !keyword_phrase.trim()) return res.status(400).json({ error: 'keyword_phrase مطلوب' });
+    if (!case_id) return res.status(400).json({ error: 'case_id مطلوب -- كلمة مفتاحية بلا قضية محددة لن تربط أي شيء' });
+    const sup = getSupabase();
+    if (!(await canAccessCase(sup, req.user, parseInt(case_id)))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
+    const { data, error } = await sup.from('email_matching_custom_keywords').insert({
+      keyword_phrase: keyword_phrase.trim(), case_id: parseInt(case_id), created_by: req.user.id,
+    }).select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.status(201).json({ success: true, data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/inbox/matching-keywords/:id', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { error } = await sup.from('email_matching_custom_keywords').delete().eq('id', parseInt(req.params.id));
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/communications/:id — a single message's full detail, for
