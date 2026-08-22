@@ -606,14 +606,15 @@ router.get('/inbox', requireAuth, async (req, res) => {
         sup.from('communications').select('id').ilike('body', `%${search}%`),
       ]);
       searchIds = new Set([...(bySubject.data || []), ...(bySender.data || []), ...(byBody.data || [])].map(r => r.id));
-      // Email number: not text, so ilike can't match it directly -- same
-      // pattern as cases.js's search-by-case-number (fetch every id once,
-      // compare as a string), only when the search term actually contains a
-      // digit (skips the wasted round-trip otherwise).
-      if (/\d/.test(search)) {
-        const { data: allIds } = await sup.from('communications').select('id');
-        (allIds || []).forEach(c => { if (String(c.id).includes(search.trim())) searchIds.add(c.id); });
-      }
+      // Email number -- an exact lookup (`.eq`, indexed, no scale limit),
+      // not the fetch-every-id-and-substring-match approach cases.js uses
+      // for case numbers. communications already has 1200+ rows and grows
+      // constantly from live mail ingestion; an unbounded `.select('id')`
+      // silently truncates at PostgREST's default 1000-row cap, so anything
+      // past that row would never match no matter what was typed -- confirmed
+      // live (1219 rows, only 1000 returned). cases.js's identical pattern
+      // hasn't hit this yet (181 rows) but has the same latent ceiling.
+      if (/^\d+$/.test(search.trim())) searchIds.add(parseInt(search.trim()));
     }
 
     // migrations/012 (is_archived/reviewed_by) may not have been run yet in
