@@ -52,15 +52,19 @@ const CONFIG = {
   },
 };
 
-// Validate critical secrets at startup
+// Validate critical secrets at startup -- these three are load-bearing for
+// EVERY request (DB access, auth). A warn-only check let a misconfigured
+// deploy boot "successfully" and then fail unpredictably on whatever route
+// happened to be hit first, with a confusing error far from the real cause.
+// Throwing here means the failure is immediate and points straight at the
+// actual missing variable, on the very first request in this process.
 function validate() {
   const missing = [];
   if (!CONFIG.supabase.url) missing.push('SUPABASE_URL');
   if (!CONFIG.supabase.serviceKey) missing.push('SUPABASE_SERVICE_ROLE_KEY');
   if (!CONFIG.jwt.secret) missing.push('JWT_SECRET');
   if (missing.length > 0) {
-    console.warn(`⚠️ Missing environment variables: ${missing.join(', ')}`);
-    console.warn('   The server may not start correctly without these.');
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
 }
 

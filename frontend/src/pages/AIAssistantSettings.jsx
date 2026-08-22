@@ -235,10 +235,10 @@ function KnowledgeCenter({ toast }) {
 // the floating bubble -- see Dashboard.jsx. This page is the only recovery
 // path if the Dashboard button itself gets hidden.
 function DashboardButtonVisibilityToggle() {
-  const [hidden, setHidden] = useState(() => localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1');
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1'; } catch { return false; } });
   const toggle = () => {
     const next = !hidden;
-    localStorage.setItem(DASHBOARD_BUTTON_HIDDEN_KEY, next ? '1' : '0');
+    try { localStorage.setItem(DASHBOARD_BUTTON_HIDDEN_KEY, next ? '1' : '0'); } catch {}
     setHidden(next);
     window.dispatchEvent(new Event(DASHBOARD_BUTTON_VISIBILITY_EVENT));
   };

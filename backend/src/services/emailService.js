@@ -81,10 +81,17 @@ class EmailService {
       })),
     });
 
-    // Increment sent_today
+    // Re-read the count right before writing rather than reusing the value
+    // captured at function entry (stale after the awaited SMTP round-trip) --
+    // two concurrent sends from the same account would otherwise both read
+    // the same starting count and both write back the same incremented
+    // value, silently losing one send from the counter and letting the
+    // account exceed daily_limit with no trace. Same fix already applied to
+    // ai_provider_configs.daily_request_count.
+    const { data: fresh } = await sup.from('email_accounts').select('sent_today').eq('id', accountId).maybeSingle();
     await sup
       .from('email_accounts')
-      .update({ sent_today: (account.sent_today || 0) + 1 })
+      .update({ sent_today: (fresh?.sent_today ?? account.sent_today ?? 0) + 1 })
       .eq('id', accountId);
 
     return { messageId: info.messageId, accepted: info.accepted, rejected: info.rejected };

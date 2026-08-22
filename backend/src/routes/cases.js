@@ -638,6 +638,23 @@ router.delete('/cases/:id', requirePermission('cases', 'delete'), requireCaseAcc
   const { data: c } = await sup.from('cases').select('id, title').eq('id', id).single();
   if (!c) return res.status(404).json({ error: 'Case not found' });
 
+  // No enforced FK/cascade behind these -- deleting the case row alone left
+  // every dependent table pointing at a case_id that no longer exists
+  // (Inbox still listing the case's communications, canAccessCase silently
+  // no-op'ing on the dead id, Drive-uploaded files becoming unreachable
+  // through the app while still consuming storage). Clean up everything
+  // that's operational data; activity_logs is left alone deliberately --
+  // it's the audit trail, including of this deletion itself.
+  const dependentTables = [
+    'requests', 'case_documents', 'case_comments', 'communications',
+    'case_assignees', 'case_agency_channels', 'case_records_checklist', 'production_queue',
+  ];
+  for (const table of dependentTables) {
+    const { error: cleanupErr } = await sup.from(table).delete().eq('case_id', id);
+    if (cleanupErr) console.error(`[cases] delete cleanup failed for ${table}:`, cleanupErr.message);
+  }
+  await sup.from('notifications').delete().eq('target_type', 'case').eq('target_id', id);
+
   const { error } = await sup.from('cases').delete().eq('id', id);
   if (error) return res.status(500).json({ success: false, error: error.message });
 

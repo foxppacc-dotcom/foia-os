@@ -92,11 +92,15 @@ export default function AIAssistantWidget() {
     cleanupDragListeners();
     const wasMoved = dragState.current?.moved;
     dragState.current = null;
-    if (wasMoved) { localStorage.setItem(POS_KEY, JSON.stringify(position)); return; }
+    if (wasMoved) { try { localStorage.setItem(POS_KEY, JSON.stringify(position)); } catch {} return; }
     // A click (no real movement) toggles the widget instead of dragging it.
     if (collapsed) { setCollapsed(false); setHasUnread(false); }
   };
-  useEffect(() => { localStorage.setItem(POS_KEY, JSON.stringify(position)); }, [position]);
+  // Global widget, mounted for the entire session -- an unguarded setItem
+  // throwing here (storage disabled/private mode/quota exceeded) would
+  // crash on every position change, including every pointermove tick of an
+  // active drag, not just once.
+  useEffect(() => { try { localStorage.setItem(POS_KEY, JSON.stringify(position)); } catch {} }, [position]);
   // Also clean up if the component itself unmounts mid-drag (route swap
   // wouldn't do this since the widget is global, but defensive regardless).
   useEffect(() => () => cleanupDragListeners(), []);

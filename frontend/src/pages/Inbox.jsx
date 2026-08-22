@@ -322,9 +322,12 @@ export default function InboxPage() {
 
   const handleDelete = async (id) => {
     if (!confirm('حذف هذه الرسالة نهائيًا؟')) return;
-    await fetch(`${BASE}/communications/${id}`, { method: 'DELETE', headers: hdrs() });
-    fetchInbox();
-    fetchUnread();
+    try {
+      const r = await fetch(`${BASE}/communications/${id}`, { method: 'DELETE', headers: hdrs() });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ فشل الحذف: ' + (d.error || 'خطأ غير معروف')); return; }
+      fetchInbox();
+      fetchUnread();
+    } catch (e) { alert('❌ فشل الحذف: ' + e.message); }
   };
 
   const statusCounts = [

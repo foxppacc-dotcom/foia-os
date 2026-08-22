@@ -6,6 +6,7 @@ export default function PhoneLogs() {
   const [cases, setCases] = useState([]);
   const [selectedCaseId, setSelectedCaseId] = useState('');
   const [logs, setLogs] = useState([]);
+  const [logsError, setLogsError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
@@ -21,13 +22,17 @@ export default function PhoneLogs() {
   }, []);
 
   const fetchLogs = (caseId) => {
-    if (!caseId) { setLogs([]); return; }
+    if (!caseId) { setLogs([]); setLogsError(false); return; }
+    setLogsError(false);
     // api.js's request() already prepends /api -- passing '/api/cases/...'
     // here doubled the prefix to /api/api/cases/..., which 404s. Same bug
     // in createLog/deleteLog below.
     api.get(`/cases/${caseId}/phone-logs`)
       .then(d => setLogs(Array.isArray(d) ? d : d.data || []))
-      .catch(() => setLogs([]));
+      // A failed fetch used to render identically to "no calls logged" --
+      // with no way for the user to tell a real empty case apart from a
+      // network/permission failure.
+      .catch(() => { setLogs([]); setLogsError(true); });
   };
 
   useEffect(() => {
@@ -123,7 +128,14 @@ export default function PhoneLogs() {
             </div>
           )}
 
-          {logs.length === 0 ? (
+          {logsError ? (
+            <div className="empty-state">
+              <Phone className="w-12 h-12 mb-3" style={{ color: 'var(--danger)' }} />
+              <h3 className="text-base font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>تعذر تحميل المكالمات</h3>
+              <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>حدث خطأ أثناء تحميل السجل -- حاول مرة أخرى</p>
+              <button onClick={() => fetchLogs(selectedCaseId)} className="btn-accent px-5 py-2.5 text-sm">إعادة المحاولة</button>
+            </div>
+          ) : logs.length === 0 ? (
             <div className="empty-state">
               <Phone className="w-12 h-12 mb-3" style={{ color: 'var(--text-muted)' }} />
               <h3 className="text-base font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>لا توجد مكالمات</h3>

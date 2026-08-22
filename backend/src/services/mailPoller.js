@@ -101,9 +101,33 @@ class MailPoller {
     this.clients = new Map();
     this.messageIdCache = new Set();
     this.pollingIntervals = new Map();
+    // Guards against the manual "جلب الإيميلات" button and the scheduled
+    // cron overlapping for the SAME account -- without it, both fetch the
+    // same IMAP UIDs, both find no existing row for the same message_id
+    // (dedup is a plain read-then-write, no DB unique constraint behind
+    // it), and both insert, duplicating the email/attachment/notifications.
+    // Only protects overlap within this one warm process -- two separate
+    // serverless instances polling at the exact same moment still isn't
+    // preventable without a DB-level advisory lock, but this closes the
+    // far more common case (a user click racing the cron in the same
+    // instance).
+    this.activeAccountPolls = new Set();
   }
 
   async pollAccount(account, sinceOverride = null) {
+    if (this.activeAccountPolls.has(account.id)) {
+      console.warn(`[mailPoller] skipping poll for account ${account.id} -- already in progress`);
+      return [];
+    }
+    this.activeAccountPolls.add(account.id);
+    try {
+      return await this._pollAccountInner(account, sinceOverride);
+    } finally {
+      this.activeAccountPolls.delete(account.id);
+    }
+  }
+
+  async _pollAccountInner(account, sinceOverride = null) {
     const { decrypt } = require('./crypto');
     const imapPass = decrypt(account.imap_pass);
 

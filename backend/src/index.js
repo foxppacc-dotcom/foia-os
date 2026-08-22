@@ -11,8 +11,18 @@ const app = express();
 app.use(cors());
 const PORT = CONFIG.server.port;
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// Previously a hardcoded {status:'ok'} with no real dependency check -- it
+// would report healthy even with Supabase completely unreachable, which
+// defeats the point of a health endpoint for any future uptime monitor.
+app.get('/api/health', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { error } = await sup.from('users').select('id').limit(1);
+    if (error) throw error;
+    res.json({ status: 'ok', database: 'ok', timestamp: new Date().toISOString() });
+  } catch (e) {
+    res.status(503).json({ status: 'degraded', database: 'unreachable', error: e.message, timestamp: new Date().toISOString() });
+  }
 });
 
 app.use(express.json());

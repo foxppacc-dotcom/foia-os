@@ -112,13 +112,15 @@ export default function Pipeline() {
   const [draggedItemInside, setDraggedItemInside] = useState(null);
   // كل الصفوف مفتوحة افتراضياً — Set من الأرقام
   const [openLists, setOpenLists] = useState(() => {
-    const saved = localStorage.getItem('foia_pipeline_open');
-    if (saved) return new Set(JSON.parse(saved));
+    try {
+      const saved = localStorage.getItem('foia_pipeline_open');
+      if (saved) return new Set(JSON.parse(saved));
+    } catch {}
     // Default: كل القوائم مفتوحة (1-8)
     return new Set([1,2,3,4,5,6,7,8]);
   });
-  const [viewMode, setViewMode] = useState(() => localStorage.getItem('foia_pipeline_view') || 'rows');
-  const [sortBy, setSortBy] = useState(() => localStorage.getItem('foia_pipeline_sort') || 'newest');
+  const [viewMode, setViewMode] = useState(() => { try { return localStorage.getItem('foia_pipeline_view') || 'rows'; } catch { return 'rows'; } });
+  const [sortBy, setSortBy] = useState(() => { try { return localStorage.getItem('foia_pipeline_sort') || 'newest'; } catch { return 'newest'; } });
   const [assigneesByList, setAssigneesByList] = useState({});
   const [allUsers, setAllUsers] = useState([]);
   const [openAssignFor, setOpenAssignFor] = useState(null);
@@ -163,7 +165,7 @@ export default function Pipeline() {
 
   const saveOpenLists = (newSet) => {
     setOpenLists(newSet);
-    localStorage.setItem('foia_pipeline_open', JSON.stringify([...newSet]));
+    try { localStorage.setItem('foia_pipeline_open', JSON.stringify([...newSet])); } catch {}
   };
 
   const toggleList = (listNumber) => {
@@ -175,7 +177,7 @@ export default function Pipeline() {
 
   const changeSort = (mode) => {
     setSortBy(mode);
-    localStorage.setItem('foia_pipeline_sort', mode);
+    try { localStorage.setItem('foia_pipeline_sort', mode); } catch {}
     fetchPipeline(mode);
   };
 
@@ -276,13 +278,13 @@ export default function Pipeline() {
           {/* View Toggle */}
           <div className="flex items-center gap-1 rounded-xl border p-1"
             style={{ borderColor: 'var(--border)', background: 'var(--bg-tertiary)' }}>
-            <button onClick={() => { setViewMode('rows'); localStorage.setItem('foia_pipeline_view', 'rows'); }}
+            <button onClick={() => { setViewMode('rows'); try { localStorage.setItem('foia_pipeline_view', 'rows'); } catch {} }}
               className="px-3 py-1.5 rounded-lg font-medium transition-all"
               style={{
                 background: viewMode === 'rows' ? 'var(--accent)' : 'transparent',
                 color: viewMode === 'rows' ? '#1A1A2E' : 'var(--text-secondary)'
               }}>📋 صفوف</button>
-            <button onClick={() => { setViewMode('columns'); localStorage.setItem('foia_pipeline_view', 'columns'); }}
+            <button onClick={() => { setViewMode('columns'); try { localStorage.setItem('foia_pipeline_view', 'columns'); } catch {} }}
               className="px-3 py-1.5 rounded-lg font-medium transition-all"
               style={{
                 background: viewMode === 'columns' ? 'var(--accent)' : 'transparent',

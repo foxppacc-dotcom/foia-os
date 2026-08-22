@@ -41,10 +41,10 @@ export default function Dashboard() {
   // AIAssistantWidget.jsx also reads), so the state stays in sync regardless
   // of which control last changed it. Color-only feedback (filled = shown,
   // outline = hidden) -- the label never changes.
-  const [widgetHidden, setWidgetHidden] = useState(() => localStorage.getItem(WIDGET_HIDDEN_KEY) === '1');
+  const [widgetHidden, setWidgetHidden] = useState(() => { try { return localStorage.getItem(WIDGET_HIDDEN_KEY) === '1'; } catch { return false; } });
   const toggleWidget = () => {
     const next = !widgetHidden;
-    localStorage.setItem(WIDGET_HIDDEN_KEY, next ? '1' : '0');
+    try { localStorage.setItem(WIDGET_HIDDEN_KEY, next ? '1' : '0'); } catch {}
     setWidgetHidden(next);
     window.dispatchEvent(new Event(WIDGET_VISIBILITY_EVENT));
   };
@@ -52,9 +52,9 @@ export default function Dashboard() {
   // toggle living on "الربط الذكي" (DashboardButtonVisibilityToggle), since
   // once this button is hidden there'd be no other way to reach the bubble
   // toggle at all otherwise.
-  const [buttonHidden, setButtonHidden] = useState(() => localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1');
+  const [buttonHidden, setButtonHidden] = useState(() => { try { return localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1'; } catch { return false; } });
   useEffect(() => {
-    const onVisibility = () => setButtonHidden(localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1');
+    const onVisibility = () => { try { setButtonHidden(localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1'); } catch {} };
     window.addEventListener(DASHBOARD_BUTTON_VISIBILITY_EVENT, onVisibility);
     return () => window.removeEventListener(DASHBOARD_BUTTON_VISIBILITY_EVENT, onVisibility);
   }, []);

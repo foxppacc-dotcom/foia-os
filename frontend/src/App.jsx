@@ -1,7 +1,7 @@
 // FOIA OS v2 - App entry point
 // Build: hotfix $RANDOM
 import { lazy, Suspense, useState, useEffect } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, useLocation } from 'react-router-dom';
 import { api } from './api';
 import './styles/design-tokens.css';
 import './styles/motion.css';
@@ -52,8 +52,9 @@ function AppFallback() { return <div style={{padding:"20px",color:"var(--ds-text
 function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [theme, setTheme] = useState(localStorage.getItem('foia_theme') || 'light');
+  const [theme, setTheme] = useState(() => { try { return localStorage.getItem('foia_theme') || 'light'; } catch { return 'light'; } });
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const location = useLocation();
 
   useEffect(() => {
     const token = localStorage.getItem('foia_token');
@@ -100,7 +101,7 @@ function App() {
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
-    localStorage.setItem('foia_theme', next);
+    try { localStorage.setItem('foia_theme', next); } catch {}
     document.documentElement.dataset.theme = next;
   };
 
@@ -129,7 +130,7 @@ function App() {
   if (window.location.pathname.startsWith('/inbox/message/')) {
     return (
       <Suspense fallback={<AppFallback />}>
-        <ErrorBoundary>
+        <ErrorBoundary key={location.pathname}>
           <Routes><Route path="/inbox/message/:id" element={<MessageView />} /></Routes>
         </ErrorBoundary>
       </Suspense>
@@ -142,7 +143,13 @@ function App() {
       <div className="flex-1 flex flex-col overflow-hidden transition-[margin] duration-200 mr-0 md:mr-[var(--sidebar-width,220px)]">
         <Topbar user={user} onLogout={handleLogout} theme={theme} toggleTheme={toggleTheme} onMenuClick={() => setMobileSidebarOpen(true)} />
         <main className="flex-1 overflow-y-auto p-3 md:p-6">
-          <ErrorBoundary>
+          {/* Keyed on pathname -- a class component's error state otherwise
+              persists across navigation. Without this, one page throwing
+              once left every OTHER page unreachable behind the same "حدث
+              خطأ غير متوقع" screen until a manual hard reload, since clicking
+              a different sidebar item just re-rendered <Routes> under the
+              same already-tripped ErrorBoundary instance. */}
+          <ErrorBoundary key={location.pathname}>
           <Suspense fallback={<AppFallback />}><Routes>
             <Route path="/login" element={<Dashboard />} />
             <Route path="/" element={<Dashboard />} />

@@ -23,17 +23,28 @@ async function checkOverdueDeadlines() {
     byCase.get(req.case_id).push(req);
   }
 
+  // Batched once for every case in this run instead of 3 sequential queries
+  // PER case (dedup check, assignees, case row) -- with hundreds of overdue
+  // cases that was hundreds of extra round trips on every cron run.
+  const caseIds = [...byCase.keys()];
+  const [{ data: recentNotifs }, { data: allAssignees }, { data: allCaseRows }] = await Promise.all([
+    sup.from('notifications').select('target_id').eq('target_type', 'case').eq('type', 'deadline_overdue')
+      .in('target_id', caseIds).gte('created_at', new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString()),
+    sup.from('case_assignees').select('case_id, user_id').in('case_id', caseIds),
+    sup.from('cases').select('id, created_by, title').in('id', caseIds),
+  ]);
+  const alreadyNotified = new Set((recentNotifs || []).map(n => n.target_id));
+  const assigneesByCase = {};
+  (allAssignees || []).forEach(a => { (assigneesByCase[a.case_id] ||= []).push(a.user_id); });
+  const caseRowById = Object.fromEntries((allCaseRows || []).map(c => [c.id, c]));
+
   let notified = 0;
   for (const [caseId, reqs] of byCase) {
     try {
-      const { data: existing } = await sup.from('notifications')
-        .select('id').eq('target_type', 'case').eq('target_id', caseId).eq('type', 'deadline_overdue')
-        .gte('created_at', new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString()).maybeSingle();
-      if (existing) continue;
+      if (alreadyNotified.has(caseId)) continue;
 
-      const { data: assignees } = await sup.from('case_assignees').select('user_id').eq('case_id', caseId);
-      const { data: caseRow } = await sup.from('cases').select('created_by, title').eq('id', caseId).maybeSingle();
-      const userIds = new Set((assignees || []).map(a => a.user_id));
+      const caseRow = caseRowById[caseId];
+      const userIds = new Set(assigneesByCase[caseId] || []);
       if (caseRow?.created_by) userIds.add(caseRow.created_by);
       if (!userIds.size) continue;
 

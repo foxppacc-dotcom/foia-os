@@ -245,8 +245,17 @@ async function executeAutomation(a, sup) {
   // CASE 5: Auto-close cases where all requests are responded
   else if (a.action_type === 'auto_close_completed') {
     const { data: openCases } = await sup.from('cases').select('id, title').neq('status', 'closed').limit(20);
+    const openCaseIds = (openCases || []).map(c => c.id);
+    // Batched instead of one requests query per case (the auto_classify
+    // branch above already does this correctly) -- at real scale this was
+    // hundreds of sequential round trips per automation run.
+    const { data: allReqs } = openCaseIds.length
+      ? await sup.from('requests').select('case_id, status').in('case_id', openCaseIds)
+      : { data: [] };
+    const reqsByCase = {};
+    (allReqs || []).forEach(r => { (reqsByCase[r.case_id] ||= []).push(r); });
     for (const c of openCases || []) {
-      const { data: reqs } = await sup.from('requests').select('status').eq('case_id', c.id);
+      const reqs = reqsByCase[c.id];
       if (!reqs || reqs.length === 0) continue;
       if (reqs.every(r => r.status === 'responded')) {
         await sup.from('cases').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', c.id);

@@ -1,6 +1,18 @@
 const express = require('express');
 const router = express.Router();
 
+// Shared by every cron job's catch block below -- best-effort, never lets a
+// notification failure mask the original cron error in the response.
+async function notifyAdminsOfCronFailure(type, title, body) {
+  try {
+    const { getSupabase } = require('../supabase');
+    const { notifyUsers } = require('../services/notificationService');
+    const sup = getSupabase();
+    const { data: admins } = await sup.from('users').select('id').eq('role', 'admin');
+    await notifyUsers(sup, (admins || []).map(a => a.id), { type, title, body, target_type: 'settings', target_id: null });
+  } catch (e) { console.error('[cron] admin failure notification failed:', e.message); }
+}
+
 // GET /api/cron/imap-poll — Vercel Cron target. Authenticated via CRON_SECRET
 // (Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` when configured),
 // NOT via requireAuth — there is no logged-in user in a scheduled invocation.
@@ -20,6 +32,11 @@ router.get('/cron/imap-poll', async (req, res) => {
     res.json({ success: true, newMessages: total, errors: errors.length ? errors : undefined, polledAt: new Date().toISOString() });
   } catch (ex) {
     console.error('Cron IMAP poll error:', ex.message);
+    // A failure here means real inbound emails just stop being processed --
+    // previously this only ever showed up in a Vercel function log nobody
+    // was watching, matching the exact failure mode gdrive-check was
+    // already patched for. Same pattern: tell every admin the moment it breaks.
+    await notifyAdminsOfCronFailure('imap_poll_failed', '⚠️ فشل فحص البريد الوارد', `تعذر جلب الإيميلات الجديدة: ${ex.message}`);
     res.status(500).json({ success: false, error: ex.message });
   }
 });
@@ -40,6 +57,10 @@ router.get('/cron/deadline-check', async (req, res) => {
     res.json({ success: true, ...result, checkedAt: new Date().toISOString() });
   } catch (ex) {
     console.error('Cron deadline check error:', ex.message);
+    // A silent failure here means overdue FOIA deadlines go completely
+    // unnoticed instead of just unannounced -- worth alerting admins the
+    // same way gdrive-check already does for its own failure mode.
+    await notifyAdminsOfCronFailure('deadline_check_failed', '⚠️ فشل فحص المواعيد النهائية', `تعذر فحص القضايا المتأخرة: ${ex.message}`);
     res.status(500).json({ success: false, error: ex.message });
   }
 });
