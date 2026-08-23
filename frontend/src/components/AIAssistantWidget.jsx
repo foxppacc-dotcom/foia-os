@@ -132,7 +132,10 @@ export default function AIAssistantWidget() {
       {collapsed ? (
         <button onPointerDown={onPointerDown}
           className="relative w-14 h-14 rounded-full flex items-center justify-center shadow-lg cursor-grab active:cursor-grabbing"
-          style={{ background: 'var(--accent)', color: 'white', boxShadow: '0 4px 16px rgba(0,0,0,0.25)' }}
+          // Without this, a touch-drag competes with the browser's own
+          // scroll/pan gesture on the same touch -- mouse has no such
+          // conflict, which is exactly why this only misbehaved on phone.
+          style={{ background: 'var(--accent)', color: 'white', boxShadow: '0 4px 16px rgba(0,0,0,0.25)', touchAction: 'none' }}
           title="المساعد الذكي">
           <FoxBotIcon className="w-7 h-7" />
           {hasUnread && (
@@ -142,7 +145,7 @@ export default function AIAssistantWidget() {
         </button>
       ) : (
         <div className="w-80 rounded-2xl shadow-2xl overflow-hidden flex flex-col" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', maxHeight: '70vh' }}>
-          <div onPointerDown={onPointerDown} className="flex items-center justify-between gap-2 px-3 py-2.5 cursor-grab active:cursor-grabbing" style={{ background: 'var(--accent)', color: 'white' }}>
+          <div onPointerDown={onPointerDown} className="flex items-center justify-between gap-2 px-3 py-2.5 cursor-grab active:cursor-grabbing" style={{ background: 'var(--accent)', color: 'white', touchAction: 'none' }}>
             <div className="flex items-center gap-2">
               <FoxBotIcon className="w-5 h-5" />
               <span className="text-sm font-semibold">المساعد الذكي</span>
