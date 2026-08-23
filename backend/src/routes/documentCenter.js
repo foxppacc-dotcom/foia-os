@@ -7,7 +7,7 @@ const storage = require('../services/storage');
 const caseFileStorage = require('../services/caseFileStorage');
 const gdrive = require('../services/googleDriveService');
 const composeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
-const { requireCaseAccess, canAccessCase } = require('../services/caseAccess');
+const { requireCaseAccess, canAccessCase, canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
 const { notifyUsers, getCaseRecipients, getCaseActivityRecipients } = require('../services/notificationService');
 const { checkLock } = require('../services/emailAccountLock');
 // /cases/:caseId/documents, /upload, /compose, /portal-log previously had no
@@ -939,7 +939,7 @@ router.put('/inbox/:id/reject-match', requireAuth, async (req, res) => {
 
 // GET /api/inbox/matching-criteria — list built-in tiers with their
 // confirmed/rejected stats, so an admin can see which ones are noisy.
-router.get('/inbox/matching-criteria', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+router.get('/inbox/matching-criteria', requireAuth, requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data, error } = await sup.from('email_matching_criteria').select('*').order('id', { ascending: true });
@@ -949,7 +949,7 @@ router.get('/inbox/matching-criteria', requirePermission('email_matching', 'mana
 });
 
 // PUT /api/inbox/matching-criteria/:tierKey — toggle on/off, edit label.
-router.put('/inbox/matching-criteria/:tierKey', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+router.put('/inbox/matching-criteria/:tierKey', requireAuth, requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
   try {
     const { is_active, label_ar, description } = req.body;
     const updates = { updated_at: new Date().toISOString() };
@@ -966,16 +966,27 @@ router.put('/inbox/matching-criteria/:tierKey', requirePermission('email_matchin
 // GET/POST/DELETE /api/inbox/matching-keywords — custom global keyword
 // rules (the "ضيف معيار فلترة" ask). No PUT -- edited via delete+recreate,
 // same as case_agency_channels' own channel rows.
-router.get('/inbox/matching-keywords', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+router.get('/inbox/matching-keywords', requireAuth, requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data, error } = await sup.from('email_matching_custom_keywords').select('*, cases(title)').order('created_at', { ascending: false });
+    let query = sup.from('email_matching_custom_keywords').select('*, cases(title)').order('created_at', { ascending: false });
+    // email_matching:manage_criteria is a separate, independently-grantable
+    // permission from cases:view_all -- without this, a role granted only
+    // this one permission could see the title of every case in the system
+    // just by listing keyword rules, bypassing the case-visibility model
+    // canAccessCase/getVisibleCaseIds enforces everywhere else.
+    if (!(await canViewAllCases(sup, req.user.role))) {
+      const visibleIds = await getVisibleCaseIds(sup, req.user.id);
+      if (!visibleIds.length) return res.json({ success: true, data: [] });
+      query = query.in('case_id', visibleIds);
+    }
+    const { data, error } = await query;
     if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (email_matching_custom_keywords)' : error.message });
     res.json({ success: true, data: (data || []).map(r => ({ ...r, case_title: r.cases?.title || null, cases: undefined })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/inbox/matching-keywords', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+router.post('/inbox/matching-keywords', requireAuth, requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
   try {
     const { keyword_phrase, case_id } = req.body;
     if (!keyword_phrase || !keyword_phrase.trim()) return res.status(400).json({ error: 'keyword_phrase مطلوب' });
@@ -992,10 +1003,19 @@ router.post('/inbox/matching-keywords', requirePermission('email_matching', 'man
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/inbox/matching-keywords/:id', requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
+router.delete('/inbox/matching-keywords/:id', requireAuth, requirePermission('email_matching', 'manage_criteria'), async (req, res) => {
   try {
     const sup = getSupabase();
-    const { error } = await sup.from('email_matching_custom_keywords').delete().eq('id', parseInt(req.params.id));
+    const id = parseInt(req.params.id);
+    // Unlike POST above (which already checks this before inserting), this
+    // route deleted by id with no case lookup at all -- a role with
+    // manage_criteria but restricted case visibility could silently disable
+    // a rule tied to a case outside their assignment.
+    const { data: existing } = await sup.from('email_matching_custom_keywords').select('case_id').eq('id', id).maybeSingle();
+    if (existing && !(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
+    const { error } = await sup.from('email_matching_custom_keywords').delete().eq('id', id);
     if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }

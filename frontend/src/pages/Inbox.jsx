@@ -704,6 +704,9 @@ function MatchingCriteriaPanel({ open, onClose }) {
   const [loading, setLoading] = useState(true);
   const [newKeyword, setNewKeyword] = useState('');
   const [newCaseId, setNewCaseId] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [pendingTiers, setPendingTiers] = useState(() => new Set());
+  const [pendingDeletes, setPendingDeletes] = useState(() => new Set());
 
   const fetchAll = () => {
     setLoading(true);
@@ -715,22 +718,33 @@ function MatchingCriteriaPanel({ open, onClose }) {
   useEffect(() => { if (open) fetchAll(); }, [open]);
 
   const toggleCriterion = async (item) => {
+    // Without this guard a rapid double-click/tap fired the same PUT twice
+    // before the first response landed -- redundant but harmless here, still
+    // the same missing-guard pattern as addKeyword below, so closed for
+    // consistency.
+    if (pendingTiers.has(item.tier_key)) return;
+    setPendingTiers(prev => new Set(prev).add(item.tier_key));
     try { await api.put(`/inbox/matching-criteria/${item.tier_key}`, { is_active: !item.is_active }); fetchAll(); }
     catch (e) { alert('❌ ' + e.message); }
+    finally { setPendingTiers(prev => { const next = new Set(prev); next.delete(item.tier_key); return next; }); }
   };
 
   const addKeyword = async () => {
-    if (!newKeyword.trim() || !newCaseId) return;
+    if (!newKeyword.trim() || !newCaseId || adding) return;
+    setAdding(true);
     try {
       await api.post('/inbox/matching-keywords', { keyword_phrase: newKeyword.trim(), case_id: parseInt(newCaseId) });
       setNewKeyword(''); setNewCaseId(''); fetchAll();
     } catch (e) { alert('❌ ' + e.message); }
+    finally { setAdding(false); }
   };
 
   const deleteKeyword = async (id) => {
-    if (!confirm('حذف هذه الكلمة المفتاحية؟')) return;
+    if (pendingDeletes.has(id) || !confirm('حذف هذه الكلمة المفتاحية؟')) return;
+    setPendingDeletes(prev => new Set(prev).add(id));
     try { await api.delete(`/inbox/matching-keywords/${id}`); fetchAll(); }
     catch (e) { alert('❌ ' + e.message); }
+    finally { setPendingDeletes(prev => { const next = new Set(prev); next.delete(id); return next; }); }
   };
 
   return (
@@ -752,7 +766,7 @@ function MatchingCriteriaPanel({ open, onClose }) {
                       {c.description} — ✅ {c.confirmed_count || 0} · ❌ {c.rejected_count || 0}
                     </div>
                   </div>
-                  <button onClick={() => toggleCriterion(c)} className="text-[11px] px-2 py-1 rounded-lg shrink-0" style={{ background: 'var(--ds-bg-secondary)', color: c.is_active ? '#22c55e' : 'var(--ds-text-muted)' }}>
+                  <button onClick={() => toggleCriterion(c)} disabled={pendingTiers.has(c.tier_key)} className="text-[11px] px-2 py-1 rounded-lg shrink-0 disabled:opacity-50" style={{ background: 'var(--ds-bg-secondary)', color: c.is_active ? '#22c55e' : 'var(--ds-text-muted)' }}>
                     {c.is_active ? 'مفعّل' : 'معطّل'}
                   </button>
                 </div>
@@ -768,13 +782,13 @@ function MatchingCriteriaPanel({ open, onClose }) {
                 className="flex-1 px-2.5 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
               <input value={newCaseId} onChange={e => setNewCaseId(e.target.value)} placeholder="رقم القضية" type="number"
                 className="w-28 px-2.5 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-              <AppButton size="sm" onClick={addKeyword}>إضافة</AppButton>
+              <AppButton size="sm" onClick={addKeyword} disabled={adding} loading={adding}>إضافة</AppButton>
             </div>
             <div className="space-y-1.5 max-h-56 overflow-y-auto">
               {keywords.map(k => (
                 <div key={k.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
                   <span className="text-xs" style={{ color: 'var(--ds-text-primary)' }}>"{k.keyword_phrase}" ← قضية #{k.case_id}{k.case_title ? ` (${k.case_title})` : ''}</span>
-                  <button onClick={() => deleteKeyword(k.id)} className="p-1 rounded-lg shrink-0" style={{ color: 'var(--ds-text-muted)' }}
+                  <button onClick={() => deleteKeyword(k.id)} disabled={pendingDeletes.has(k.id)} className="p-1 rounded-lg shrink-0 disabled:opacity-50" style={{ color: 'var(--ds-text-muted)' }}
                     onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = 'var(--ds-text-muted)'}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
