@@ -33,6 +33,57 @@ async function searchIntake(sup, { query } = {}) {
   return { count: rows.length, cases: rows.slice(0, 15) };
 }
 
+// ---- get_case_details ----
+// The one gap the assistant itself flagged when the user asked it to be
+// more helpful: every other tool only ever sees a case's title/status from
+// a list, never its actual content (description, requests, team notes).
+// Accepts EITHER a known case_id OR a free-form query (an id-looking string
+// resolves by id, otherwise a title substring) so the model can resolve
+// "قضية فلان" from conversation without a separate search tool.
+async function getCaseDetails(sup, { case_id, query } = {}, ctx) {
+  let caseId = case_id ? parseInt(case_id) : null;
+  if (!caseId && query) {
+    const term = String(query).trim();
+    let q = sup.from('cases').select('id, title').limit(10);
+    q = /^\d+$/.test(term) ? q.eq('id', parseInt(term)) : q.ilike('title', `%${term}%`);
+    const { data: matches } = await q;
+    if (!matches || matches.length === 0) throw new Error('لم يتم العثور على قضية مطابقة');
+    if (matches.length > 1) return { multiple_matches: matches.map(c => ({ case_id: c.id, title: c.title })) };
+    caseId = matches[0].id;
+  }
+  if (!caseId) throw new Error('case_id أو query مطلوب');
+  if (!(await canAccessCase(sup, ctx.user, caseId))) throw new Error('Forbidden — هذه القضية غير مسندة إليك');
+
+  const { data: caseRow, error } = await sup.from('cases')
+    .select('id, uuid, title, description, defendant_name, source_agency_name, status, priority, deadline, created_at')
+    .eq('id', caseId).maybeSingle();
+  if (error) throw error;
+  if (!caseRow) throw new Error('Case not found');
+
+  const [{ data: requests }, { data: comments }] = await Promise.all([
+    sup.from('requests').select('id, status, reference_number, agency_id').eq('case_id', caseId),
+    sup.from('case_comments').select('id, content, user_id, created_at').eq('case_id', caseId).order('created_at', { ascending: false }).limit(20),
+  ]);
+
+  const agencyIds = [...new Set((requests || []).map(r => r.agency_id).filter(Boolean))];
+  const userIds = [...new Set((comments || []).map(c => c.user_id).filter(Boolean))];
+  const [{ data: agencies }, { data: users }] = await Promise.all([
+    agencyIds.length ? sup.from('agencies').select('id, name_ar, name_en').in('id', agencyIds) : Promise.resolve({ data: [] }),
+    userIds.length ? sup.from('users').select('id, name').in('id', userIds) : Promise.resolve({ data: [] }),
+  ]);
+  const agencyMap = Object.fromEntries((agencies || []).map(a => [a.id, a.name_ar || a.name_en]));
+  const userMap = Object.fromEntries((users || []).map(u => [u.id, u.name]));
+
+  return {
+    case: caseRow,
+    requests: (requests || []).map(r => ({ id: r.id, status: r.status, reference_number: r.reference_number, agency: r.agency_id ? (agencyMap[r.agency_id] || null) : null })),
+    // Team-posted notes -- this is exactly the "internal memo" content the
+    // assistant previously had zero access to. system-authored entries
+    // (user_id null) are still returned, labeled generically.
+    recent_notes: (comments || []).map(c => ({ content: c.content, by: c.user_id ? (userMap[c.user_id] || null) : 'نظام', created_at: c.created_at })),
+  };
+}
+
 // ---- create_intake_entry ----
 async function createIntakeEntry(sup, { title, defendant_name, source_agency_name, story_hook, case_summary } = {}, ctx) {
   if (!(await hasPermission(sup, ctx.user, 'intake', 'create'))) throw new Error('Forbidden — لا تملك صلاحية الإضافة للاستقبال الذكي');
@@ -319,6 +370,18 @@ async function recordCapabilityLearning(sup, { action, note } = {}) {
 // Fixed tool schema catalog -- see the file-level comment above. `permission`
 // is the ai_assistant action this tool is gated behind (permissions.js).
 const TOOL_DEFS = [
+  {
+    name: 'get_case_details', permission: 'get_case_details',
+    description: 'قراءة التفاصيل الكاملة لقضية معينة: الوصف، المتهم، الجهة المصدر، حالة كل طلب فيها، وآخر ملاحظات الفريق المسجلة عليها. استخدمها لما يُسأل عن محتوى أو وضع قضية بعينها.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        case_id: { type: 'number', description: 'رقم القضية إن كان معروفًا' },
+        query: { type: 'string', description: 'رقم أو جزء من عنوان القضية، إن لم يكن الرقم معروفًا بدقة' },
+      },
+    },
+    run: (sup, input, ctx) => getCaseDetails(sup, input, ctx),
+  },
   {
     name: 'search_intake', permission: 'search_intake',
     description: 'البحث عن قضايا لا تزال في قائمة الاستقبال الذكي (لم يتم اعتمادها بعد).',

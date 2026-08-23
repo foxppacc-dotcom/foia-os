@@ -45,6 +45,7 @@ const RESOURCES = [
 // off by default: enabling suggest_email_link never implies auto-linking
 // without human confirmation.
 const AI_CAPABILITY_ACTIONS = [
+  { key: 'get_case_details', label: 'قراءة التفاصيل الكاملة لقضية (الوصف، الطلبات، ملاحظات الفريق)' },
   { key: 'search_intake', label: 'البحث والفلترة في الاستقبال الذكي' },
   { key: 'create_intake_entry', label: 'إنشاء إدخال جديد في الاستقبال الذكي' },
   { key: 'edit_intake_entry', label: 'تعديل إدخال في الاستقبال الذكي' },
