@@ -75,9 +75,18 @@ router.get('/profile/:id', async (req, res) => {
     let unreadCount = { count: 0 };
     try { unreadCount = await sup.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', id).eq('is_read', false); } catch(e) {}
 
-    const tasksCompleted = tasks?.filter(t => t.status === 'completed').length || 0;
-    const tasksOnTime = tasks?.filter(t => t.status === 'completed' && (!t.due_date || new Date(t.completed_at) <= new Date(t.due_date))).length || 0;
-    const overdue = tasks?.filter(t => t.status !== 'completed' && t.due_date && new Date(t.due_date) < new Date()).length || 0;
+    // Was computed from case_tasks directly here too -- the exact same
+    // disconnected-metric bug getEmployeeCaseStats was built to fix, just
+    // missed in this route when /kpi/:userId got the fix (this route has no
+    // frontend caller wired to it at all -- Profile.jsx's own "kpi" tab
+    // reads THIS route's `kpi` field, not /kpi/:userId). It also used
+    // different field names (tasks_total, tasks_on_time...) than what
+    // Profile.jsx actually reads (total_tasks, on_time_rate, completion_rate,
+    // present_days, absent_days, urgent_tasks) -- meaning most of the KPI
+    // tab's fields were never populated by anything, pre-existing this fix.
+    const { total, completed, overdue, onTime, urgent } = await getEmployeeCaseStats(sup, id);
+    const present = (attendance || []).filter(a => a.status === 'present').length;
+    const absent = (attendance || []).filter(a => a.status === 'absent').length;
 
     res.json({
       user,
@@ -86,7 +95,12 @@ router.get('/profile/:id', async (req, res) => {
       attendance: attendance || [],
       notifications: notifications || [],
       unreadCount: unreadCount.count || 0,
-      kpi: { tasks_total: tasks?.length || 0, tasks_completed: tasksCompleted, tasks_on_time: tasksOnTime, tasks_overdue: overdue }
+      kpi: {
+        total_tasks: total, completed_tasks: completed, overdue_tasks: overdue, urgent_tasks: urgent,
+        completion_rate: total > 0 ? Math.round((completed / total) * 100) : 0,
+        on_time_rate: total > 0 ? Math.round((onTime / total) * 100) : 0,
+        present_days: present, absent_days: absent,
+      },
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

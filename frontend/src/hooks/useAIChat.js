@@ -61,5 +61,15 @@ export function useAIChat({ onReply } = {}) {
     setSending(false);
   };
 
-  return { conversationId, messages, input, setInput, file, setFile, sending, send, historyLoaded };
+  // Resuming old history is usually right, but it can go stale: a
+  // conversation that started before a new capability/tool was added keeps
+  // the assistant's own earlier "I can't do that" answer in context, and it
+  // tends to stay consistent with itself rather than reconsidering with the
+  // CURRENT tool list -- confirmed live (a case-detail-navigation request
+  // made right after that capability shipped still got the old refusal,
+  // because the same resumed conversation had that refusal from minutes
+  // earlier). Letting the user deliberately start fresh is the direct fix.
+  const newConversation = () => { setConversationId(null); setMessages([]); };
+
+  return { conversationId, messages, input, setInput, file, setFile, sending, send, historyLoaded, newConversation };
 }

@@ -1110,10 +1110,14 @@ router.post('/imap/backfill-attachments', requireAuth, requireRole('admin'), asy
   } catch (ex) { res.status(500).json({ success: false, error: ex.message }); }
 });
 
-// TEMP DIAGNOSTIC — GET /api/imap/raw-fetch/:accountId
+// DIAGNOSTIC — GET /api/imap/raw-fetch/:accountId
 // Calls pollAccount directly (no insert) and returns exactly what IMAP
-// fetch returned, to compare against what should be there.
-router.get('/imap/raw-fetch/:accountId', requireAuth, async (req, res) => {
+// fetch returned, to compare against what should be there. Only ever
+// required requireAuth -- any authenticated user of any role could pull raw
+// subject/sender/date data from any mailbox by id, unlike every sibling IMAP
+// route (/imap/compare, /imap/fix-credentials both require
+// email_accounts:manage).
+router.get('/imap/raw-fetch/:accountId', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();

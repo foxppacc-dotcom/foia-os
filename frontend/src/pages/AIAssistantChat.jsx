@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, Paperclip, X, Mic } from 'lucide-react';
+import { Send, Paperclip, X, Mic, MessageSquarePlus } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import FoxBotIcon from '../components/icons/FoxBotIcon';
 import { useAIChat } from '../hooks/useAIChat';
@@ -16,7 +16,7 @@ export default function AIAssistantChat() {
   const fileInputRef = useRef(null);
   const recognitionRef = useRef(null);
 
-  const { messages, input, setInput, file, setFile, sending, send } = useAIChat();
+  const { messages, input, setInput, file, setFile, sending, send, newConversation } = useAIChat();
   const { hasActiveProvider, checkFailed, recheck } = useActiveProviderStatus();
 
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, [messages]);
@@ -40,7 +40,10 @@ export default function AIAssistantChat() {
 
   return (
     <div className="space-y-4 animate-fadeIn h-full flex flex-col">
-      <PageHeader eyebrow="ذكاء اصطناعي" title="المساعد الذكي" meta="اسأل، اطلب تقارير، أو اطلب فتح وتصفية أقسام النظام مباشرة" />
+      <PageHeader eyebrow="ذكاء اصطناعي" title="المساعد الذكي" meta="اسأل، اطلب تقارير، أو اطلب فتح وتصفية أقسام النظام مباشرة"
+        actions={<button onClick={newConversation} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-xl" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+          <MessageSquarePlus className="w-3.5 h-3.5" />محادثة جديدة
+        </button>} />
 
       {checkFailed ? (
         <div className="text-sm p-4 rounded-2xl" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>

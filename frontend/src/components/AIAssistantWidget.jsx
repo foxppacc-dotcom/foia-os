@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, Paperclip, X, Mic, Minus, GripHorizontal } from 'lucide-react';
+import { Send, Paperclip, X, Mic, Minus, GripHorizontal, MessageSquarePlus } from 'lucide-react';
 import FoxBotIcon from './icons/FoxBotIcon';
 import { useAIChat } from '../hooks/useAIChat';
 import { useActiveProviderStatus } from '../hooks/useActiveProviderStatus';
@@ -37,7 +37,7 @@ export default function AIAssistantWidget() {
   const collapsedRef = useRef(collapsed);
   useEffect(() => { collapsedRef.current = collapsed; }, [collapsed]);
 
-  const { messages, input, setInput, file, setFile, sending, send } = useAIChat({
+  const { messages, input, setInput, file, setFile, sending, send, newConversation } = useAIChat({
     // Reads a ref, not the `collapsed` state directly -- this callback is
     // captured once inside the hook's closure at whatever render created it,
     // a stale `collapsed` would wrongly skip the unread badge if the user
@@ -152,6 +152,7 @@ export default function AIAssistantWidget() {
             </div>
             <div className="flex items-center gap-1">
               <GripHorizontal className="w-3.5 h-3.5 opacity-60" />
+              <button onClick={newConversation} title="محادثة جديدة" className="p-1 rounded hover:bg-white/10"><MessageSquarePlus className="w-4 h-4" /></button>
               <button onClick={() => setCollapsed(true)} className="p-1 rounded hover:bg-white/10"><Minus className="w-4 h-4" /></button>
             </div>
           </div>
