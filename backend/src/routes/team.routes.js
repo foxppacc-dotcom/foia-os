@@ -4,6 +4,7 @@ const { requireAuth, requireRole, hasPermission } = require('../middleware/auth'
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { notifyUsers, getCaseActivityRecipients } = require('../services/notificationService');
+const { getEmployeeCaseStats } = require('../services/employeeStats');
 
 // /profile/:id and /kpi/:userId return someone else's private data --
 // notifications, tasks, attendance -- readable before this by ANY logged-in
@@ -44,9 +45,14 @@ router.get('/profile/:id', async (req, res) => {
       // PostgREST's schema-cache-based embeds have been unreliable elsewhere
       // in this codebase (see portals.js); batch-fetch by id instead, same
       // defensive pattern used throughout case_detail.routes.js.
-      const [{ data: viaTeam }, { data: viaLegacy }] = await Promise.all([
+      const [{ data: viaTeam }, { data: viaLegacy }, { data: viaCreated }] = await Promise.all([
         sup.from('case_assignees').select('case_id, role').eq('user_id', id),
         sup.from('cases').select('id, title, status').eq('assigned_to', id),
+        // Missing before -- a case someone CREATED but wasn't separately
+        // added to case_assignees for (confirmed live: one employee had 177
+        // created cases against only 161 case_assignees rows) never showed
+        // up in their own profile's case list at all.
+        sup.from('cases').select('id, title, status').eq('created_by', id),
       ]);
       const teamCaseIds = [...new Set((viaTeam || []).map(r => r.case_id))];
       const { data: teamCases } = teamCaseIds.length
@@ -57,6 +63,7 @@ router.get('/profile/:id', async (req, res) => {
       const byId = {};
       for (const c of teamCases || []) byId[c.id] = { id: c.id, title: c.title, status: c.status, role: roleByCaseId[c.id] || null };
       for (const c of viaLegacy || []) if (!byId[c.id]) byId[c.id] = { id: c.id, title: c.title, status: c.status, role: null };
+      for (const c of viaCreated || []) if (!byId[c.id]) byId[c.id] = { id: c.id, title: c.title, status: c.status, role: null };
       cases = Object.values(byId);
     } catch (e) { cases = []; }
 
@@ -233,15 +240,13 @@ router.get('/kpi/:userId', async (req, res) => {
     const sup = getSupabase();
     const userId = parseInt(req.params.userId);
     if (!(await canViewOtherProfile(req, res, userId))) return;
-    const { data: tasks } = await sup.from('case_tasks').select('id, status, due_date, completed_at, priority').eq('assigned_to', userId);
+    // Was querying case_tasks -- a sub-task feature disconnected from how
+    // work actually gets assigned (case_assignees/cases.created_by), so this
+    // showed "0 tasks" for employees with a full real caseload. See
+    // employeeStats.js for the full explanation.
+    const { total, completed, overdue, onTime, urgent } = await getEmployeeCaseStats(sup, userId);
     let { data: attendance, error: attErr } = await sup.from('attendance_logs').select('id, date, status').eq('user_id', userId);
     if (attErr) attendance = [];
-    
-    const total = tasks?.length || 0;
-    const completed = tasks?.filter(t => t.status === 'completed').length || 0;
-    const onTime = tasks?.filter(t => t.status === 'completed' && t.due_date && t.completed_at && new Date(t.completed_at) <= new Date(t.due_date)).length || 0;
-    const overdue = tasks?.filter(t => t.status !== 'completed' && t.due_date && new Date(t.due_date) < new Date()).length || 0;
-    const urgent = tasks?.filter(t => t.priority === 'urgent').length || 0;
     const present = attendance?.filter(a => a.status === 'present').length || 0;
     const absent = attendance?.filter(a => a.status === 'absent').length || 0;
 

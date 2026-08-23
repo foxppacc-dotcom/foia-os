@@ -16,6 +16,7 @@
 const { hasPermission } = require('../middleware/auth');
 const { getCaseActivityRecipients, notifyUsers } = require('./notificationService');
 const { canAccessCase, scopeCasesQuery } = require('./caseAccess');
+const { getEmployeeCaseStats } = require('./employeeStats');
 const { classifyIntakeText, blankAnswers } = require('./aiClassifier');
 
 async function getActiveCriteriaDefs(sup) {
@@ -174,14 +175,15 @@ async function generateEmployeeReport(sup, { user_id, name } = {}, ctx) {
   const { data: user } = await sup.from('users').select('id, name, role').eq('id', userId).maybeSingle();
   if (!user) throw new Error('Employee not found');
 
-  const { data: tasks } = await sup.from('case_tasks').select('id, status, due_date, completed_at, priority').eq('assigned_to', userId);
+  // Was querying case_tasks directly -- a sub-task feature disconnected
+  // from how work actually gets assigned (case_assignees/cases.created_by).
+  // Confirmed live: an employee with a full real caseload (161 assigned +
+  // 177 created cases) got reported as "0 total tasks" because case_tasks
+  // had zero rows for her. Shared with team.routes.js's /kpi/:userId so the
+  // two can't drift back out of sync.
+  const { total, completed, overdue, onTime } = await getEmployeeCaseStats(sup, userId);
   let attendance = [];
   try { const r = await sup.from('attendance_logs').select('id, status').eq('user_id', userId); attendance = r.data || []; } catch { attendance = []; }
-
-  const total = tasks?.length || 0;
-  const completed = tasks?.filter(t => t.status === 'completed').length || 0;
-  const onTime = tasks?.filter(t => t.status === 'completed' && t.due_date && t.completed_at && new Date(t.completed_at) <= new Date(t.due_date)).length || 0;
-  const overdue = tasks?.filter(t => t.status !== 'completed' && t.due_date && new Date(t.due_date) < new Date()).length || 0;
 
   return {
     employee: { id: user.id, name: user.name, role: user.role },
@@ -298,7 +300,29 @@ async function autoLinkEmailToCase(sup, { communication_id, case_id } = {}, ctx)
 // exact same query param names GET /cases and Cases.jsx already use, so the
 // frontend needs zero param-name translation when it navigates to the URL
 // this returns.
-async function navigateToPage(sup, { page, filters } = {}) {
+async function navigateToPage(sup, { page, filters } = {}, ctx) {
+  // Opens ONE specific case's own detail page (/cases/:id) -- previously the
+  // only supported destination was the filtered LIST page, which still left
+  // the user to manually click into the specific case themselves. Resolves
+  // by case_id, or by a title/id search term the same way get_case_details
+  // does, scoped to what this user can actually see.
+  if (page === 'case_detail') {
+    const f = filters || {};
+    let caseId = f.case_id ? parseInt(f.case_id) : null;
+    if (!caseId && f.search) {
+      const term = String(f.search).trim();
+      let q = sup.from('cases').select('id, title').limit(5);
+      q = /^\d+$/.test(term) ? q.eq('id', parseInt(term)) : q.ilike('title', `%${term}%`);
+      const scoped = await scopeCasesQuery(sup, q, ctx.user);
+      const { data: matches } = scoped ? await scoped : { data: [] };
+      if (!matches || matches.length === 0) throw new Error('لم يتم العثور على قضية مطابقة');
+      if (matches.length > 1) return { multiple_matches: matches.map(c => ({ case_id: c.id, title: c.title })) };
+      caseId = matches[0].id;
+    }
+    if (!caseId) throw new Error('case_id أو search مطلوب لفتح صفحة قضية محددة');
+    if (!(await canAccessCase(sup, ctx.user, caseId))) throw new Error('Forbidden — هذه القضية غير مسندة إليك');
+    return { navigate: { type: 'navigate', url: `/cases/${caseId}` } };
+  }
   if (page !== 'cases') throw new Error(`الصفحة "${page}" غير مدعومة للتنقل حاليًا`);
   const f = filters || {};
   const asList = (v) => Array.isArray(v) ? v : String(v).split(',').map(s => s.trim()).filter(Boolean);
@@ -489,22 +513,23 @@ const TOOL_DEFS = [
   },
   {
     name: 'navigate_to_page', permission: 'navigate_ui',
-    description: 'فتح صفحة حقيقية في واجهة النظام أمام المستخدم مباشرة، مفلترة حسب المطلوب -- وليس فقط وصف النتائج نصيًا. مدعوم حاليًا: page="cases" مع فلاتر status (comma-separated: open, in_progress, in_production, closed), priority (high, medium, low), date_from/date_to (YYYY-MM-DD), search (نص في العنوان). لاحظ: "حصلت على سجلات/ردود" هو مفهوم على مستوى الطلب الواحد (requests.status) وليس حالة القضية نفسها -- هذه الأداة لا تدعم فلترته حاليًا.',
+    description: 'فتح صفحة حقيقية في واجهة النظام أمام المستخدم مباشرة -- وليس فقط وصف النتائج نصيًا. مدعوم حاليًا: page="cases" (قائمة القضايا مفلترة بـ status [comma-separated: open, in_progress, in_production, closed], priority [high, medium, low], date_from/date_to [YYYY-MM-DD], search [نص في العنوان]) أو page="case_detail" (صفحة قضية واحدة بعينها، عبر filters.case_id أو filters.search [رقم أو جزء من عنوان]). لاحظ: "حصلت على سجلات/ردود" هو مفهوم على مستوى الطلب الواحد (requests.status) وليس حالة القضية نفسها -- page="cases" لا يدعم فلترته حاليًا.',
     input_schema: {
       type: 'object',
       properties: {
-        page: { type: 'string', enum: ['cases'] },
+        page: { type: 'string', enum: ['cases', 'case_detail'] },
         filters: {
           type: 'object',
           properties: {
             status: { type: 'string' }, priority: { type: 'string' },
             date_from: { type: 'string' }, date_to: { type: 'string' }, search: { type: 'string' },
+            case_id: { type: 'number', description: 'لـ page="case_detail" فقط -- رقم القضية إن كان معروفًا' },
           },
         },
       },
       required: ['page'],
     },
-    run: (sup, input) => navigateToPage(sup, input),
+    run: (sup, input, ctx) => navigateToPage(sup, input, ctx),
   },
 ];
 

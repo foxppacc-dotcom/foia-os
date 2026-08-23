@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getApiBase } from '../api';
+import { getApiBase, api } from '../api';
 
 const tok = () => localStorage.getItem('foia_token');
 
@@ -15,6 +15,27 @@ export function useAIChat({ onReply } = {}) {
   const [input, setInput] = useState('');
   const [file, setFile] = useState(null);
   const [sending, setSending] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
+  // Every mount previously started a brand-new conversation with empty
+  // history -- opening the widget on the phone after chatting on the
+  // computer (same account) looked like the assistant "forgot" everything
+  // instantly. Resume the user's own most recent conversation instead, same
+  // way any other chat app persists a thread across devices/sessions.
+  useEffect(() => {
+    let cancelled = false;
+    api.get('/ai/conversations').then(async (list) => {
+      const latest = (list.data || [])[0];
+      if (!latest || cancelled) return;
+      const detail = await api.get(`/ai/conversations/${latest.id}`);
+      if (cancelled) return;
+      const restored = (detail.data || [])
+        .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
+        .map(m => ({ role: m.role, content: m.content }));
+      if (restored.length) { setConversationId(latest.id); setMessages(restored); }
+    }).catch(() => {}).finally(() => { if (!cancelled) setHistoryLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
 
   const send = async () => {
     if ((!input.trim() && !file) || sending) return;
@@ -40,5 +61,5 @@ export function useAIChat({ onReply } = {}) {
     setSending(false);
   };
 
-  return { conversationId, messages, input, setInput, file, setFile, sending, send };
+  return { conversationId, messages, input, setInput, file, setFile, sending, send, historyLoaded };
 }
