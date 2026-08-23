@@ -23,10 +23,24 @@ async function getEmployeeCaseStats(sup, userId) {
   const completed = rows.filter(c => DONE_STATUSES.includes(c.status)).length;
   const overdue = rows.filter(c => !DONE_STATUSES.includes(c.status) && c.deadline && new Date(c.deadline) < new Date()).length;
   const urgent = rows.filter(c => c.priority === 'urgent' && !DONE_STATUSES.includes(c.status)).length;
-  // No dedicated "completed_at" column on cases -- updated_at is the best
-  // available proxy for when a case last changed (e.g. into a done status),
-  // so "on time" here is an approximation, not an exact measurement.
-  const onTime = rows.filter(c => DONE_STATUSES.includes(c.status) && c.deadline && new Date(c.updated_at) <= new Date(c.deadline)).length;
+
+  // cases.updated_at bumps on ANY edit (title, priority, a comment...), not
+  // just completion -- a case genuinely finished on time could look "late"
+  // (or vice versa) after an unrelated edit long after closure.
+  // production_queue.completed_at is a real, purpose-built completion
+  // timestamp; prefer it and only fall back to the updated_at approximation
+  // for a case that was completed without ever going through production.
+  const doneIds = rows.filter(c => DONE_STATUSES.includes(c.status)).map(c => c.id);
+  const completedAtByCase = {};
+  if (doneIds.length) {
+    const { data: pq } = await sup.from('production_queue').select('case_id, completed_at').in('case_id', doneIds).not('completed_at', 'is', null);
+    (pq || []).forEach(p => { completedAtByCase[p.case_id] = p.completed_at; });
+  }
+  const onTime = rows.filter(c => {
+    if (!DONE_STATUSES.includes(c.status) || !c.deadline) return false;
+    const finishedAt = completedAtByCase[c.id] || c.updated_at;
+    return new Date(finishedAt) <= new Date(c.deadline);
+  }).length;
 
   return { total, completed, overdue, onTime, urgent };
 }
