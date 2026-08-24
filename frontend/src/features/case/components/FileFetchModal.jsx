@@ -12,7 +12,7 @@ const DEFAULT_SUBJECT = 'File Upload Request';
 const DEFAULT_BODY = 'Hello,\n\nPlease use the link below to upload the requested files.\n\nThank you.';
 
 function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // FileFetch: a public, token-based upload link an external agency can use
@@ -140,6 +140,11 @@ export default function FileFetchModal({ open, onClose, caseId, caseTitle, reque
       fd.append('body', `${emailForm.body}\n\n${link.url}`);
       fd.append('html', html);
       fd.append('account_id', emailForm.account_id);
+      // Lets the compose route apply its per-agency same-case send lock and
+      // stamp the correspondence so it shows up in the agency's thread log
+      // (AgenciesTab) -- without this, picking an agency from the dropdown
+      // above only prefilled the "to" field and had no other effect.
+      if (agencyId) fd.append('agency_id', agencyId);
       attachments.forEach(f => fd.append('attachments', f));
       const r = await fetch(`${API}/cases/${caseId}/compose`, {
         method: 'POST', headers: { 'Authorization': `Bearer ${tok()}` }, body: fd,

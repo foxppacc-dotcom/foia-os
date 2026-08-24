@@ -78,6 +78,36 @@ async function resolveActiveLink(sup, token) {
   return data || null;
 }
 
+// Vercel serverless functions don't share in-process memory across
+// instances/cold starts, so publicUploadLimiter's in-memory store below is
+// effectively decorative in production -- each instance counts
+// independently and resets on every cold start. This backs the real,
+// centrally-enforced boundary via migration 035's upload_link_rate_limits
+// table. Fails OPEN (allows the request) if the migration hasn't been run
+// yet or the check itself errors -- a missing rate limit must never be what
+// breaks a real upload for an external agency.
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const RATE_LIMIT_MAX = 30;
+async function checkRateLimit(sup, token) {
+  try {
+    const { data: row } = await sup.from('upload_link_rate_limits').select('*').eq('token', token).maybeSingle();
+    const now = Date.now();
+    if (!row) {
+      await sup.from('upload_link_rate_limits').insert({ token, window_started_at: new Date().toISOString(), request_count: 1 });
+      return true;
+    }
+    if (now - new Date(row.window_started_at).getTime() > RATE_LIMIT_WINDOW_MS) {
+      await sup.from('upload_link_rate_limits').update({ window_started_at: new Date().toISOString(), request_count: 1 }).eq('token', token);
+      return true;
+    }
+    if (row.request_count >= RATE_LIMIT_MAX) return false;
+    await sup.from('upload_link_rate_limits').update({ request_count: row.request_count + 1 }).eq('token', token);
+    return true;
+  } catch (e) {
+    return true;
+  }
+}
+
 // Files here can legitimately run ~10GB; nothing else in the request path
 // enforces an upper bound (bytes never touch our backend, so there's no
 // natural body-size ceiling to lean on). Without this, a holder of a valid,
@@ -107,6 +137,7 @@ async function publicLinkInfoHandler(req, res) {
     const link = await resolveActiveLink(sup, req.params.token);
     if (!link) return res.status(404).json({ error: 'رابط غير صالح' });
     if (link.revoked_at) return res.status(410).json({ error: 'هذا الرابط لم يعد صالحًا' });
+    if (!(await checkRateLimit(sup, req.params.token))) return res.status(429).json({ error: 'طلبات كثيرة جدًا -- حاول بعد قليل' });
     const { data: caseRow } = await sup.from('cases').select('title').eq('id', link.case_id).maybeSingle();
     res.json({ success: true, case_title: caseRow?.title || null });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -121,10 +152,12 @@ async function publicUploadSessionHandler(req, res) {
     const link = await resolveActiveLink(sup, req.params.token);
     if (!link) return res.status(404).json({ error: 'رابط غير صالح' });
     if (link.revoked_at) return res.status(410).json({ error: 'هذا الرابط لم يعد صالحًا' });
+    if (!(await checkRateLimit(sup, req.params.token))) return res.status(429).json({ error: 'طلبات كثيرة جدًا -- حاول بعد قليل' });
     if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
 
     const { file_name, mime_type, size } = req.body;
     if (!file_name || !size) return res.status(400).json({ error: 'file_name, size مطلوبون' });
+    if (!(Number.isFinite(parseInt(size)) && parseInt(size) > 0)) return res.status(400).json({ error: 'size غير صالح' });
     if (parseInt(size) > MAX_UPLOAD_BYTES) return res.status(400).json({ error: `الملف أكبر من الحد المسموح (${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024 / 1024)} جيجابايت)` });
     const caseId = link.case_id;
     const folderId = await gdrive.ensureSubfolder(caseId, 'Incoming');
@@ -163,13 +196,12 @@ async function publicUploadSessionHandler(req, res) {
     if (sessionUrl && typeof sessionUrl === 'object' && sessionUrl.__existing) {
       return res.json({ success: true, existing: true, drive_file_id: sessionUrl.__existing.id, resume_offset: parseInt(size) });
     }
-    // A partial unique index (migration 035) rejects a second concurrent
-    // 'active' row for the same (case_id, file_name, file_size) -- two
-    // people uploading the identically-named/sized file to the same case
-    // at the same moment would otherwise both open a separate Drive
-    // session and both finalize into two duplicate case_documents rows. On
-    // conflict, someone else's insert already won this race -- fetch and
-    // hand back THEIR session instead of silently erroring.
+    // migration 013's UNIQUE (case_id, file_name, file_size) rejects a
+    // second row for this combo regardless of its status -- two people
+    // uploading the identically-named/sized file to the same case at the
+    // same moment would otherwise both open a separate Drive session and
+    // both finalize into two duplicate case_documents rows. On conflict,
+    // find out what's actually blocking us before deciding what to do.
     const { error: insertErr } = await sup.from('drive_upload_sessions').insert({
       case_id: caseId, file_name, file_size: parseInt(size),
       mime_type, category: 'incoming', folder_id: folderId,
@@ -177,18 +209,34 @@ async function publicUploadSessionHandler(req, res) {
     });
     if (insertErr) {
       if (/duplicate key|unique constraint/i.test(insertErr.message)) {
-        const { data: winner } = await sup.from('drive_upload_sessions')
-          .select('session_url').eq('case_id', caseId).eq('file_name', file_name).eq('file_size', parseInt(size)).eq('status', 'active').maybeSingle();
-        if (winner?.session_url) {
-          // Ask Drive how far the WINNING session actually got -- assuming
-          // 0 here would repeat this exact byte-offset mismatch bug against
-          // whatever the other request has already sent.
+        const { data: existingRow } = await sup.from('drive_upload_sessions')
+          .select('id, session_url, status').eq('case_id', caseId).eq('file_name', file_name).eq('file_size', parseInt(size)).maybeSingle();
+        if (existingRow?.status === 'active' && existingRow.session_url) {
+          // Someone else's insert already won this race -- ask Drive how far
+          // THEIR session actually got (assuming 0 would repeat this exact
+          // byte-offset mismatch bug) and hand it back instead of ours.
           try {
-            const progress = await gdrive.checkSessionProgress(winner.session_url, parseInt(size));
-            return res.json({ success: true, resumable: !progress.completed, existing: progress.completed, session_url: winner.session_url, sessionUrl: winner.session_url, resume_offset: progress.offset, folder_id: folderId });
+            const progress = await gdrive.checkSessionProgress(existingRow.session_url, parseInt(size));
+            return res.json({ success: true, resumable: !progress.completed, existing: progress.completed, session_url: existingRow.session_url, sessionUrl: existingRow.session_url, resume_offset: progress.offset, folder_id: folderId });
           } catch (e) {
-            return res.json({ success: true, resumable: true, session_url: winner.session_url, sessionUrl: winner.session_url, resume_offset: 0, folder_id: folderId });
+            // Their session died too -- fall through and reclaim the row below.
           }
+        } else if (existingRow?.status === 'completed') {
+          const doneFile = await findExistingFileRetrying(folderId, file_name, size);
+          if (doneFile) return res.json({ success: true, existing: true, drive_file_id: doneFile.id, resume_offset: parseInt(size), completed: true });
+        }
+        // The blocking row is stale (expired, or an 'active'/'completed' row
+        // whose session died / hasn't finished indexing on Drive's side) --
+        // the unique constraint has no per-status scoping, so it would
+        // otherwise block this exact (case_id, file_name, file_size) combo
+        // from ever being retried again. Reclaim the row in place instead of
+        // leaving our freshly-created Drive session untracked.
+        if (existingRow?.id) {
+          await sup.from('drive_upload_sessions').update({
+            session_url: sessionUrl, uploaded_bytes: 0, status: 'active', updated_at: new Date().toISOString(),
+          }).eq('id', existingRow.id);
+        } else {
+          console.error('[fileFetch] save session failed:', insertErr.message);
         }
       } else {
         console.error('[fileFetch] save session failed:', insertErr.message);
@@ -208,12 +256,13 @@ async function publicUploadFinalizeHandler(req, res) {
     const link = await resolveActiveLink(sup, req.params.token);
     if (!link) return res.status(404).json({ error: 'رابط غير صالح' });
     if (link.revoked_at) return res.status(410).json({ error: 'هذا الرابط لم يعد صالحًا' });
+    if (!(await checkRateLimit(sup, req.params.token))) return res.status(429).json({ error: 'طلبات كثيرة جدًا -- حاول بعد قليل' });
     if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
 
     const caseId = link.case_id;
     let { drive_file_id, original_name, size } = req.body;
+    const folderId = await gdrive.ensureSubfolder(caseId, 'Incoming');
     if (!drive_file_id) {
-      const folderId = await gdrive.ensureSubfolder(caseId, 'Incoming');
       let existing = null;
       for (let attempt = 0; attempt < 3 && !existing; attempt++) {
         if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
@@ -224,6 +273,20 @@ async function publicUploadFinalizeHandler(req, res) {
     }
 
     const meta = await gdrive.getFileMetadata(drive_file_id);
+    // A client-supplied drive_file_id must actually live in THIS link's own
+    // case folder -- otherwise a valid, non-revoked token for case A could be
+    // used to graft an arbitrary Drive file (e.g. one belonging to case B,
+    // whose id leaked via a shared link) into case A's document list.
+    if (!(meta.parents || []).includes(folderId)) return res.status(403).json({ error: 'الملف غير موجود في مجلد هذه القضية' });
+    // MAX_UPLOAD_BYTES was only ever checked against the client-DECLARED size
+    // at session creation -- a client could under-declare `size` there and
+    // then simply stream more chunks than declared, since the backend never
+    // sees the bytes. This is the one point where Drive's own authoritative
+    // size is available, so it's the real enforcement point.
+    if (parseInt(meta.size) > MAX_UPLOAD_BYTES) {
+      await gdrive.deleteFile(meta.id).catch(() => {});
+      return res.status(413).json({ error: `الملف أكبر من الحد المسموح (${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024 / 1024)} جيجابايت)` });
+    }
 
     const { data: existingByDrive } = await sup.from('case_documents').select('id').eq('case_id', caseId).eq('drive_file_id', meta.id).maybeSingle();
     if (existingByDrive) return res.status(200).json({ success: true, data: { ...existingByDrive, duplicate: true } });

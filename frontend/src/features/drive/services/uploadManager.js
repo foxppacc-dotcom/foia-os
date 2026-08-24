@@ -371,7 +371,13 @@ class UploadManager {
       // resolve the real Drive file, instead of resending bytes Drive
       // already has.
       xhr.onerror = () => {
-        if (bytesSent >= (end - start)) resolve(null);
+        // Only the FINAL chunk is confirmed to hit Google's missing-CORS-
+        // header response (intermediate 308s always carry them) -- keeping
+        // this heuristic scoped to the last chunk means a genuinely rejected
+        // intermediate chunk (a real 400 from a desynced Content-Range, a
+        // dead session, etc.) still surfaces as a real error instead of
+        // silently advancing progress past bytes Drive never accepted.
+        if (end === totalSize && bytesSent >= (end - start)) resolve(null);
         else reject(new Error('خطأ شبكة أثناء الرفع إلى Google Drive'));
       };
       // Without this, aborting mid-chunk (a pause/cancel that lands while

@@ -429,11 +429,11 @@ class GoogleDriveService {
     return sessionUrl;
   }
 
-  /** Authoritative Drive metadata for a file -- never trust client-supplied size/mimeType when finalizing an upload. */
+  /** Authoritative Drive metadata for a file -- never trust client-supplied size/mimeType when finalizing an upload. `parents` is included so callers can verify a client-supplied drive_file_id actually lives in the folder they expect, instead of trusting it blindly. */
   async getFileMetadata(fileId) {
     const drive = await this.initRealDrive();
     if (!drive) throw new Error('Google Drive غير متصل');
-    const res = await drive.files.get({ fileId, fields: 'id, name, size, mimeType, webViewLink, webContentLink, md5Checksum' });
+    const res = await drive.files.get({ fileId, fields: 'id, name, size, mimeType, webViewLink, webContentLink, md5Checksum, parents' });
     return res.data;
   }
 

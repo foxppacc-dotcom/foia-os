@@ -38,7 +38,14 @@ function putChunk(sessionUrl, chunk, start, end, totalSize, onProgress) {
     // response (same as a 308) and let finalize's name+size fallback lookup
     // resolve the real Drive file, instead of resending bytes Google already has.
     xhr.onerror = () => {
-      if (bytesSent >= (end - start)) resolve(null);
+      // Only the FINAL chunk's response is confirmed to be missing CORS
+      // headers from Google's side (intermediate 308s always carry them) --
+      // restricting the "treat onerror as success" heuristic to the last
+      // chunk keeps a genuinely rejected intermediate chunk (a real 400 from
+      // a desynced Content-Range, a dead session, etc.) surfacing as a real
+      // error instead of silently advancing the cursor past bytes Drive
+      // never actually accepted.
+      if (end === totalSize && bytesSent >= (end - start)) resolve(null);
       else reject(new Error('خطأ شبكة أثناء الرفع'));
     };
     xhr.open('PUT', sessionUrl);

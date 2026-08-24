@@ -196,6 +196,10 @@ router.post('/gdrive/migrate-legacy', requireAuth, requireRole('admin'), async (
 });
 
 const CATEGORY_SUBFOLDER = { attachments: 'Attachments', incoming: 'Incoming', outgoing: 'Outgoing' };
+// Same ceiling as the public FileFetch upload path (fileFetch.js) -- this
+// route had no cap at all, letting any authenticated user open a resumable
+// session for an arbitrary declared size with no application-level limit.
+const MAX_UPLOAD_BYTES = 12 * 1024 * 1024 * 1024;
 
 // POST /api/gdrive/upload-session — open a Drive resumable-upload session for
 // a large file. The browser then PUTs the bytes directly to the returned
@@ -208,6 +212,8 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
     if (!case_id || !file_name) return res.status(400).json({ error: 'case_id, file_name مطلوبون' });
     if (!(await assertCaseAccess(req, res, parseInt(case_id)))) return;
     if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
+    if (!(Number.isFinite(parseInt(size)) && parseInt(size) > 0)) return res.status(400).json({ error: 'size مطلوب' });
+    if (parseInt(size) > MAX_UPLOAD_BYTES) return res.status(400).json({ error: `الملف أكبر من الحد المسموح (${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024 / 1024)} جيجابايت)` });
 
     const sup = getSupabase();
     const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[category] || 'Attachments');
@@ -266,11 +272,37 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
     if (sessionUrl && typeof sessionUrl === 'object' && sessionUrl.__existing) {
       return res.json({ success: true, existing: true, drive_file_id: sessionUrl.__existing.id, webViewLink: sessionUrl.__existing.webViewLink, resume_offset: parseInt(size) });
     }
-    await sup.from('drive_upload_sessions').insert({
+    // migration 013's UNIQUE (case_id, file_name, file_size) has no
+    // per-status scoping, so a stale row (expired, or a completed upload
+    // Drive hasn't finished indexing yet) blocks a plain insert forever for
+    // this exact combo -- reclaim it in place instead of silently leaving
+    // this freshly-created Drive session untracked (the earlier fileFetch.js
+    // fix for the same bug class applies here too).
+    const { error: insertErr } = await sup.from('drive_upload_sessions').insert({
       case_id: parseInt(case_id), file_name, file_size: parseInt(size),
       mime_type, category: category || 'attachments', folder_id: folderId,
       session_url: sessionUrl, uploaded_bytes: 0, status: 'active',
-    }).then(() => {}).catch((e) => console.error('[gdrive] save session failed:', e.message));
+    });
+    if (insertErr && /duplicate key|unique constraint/i.test(insertErr.message)) {
+      const { data: existingRow } = await sup.from('drive_upload_sessions')
+        .select('id, session_url, status').eq('case_id', parseInt(case_id)).eq('file_name', file_name).eq('file_size', parseInt(size)).maybeSingle();
+      if (existingRow?.status === 'active' && existingRow.session_url) {
+        try {
+          const progress = await gdrive.checkSessionProgress(existingRow.session_url, parseInt(size));
+          return res.json({ success: true, resumable: !progress.completed, existing: progress.completed, session_url: existingRow.session_url, sessionUrl: existingRow.session_url, resume_offset: progress.offset, folder_id: folderId });
+        } catch (e) { /* their session died too -- fall through and reclaim below */ }
+      } else if (existingRow?.status === 'completed') {
+        const doneFile = await gdrive.findExistingFile(folderId, file_name, size);
+        if (doneFile) return res.json({ success: true, existing: true, drive_file_id: doneFile.id, resume_offset: parseInt(size), completed: true });
+      }
+      if (existingRow?.id) {
+        await sup.from('drive_upload_sessions').update({
+          session_url: sessionUrl, uploaded_bytes: 0, status: 'active', updated_at: new Date().toISOString(),
+        }).eq('id', existingRow.id);
+      }
+    } else if (insertErr) {
+      console.error('[gdrive] save session failed:', insertErr.message);
+    }
     res.json({ success: true, resumable: true, session_url: sessionUrl, sessionUrl, resume_offset: 0, folder_id: folderId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -295,8 +327,8 @@ router.post('/gdrive/finalize', requireAuth, async (req, res) => {
     // instead of the file metadata), resolve it ourselves: the file already
     // landed in the case's Drive folder — find it by name + size and use it.
     // This makes "upload finished but response lost" fully self-healing.
+    const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[req.body.category] || 'Attachments');
     if (!drive_file_id) {
-      const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[req.body.category] || 'Attachments');
       // Google Drive has eventual-consistency indexing: right after the last
       // resumable chunk lands (308), the file may not be visible to queries
       // for a couple of seconds. Retry the lookup a few times before giving
@@ -313,6 +345,11 @@ router.post('/gdrive/finalize', requireAuth, async (req, res) => {
     }
 
     const meta = await gdrive.getFileMetadata(drive_file_id);
+    // A client-supplied drive_file_id must actually live in THIS case's own
+    // folder -- otherwise any authenticated user could graft an arbitrary
+    // Drive file id (belonging to a case they can't access) into a case they
+    // do have access to, by just calling finalize with someone else's id.
+    if (!(meta.parents || []).includes(folderId)) return res.status(403).json({ error: 'الملف غير موجود في مجلد هذه القضية' });
 
     // Idempotency guard: the browser may retry finalize after a lost
     // response even though the chunks already landed in Drive. If a row
