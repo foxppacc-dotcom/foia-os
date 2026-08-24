@@ -56,11 +56,18 @@ async function uploadOneFile(token, file, onProgress) {
   if (!sessionRes.ok) throw new Error(sessionData.error || 'تعذر بدء رفع الملف');
 
   let driveFileId = sessionData.drive_file_id || null;
-  if (!driveFileId) {
+  if (!driveFileId && !sessionData.completed) {
     const sessionUrl = sessionData.session_url || sessionData.sessionUrl;
     if (!sessionUrl) throw new Error('تعذر بدء جلسة الرفع');
+    // A 10GB transfer over a connection we don't control WILL drop at least
+    // once -- the backend already resumes the SAME Drive session on a
+    // retry (drive_upload_sessions), but that's wasted unless the client
+    // also starts from the byte Drive already has, not from 0.
+    const resumeOffset = sessionData.resume_offset || 0;
+    if (resumeOffset > 0) onProgress(resumeOffset);
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    for (let i = 0; i < totalChunks; i++) {
+    const firstChunk = Math.min(Math.floor(resumeOffset / CHUNK_SIZE), totalChunks);
+    for (let i = firstChunk; i < totalChunks; i++) {
       const start = i * CHUNK_SIZE, end = Math.min(start + CHUNK_SIZE, file.size);
       let attempt = 0;
       while (true) {
@@ -103,20 +110,34 @@ export default function PublicUpload() {
     }).catch(() => { setErrorMsg('تعذر التحقق من الرابط'); setStatus('invalid'); });
   }, [token]);
 
+  // Files here can run up to ~10GB -- an in-flight upload absolutely must
+  // not be lost to an accidental tab close, since (unlike the retry button
+  // below) there's no way to trigger a resume without the browser still
+  // holding the File object.
+  useEffect(() => {
+    const anyUploading = files.some(f => f.state === 'uploading');
+    if (!anyUploading) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [files]);
+
+  const startUpload = useCallback((item) => {
+    setFiles(prev => prev.map(x => x.id === item.id ? { ...x, state: 'uploading', error: undefined } : x));
+    uploadOneFile(token, item.file, (uploaded) => {
+      setFiles(prev => prev.map(x => x.id === item.id ? { ...x, progress: Math.round((uploaded / item.size) * 100) } : x));
+    }).then(() => {
+      setFiles(prev => prev.map(x => x.id === item.id ? { ...x, state: 'done', progress: 100 } : x));
+    }).catch((e) => {
+      setFiles(prev => prev.map(x => x.id === item.id ? { ...x, state: 'error', error: e.message } : x));
+    });
+  }, [token]);
+
   const addFiles = useCallback((fileList) => {
     const items = Array.from(fileList).map(f => ({ id: `${f.name}-${f.size}-${Date.now()}-${Math.random()}`, file: f, name: f.name, size: f.size, progress: 0, state: 'pending' }));
     setFiles(prev => [...prev, ...items]);
-    items.forEach(item => {
-      setFiles(prev => prev.map(x => x.id === item.id ? { ...x, state: 'uploading' } : x));
-      uploadOneFile(token, item.file, (uploaded) => {
-        setFiles(prev => prev.map(x => x.id === item.id ? { ...x, progress: Math.round((uploaded / item.size) * 100) } : x));
-      }).then(() => {
-        setFiles(prev => prev.map(x => x.id === item.id ? { ...x, state: 'done', progress: 100 } : x));
-      }).catch((e) => {
-        setFiles(prev => prev.map(x => x.id === item.id ? { ...x, state: 'error', error: e.message } : x));
-      });
-    });
-  }, [token]);
+    items.forEach(startUpload);
+  }, [startUpload]);
 
   const onDrop = (e) => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files); };
 
@@ -161,7 +182,11 @@ export default function PublicUpload() {
                 <span className="flex-1 min-w-0 truncate text-sm">{f.name}</span>
                 {f.state === 'uploading' && <span className="text-xs shrink-0" style={{ color: '#6b7280' }}>{f.progress}%</span>}
                 {f.state === 'done' && <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: '#22c55e' }} />}
-                {f.state === 'error' && <span className="text-xs shrink-0" style={{ color: '#ef4444' }} title={f.error}><XCircle className="w-4 h-4" /></span>}
+                {f.state === 'error' && (
+                  <button onClick={() => startUpload(f)} className="flex items-center gap-1 text-xs shrink-0 px-2 py-1 rounded-lg" style={{ color: '#ef4444', background: '#fef2f2' }} title={f.error}>
+                    <XCircle className="w-3.5 h-3.5" />Retry
+                  </button>
+                )}
               </div>
             ))}
           </div>

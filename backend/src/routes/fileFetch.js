@@ -105,7 +105,35 @@ async function publicUploadSessionHandler(req, res) {
 
     const { file_name, mime_type, size } = req.body;
     if (!file_name || !size) return res.status(400).json({ error: 'file_name, size مطلوبون' });
-    const folderId = await gdrive.ensureSubfolder(link.case_id, 'Incoming');
+    const caseId = link.case_id;
+    const folderId = await gdrive.ensureSubfolder(caseId, 'Incoming');
+
+    // Files here can be up to ~10GB -- over a connection an external party
+    // doesn't control (their own network, their own laptop staying awake),
+    // a multi-hour transfer WILL drop at least once. Reusing an
+    // in-progress drive_upload_sessions row (same mechanism the
+    // authenticated /gdrive/upload-session already relies on) means a retry
+    // resumes from wherever Drive actually left off instead of re-sending
+    // gigabytes that already landed -- without this, one dropped connection
+    // near the end of a 10GB transfer would mean starting completely over.
+    const { data: existingSession } = await sup.from('drive_upload_sessions')
+      .select('id, session_url, uploaded_bytes, status')
+      .eq('case_id', caseId).eq('file_name', file_name).eq('file_size', parseInt(size)).eq('status', 'active').maybeSingle();
+    if (existingSession && existingSession.session_url) {
+      try {
+        const progress = await gdrive.checkSessionProgress(existingSession.session_url, parseInt(size));
+        if (progress.completed) {
+          const doneFile = await gdrive.findExistingFile(folderId, file_name, size);
+          if (doneFile) return res.json({ success: true, existing: true, drive_file_id: doneFile.id, resume_offset: parseInt(size), completed: true });
+          return res.json({ success: true, existing: true, resume_offset: parseInt(size), completed: true });
+        }
+        await sup.from('drive_upload_sessions').update({ uploaded_bytes: progress.offset, updated_at: new Date().toISOString() }).eq('id', existingSession.id);
+        return res.json({ success: true, resumable: true, session_url: existingSession.session_url, sessionUrl: existingSession.session_url, resume_offset: progress.offset, folder_id: folderId });
+      } catch (e) {
+        // Session expired/gone (404/410 from Google) -- fall through and open a new one.
+        await sup.from('drive_upload_sessions').update({ status: 'expired' }).eq('id', existingSession.id).catch(() => {});
+      }
+    }
 
     const existing = await gdrive.findExistingFile(folderId, file_name, size);
     if (existing) return res.json({ success: true, existing: true, drive_file_id: existing.id, resume_offset: parseInt(size) });
@@ -114,7 +142,12 @@ async function publicUploadSessionHandler(req, res) {
     if (sessionUrl && typeof sessionUrl === 'object' && sessionUrl.__existing) {
       return res.json({ success: true, existing: true, drive_file_id: sessionUrl.__existing.id, resume_offset: parseInt(size) });
     }
-    res.json({ success: true, resumable: true, session_url: sessionUrl, sessionUrl, resume_offset: 0 });
+    await sup.from('drive_upload_sessions').insert({
+      case_id: caseId, file_name, file_size: parseInt(size),
+      mime_type, category: 'incoming', folder_id: folderId,
+      session_url: sessionUrl, uploaded_bytes: 0, status: 'active',
+    }).then(() => {}).catch((e) => console.error('[fileFetch] save session failed:', e.message));
+    res.json({ success: true, resumable: true, session_url: sessionUrl, sessionUrl, resume_offset: 0, folder_id: folderId });
   } catch (err) { res.status(500).json({ error: err.message }); }
 }
 
