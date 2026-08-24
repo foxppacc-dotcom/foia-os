@@ -48,11 +48,10 @@ function PlatformRow({ icon: Icon, label, onClick }) {
   );
 }
 
-// Fixed, always-visible install entry point -- deliberately rendered ONLY
-// on the Forum page (mounted there, not globally) per how this was asked
-// for, unlike the AI assistant widget which is global and draggable. Sits
-// in the opposite corner (bottom-left) from the AI widget's default
-// bottom-right position so the two never visually collide.
+// Sits inline in the Forum page's header (stacked above the "موضوع جديد"
+// button, per how this was asked for) -- NOT fixed/floating, so it scrolls
+// away with the header exactly like every other header action, instead of
+// staying pinned over the page content.
 export default function InstallAppButton() {
   const [open, setOpen] = useState(false);
   const [instructions, setInstructions] = useState(null);
@@ -89,9 +88,9 @@ export default function InstallAppButton() {
 
   return (
     <>
-      <div ref={ref} className="fixed z-40" style={{ left: 16, bottom: 16 }}>
+      <div ref={ref} className="relative">
         {open && (
-          <div className="absolute bottom-14 left-0 rounded-xl border shadow-lg p-1.5 ds-animate-scaleIn"
+          <div className="absolute top-full mt-2 left-0 z-20 rounded-xl border shadow-lg p-1.5 ds-animate-scaleIn"
             style={{ background: 'var(--ds-bg-secondary)', borderColor: 'var(--ds-border)', width: 220 }}>
             <p className="px-2.5 py-1.5 text-[11px] font-semibold" style={{ color: 'var(--ds-text-muted)' }}>تحميل التطبيق على...</p>
             <PlatformRow icon={Apple} label="iPhone" onClick={() => pick('iphone')} />
@@ -100,10 +99,10 @@ export default function InstallAppButton() {
           </div>
         )}
         <button onClick={() => setOpen(o => !o)}
-          className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg"
+          className="w-10 h-10 rounded-full flex items-center justify-center shadow-lg"
           style={{ background: 'var(--ds-accent)', color: 'white', boxShadow: '0 4px 16px rgba(0,0,0,0.25)' }}
           title="تحميل التطبيق">
-          {open ? <X className="w-6 h-6" /> : <Download className="w-6 h-6" />}
+          {open ? <X className="w-5 h-5" /> : <Download className="w-5 h-5" />}
         </button>
       </div>
 

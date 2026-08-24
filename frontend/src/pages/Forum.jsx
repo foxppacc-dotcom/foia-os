@@ -118,7 +118,12 @@ export default function Forum() {
         eyebrow="فريق العمل"
         title="المنتدى العام"
         meta="مساحة النقاش العام والإعلانات لكل فريق العمل"
-        actions={!selected && canCreateTopic ? <Button icon={Plus} onClick={() => setShowCreate(true)}>موضوع جديد</Button> : undefined}
+        actions={!selected ? (
+          <div className="flex flex-col items-end gap-2">
+            <InstallAppButton />
+            {canCreateTopic && <Button icon={Plus} onClick={() => setShowCreate(true)}>موضوع جديد</Button>}
+          </div>
+        ) : undefined}
       />
 
       {selected ? (
@@ -135,8 +140,6 @@ export default function Forum() {
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="موضوع جديد">
         <CreateTopicForm onDone={() => { setShowCreate(false); fetchTopics(); }} toast={toast} />
       </Modal>
-
-      <InstallAppButton />
     </div>
   );
 }
