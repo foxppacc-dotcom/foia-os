@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Apple, Smartphone, Monitor, X } from 'lucide-react';
-import FoxBotIcon from './icons/FoxBotIcon';
+import { Apple, Smartphone, Monitor, Download, X } from 'lucide-react';
 import AppDialog from './ds/AppDialog';
 import { getDeferredInstallPrompt, onInstallPromptChange, isStandalone } from '../lib/pwaInstall';
 
@@ -104,7 +103,7 @@ export default function InstallAppButton() {
           className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg"
           style={{ background: 'var(--ds-accent)', color: 'white', boxShadow: '0 4px 16px rgba(0,0,0,0.25)' }}
           title="تحميل التطبيق">
-          {open ? <X className="w-6 h-6" /> : <FoxBotIcon className="w-7 h-7" />}
+          {open ? <X className="w-6 h-6" /> : <Download className="w-6 h-6" />}
         </button>
       </div>
 
