@@ -9,6 +9,7 @@ const { notifyUsers, getCaseRecipients, getUsersWithPermission, getCaseActivityR
 const multer = require('multer');
 const gdrive = require('../services/googleDriveService');
 const caseFileStorage = require('../services/caseFileStorage');
+const { isSafeLinkUrl } = require('../services/urlSafety');
 // Comment attachments (team discussion) -- memoryStorage + Drive upload,
 // same convention as case_documents' own upload route.
 const commentUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -777,6 +778,7 @@ router.post('/cases/:id/comments', commentUpload.single('file'), async (req, res
         return res.status(500).json({ error: 'فشل رفع المرفق: ' + uploadErr.message });
       }
     } else if (link_url) {
+      if (!isSafeLinkUrl(link_url)) return res.status(400).json({ error: 'رابط غير صالح -- يجب أن يبدأ بـ http:// أو https://' });
       insertData.attachment_url = link_url;
       insertData.attachment_type = 'link';
       insertData.attachment_name = link_label || link_url;

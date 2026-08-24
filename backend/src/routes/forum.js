@@ -7,6 +7,7 @@ const { notifyUsers, getUsersWithPermission } = require('../services/notificatio
 const multer = require('multer');
 const gdrive = require('../services/googleDriveService');
 const forumFileStorage = require('../services/forumFileStorage');
+const { isSafeLinkUrl } = require('../services/urlSafety');
 
 const forumUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
@@ -117,6 +118,7 @@ router.post('/forum/topics', requirePermission('forum', 'create_topic'), forumUp
         insertData.attachment_name = saved.attachment_name;
       } catch (uploadErr) { return res.status(500).json({ error: 'فشل رفع المرفق: ' + uploadErr.message }); }
     } else if (link_url) {
+      if (!isSafeLinkUrl(link_url)) return res.status(400).json({ error: 'رابط غير صالح -- يجب أن يبدأ بـ http:// أو https://' });
       insertData.attachment_url = link_url;
       insertData.attachment_type = 'link';
       insertData.attachment_name = link_label || link_url;
@@ -162,6 +164,7 @@ router.post('/forum/topics/:id/comments', requirePermission('forum', 'comment'),
         insertData.attachment_name = saved.attachment_name;
       } catch (uploadErr) { return res.status(500).json({ error: 'فشل رفع المرفق: ' + uploadErr.message }); }
     } else if (link_url) {
+      if (!isSafeLinkUrl(link_url)) return res.status(400).json({ error: 'رابط غير صالح -- يجب أن يبدأ بـ http:// أو https://' });
       insertData.attachment_url = link_url;
       insertData.attachment_type = 'link';
       insertData.attachment_name = link_label || link_url;

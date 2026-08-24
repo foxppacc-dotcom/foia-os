@@ -543,8 +543,19 @@ function TopicDetail({ topicId, onBack, me, isAdmin, canComment, canPin, canDele
   );
 }
 
+// The backend now rejects a non-http(s) link_url at write time, but this
+// still guards render-time too -- against any row written before that
+// fix, or a javascript:/data: URI slipping in through some other path --
+// since rendering it as a real <a href> would execute it in this origin
+// the moment anyone clicks, and rel="noopener noreferrer" does nothing to
+// stop that.
+function isSafeHref(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+}
+
 function AttachmentBlock({ item, compact }) {
   if (!item.attachment_url || item.attachment_type === 'image') return null;
+  if (item.attachment_type === 'link' && !isSafeHref(item.attachment_url)) return null;
   const Icon = item.attachment_type === 'link' ? ExternalLink : FileText;
   return (
     <a href={item.attachment_url} target="_blank" rel="noopener noreferrer"

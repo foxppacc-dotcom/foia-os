@@ -6,6 +6,15 @@ import { MessageSquare, Send, Paperclip, Link2, FileText, X, User, ExternalLink,
 
 const DELETE_WINDOW_MS = 60 * 1000;
 
+// The backend rejects a non-http(s) link_url at write time, but this still
+// guards render-time too -- against any row written before that fix, or a
+// javascript:/data: URI slipping in through some other path -- since
+// rendering it as a real <a href> would execute it in this origin the
+// moment anyone clicks, and rel="noopener noreferrer" does nothing to stop that.
+function isSafeHref(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+}
+
 function timeAgo(dateStr) {
   if (!dateStr) return '';
   const diffMs = Date.now() - new Date(dateStr).getTime();
@@ -224,7 +233,7 @@ export default function TeamDiscussion() {
                     <FileText className="w-3.5 h-3.5" /> {cm.attachment_name || 'ملف مرفق'}
                   </a>
                 )}
-                {cm.attachment_url && cm.attachment_type === 'link' && (
+                {cm.attachment_url && cm.attachment_type === 'link' && isSafeHref(cm.attachment_url) && (
                   <a href={cm.attachment_url} target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-1.5 mt-2 text-xs px-2.5 py-1.5 rounded-lg w-fit" style={{ background: 'var(--ds-bg-primary)', color: 'var(--ds-accent)' }}>
                     <ExternalLink className="w-3.5 h-3.5" /> {cm.attachment_name || cm.attachment_url}

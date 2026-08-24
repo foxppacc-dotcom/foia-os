@@ -377,8 +377,25 @@ router.post('/cases/:id/agencies/:agencyId/channels', caseGate, async (req, res)
 // case/agency/channel data. Meant to be triggered after editing anything
 // that could affect matching (defendant name, title, source agency, request
 // reference numbers) rather than only after adding a channel.
+// System-wide (not case-scoped, so caseGate doesn't apply) and re-runs
+// matching against EVERY still-unlinked inbound message -- a real,
+// system-wide job, not a per-request lookup. It's meant for any
+// case-handling user (triggered from AgenciesTab.jsx after editing data
+// that affects matching), so gating it by role would break the feature for
+// its actual users -- the real gap was that ANY authenticated user could
+// re-trigger this expensive job back-to-back with no limit at all. A short
+// global cooldown (not per-user -- there's no value in two people re-running
+// the same system-wide scan seconds apart) closes that without restricting
+// who can use it.
+let lastRescanAt = 0;
+const RESCAN_COOLDOWN_MS = 30 * 1000;
 router.post('/cases/rescan-unmatched', async (req, res) => {
   try {
+    const now = Date.now();
+    if (now - lastRescanAt < RESCAN_COOLDOWN_MS) {
+      return res.status(429).json({ error: 'تم فحص الرسائل مؤخرًا -- حاول بعد قليل' });
+    }
+    lastRescanAt = now;
     const mailPoller = require('../services/mailPoller');
     const result = await mailPoller.rescanUnmatched();
     res.json({ success: true, ...result });

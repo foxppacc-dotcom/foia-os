@@ -3,8 +3,17 @@ const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 
-// All teams routes require auth + admin or manager
+// All teams routes require auth + admin or manager. Scoped to '/teams'
+// (not a bare router.use(requireRole)) since every router is mounted at
+// '/api' -- an un-pathed one here would intercept ALL /api/* requests that
+// don't match a route in this file first. Placed immediately after
+// requireAuth, before ANY route in this file -- it used to sit further
+// down, after the two GET routes below, which meant Express had already
+// matched and served them (registration order, not declaration intent)
+// before this gate ever ran: any authenticated employee, not just
+// admin/manager, could enumerate every team and every member's name/email/role.
 router.use(requireAuth);
+router.use('/teams', requireRole('admin', 'manager'));
 
 // GET /api/teams — list all teams
 router.get('/teams', async (req, res) => {
@@ -35,13 +44,6 @@ router.get('/teams/:id/members', async (req, res) => {
 
   res.json({ success: true, data: members || [] });
 });
-
-// Admin/Manager only for /teams* paths — NOT a bare router.use(): since every
-// router is mounted at '/api', an un-pathed router.use(requireRole) here would
-// intercept ALL /api/* requests that don't match a route in this file first
-// (e.g. a viewer hitting /api/permissions/mine would 403 here before the
-// permissions router ever saw it). Scope it to the teams paths.
-router.use('/teams', requireRole('admin', 'manager'));
 
 // POST /api/teams — create team
 router.post('/teams', async (req, res) => {
