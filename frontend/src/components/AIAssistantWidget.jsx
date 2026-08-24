@@ -9,6 +9,36 @@ const POS_KEY = 'ai_widget_position';
 
 const defaultPosition = () => ({ x: Math.max(16, window.innerWidth - 90), y: Math.max(16, window.innerHeight - 100) });
 
+// The bubble is draggable to anywhere on screen (position persisted in
+// POS_KEY) -- the panel used to always open growing right+down from the
+// bubble's own top-left corner, which is exactly backwards when the bubble
+// sits near the right or bottom edge (its usual default spot): the panel
+// would render partly or fully off-screen. This picks, from the bubble's
+// CURRENT position, whichever side actually has room, so "opens toward
+// empty space" holds no matter where the bubble has been dragged.
+const BUBBLE_SIZE = 56; // w-14/h-14
+const PANEL_WIDTH = 320; // w-80
+const PANEL_MAX_HEIGHT_RATIO = 0.7; // matches the panel's own maxHeight: 70vh
+const EDGE_MARGIN = 12;
+
+function computePanelLayout(pos) {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const spaceRight = vw - (pos.x + BUBBLE_SIZE);
+  const spaceLeft = pos.x;
+  const horizontal = spaceRight >= PANEL_WIDTH || spaceRight >= spaceLeft ? 'right' : 'left';
+
+  const desiredHeight = vh * PANEL_MAX_HEIGHT_RATIO;
+  const spaceBelow = vh - (pos.y + BUBBLE_SIZE);
+  const spaceAbove = pos.y;
+  const vertical = spaceBelow >= desiredHeight || spaceBelow >= spaceAbove ? 'down' : 'up';
+
+  const width = Math.min(PANEL_WIDTH, vw - EDGE_MARGIN * 2);
+  const maxHeightSpace = (vertical === 'down' ? spaceBelow : spaceAbove) - EDGE_MARGIN;
+  const maxHeight = Math.max(200, Math.min(desiredHeight, maxHeightSpace));
+
+  return { horizontal, vertical, width, maxHeight };
+}
+
 function loadPosition() {
   try {
     const raw = localStorage.getItem(POS_KEY);
@@ -28,6 +58,7 @@ export default function AIAssistantWidget() {
   const [hidden, setHidden] = useState(() => localStorage.getItem(HIDDEN_KEY) === '1');
   const [collapsed, setCollapsed] = useState(true);
   const [position, setPosition] = useState(loadPosition);
+  const [layout, setLayout] = useState(() => computePanelLayout(loadPosition()));
   const [hasUnread, setHasUnread] = useState(false);
   const [listening, setListening] = useState(false);
   const listRef = useRef(null);
@@ -94,8 +125,22 @@ export default function AIAssistantWidget() {
     dragState.current = null;
     if (wasMoved) { try { localStorage.setItem(POS_KEY, JSON.stringify(position)); } catch {} return; }
     // A click (no real movement) toggles the widget instead of dragging it.
-    if (collapsed) { setCollapsed(false); setHasUnread(false); }
+    if (collapsed) {
+      setLayout(computePanelLayout(position));
+      setCollapsed(false);
+      setHasUnread(false);
+    }
   };
+  // The panel's own maxHeight/maxWidth are computed from the viewport at the
+  // moment it opens -- a resize while it's already open (rotating a tablet,
+  // resizing a desktop window) would otherwise leave it clipped against
+  // stale numbers instead of the new available space.
+  useEffect(() => {
+    if (collapsed) return;
+    const onResize = () => setLayout(computePanelLayout(position));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [collapsed, position]);
   // Global widget, mounted for the entire session -- an unguarded setItem
   // throwing here (storage disabled/private mode/quota exceeded) would
   // crash on every position change, including every pointermove tick of an
@@ -128,7 +173,7 @@ export default function AIAssistantWidget() {
   if (hidden) return null;
 
   return (
-    <div className="fixed z-50" style={{ left: position.x, top: position.y }}>
+    <div className="fixed z-50" style={{ left: position.x, top: position.y, width: BUBBLE_SIZE, height: BUBBLE_SIZE }}>
       {collapsed ? (
         <button onPointerDown={onPointerDown}
           className="relative w-14 h-14 rounded-full flex items-center justify-center shadow-lg cursor-grab active:cursor-grabbing"
@@ -144,7 +189,16 @@ export default function AIAssistantWidget() {
           )}
         </button>
       ) : (
-        <div className="w-80 rounded-2xl shadow-2xl overflow-hidden flex flex-col" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', maxHeight: '70vh' }}>
+        // Anchored against whichever corner of the 56x56 reference box
+        // (set on the wrapper above) actually has room -- growing from the
+        // bubble's top-left unconditionally is what used to push the panel
+        // off-screen whenever the bubble had been dragged near an edge.
+        <div className="absolute rounded-2xl shadow-2xl overflow-hidden flex flex-col" style={{
+          background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+          width: layout.width, maxHeight: layout.maxHeight,
+          [layout.horizontal === 'right' ? 'left' : 'right']: 0,
+          [layout.vertical === 'down' ? 'top' : 'bottom']: 0,
+        }}>
           <div onPointerDown={onPointerDown} className="flex items-center justify-between gap-2 px-3 py-2.5 cursor-grab active:cursor-grabbing" style={{ background: 'var(--accent)', color: 'white', touchAction: 'none' }}>
             <div className="flex items-center gap-2">
               <FoxBotIcon className="w-5 h-5" />
