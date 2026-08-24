@@ -6,6 +6,7 @@ import { useCaseContext } from '../context/CaseContext';
 import UploadZone from '../../drive/components/UploadZone';
 import AppBadge from '../../../components/ds/AppBadge';
 import Button from '../../../components/ui/Button';
+import FileFetchModal from './FileFetchModal';
 
 const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
@@ -61,8 +62,9 @@ function statusInfo(doc) {
 }
 
 export default function DocumentsTab() {
-  const { id, documents, removeDocument, removeDocuments, setPreviewFile, refetch } = useCaseContext();
+  const { id, c, documents, removeDocument, removeDocuments, setPreviewFile, refetch } = useCaseContext();
   const [categories, setCategories] = useState([]);
+  const [fileFetchOpen, setFileFetchOpen] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [catFilter, setCatFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -192,6 +194,9 @@ export default function DocumentsTab() {
             تم اختيار {selected.size}
           </span>
         )}
+        <Button variant="secondary" size="sm" onClick={() => setFileFetchOpen(true)}>
+          <Link2 className="w-3 h-3" />FileFetch
+        </Button>
       </div>
 
       {/* Bulk actions */}
@@ -333,6 +338,7 @@ export default function DocumentsTab() {
           </>
         )}
       </div>
+      <FileFetchModal open={fileFetchOpen} onClose={() => setFileFetchOpen(false)} caseId={id} caseTitle={c?.title} />
     </div>
   );
 }

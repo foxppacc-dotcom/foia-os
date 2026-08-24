@@ -330,7 +330,7 @@ router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
-    const { to, cc, bcc, subject, body, account_id, agency_id, request_id, reply_to_id, expected_response_days } = req.body;
+    const { to, cc, bcc, subject, body, html, account_id, agency_id, request_id, reply_to_id, expected_response_days } = req.body;
     if (!to || !subject || !account_id) return res.status(400).json({ error: 'to, subject, account_id مطلوبون' });
 
     const { data: account } = await sup.from('email_accounts').select('email').eq('id', parseInt(account_id)).single();
@@ -398,8 +398,12 @@ router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array
       }
     }
 
+    // html was never wired here (unlike email.js's own /send route) --
+    // sendEmail has always fully supported it; needed for a FileFetch link's
+    // styled button (and any other rich-formatted email sent through either
+    // compose path).
     const emailService = require('../services/emailService');
-    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, inReplyTo, references, attachments: mailAttachments });
+    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, html, inReplyTo, references, attachments: mailAttachments });
 
     // Create communication record. The email is already sent at this point
     // (SMTP accepted it) -- an unchecked error here would mean the message
@@ -414,7 +418,7 @@ router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array
     const { error: commErr } = await sup.from('communications').insert({
       case_id: caseId,
       type: 'email', direction: 'outbound',
-      subject, body: body || '', sender: account.email, recipient: to,
+      subject, body: body || '', body_html: html || null, sender: account.email, recipient: to,
       message_id: info.messageId,
       thread_id: threadId || info.messageId,
       created_at: new Date().toISOString(),
@@ -698,7 +702,7 @@ router.get('/inbox', requireAuth, async (req, res) => {
 // investigation had nowhere to go through this system's own accounts.
 router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10), async (req, res) => {
   try {
-    const { account_id, to, cc, bcc, subject, body, case_id, reply_to_id } = req.body;
+    const { account_id, to, cc, bcc, subject, body, html, case_id, reply_to_id } = req.body;
     if (!account_id || !to || !subject) return res.status(400).json({ error: 'account_id, to, subject مطلوبون' });
 
     const sup = getSupabase();
@@ -734,12 +738,16 @@ router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10
     const mailAttachments = (req.files || []).map(f => ({ filename: f.originalname, content: f.buffer, contentType: f.mimetype }));
     const storedAttachments = (req.files || []).map(f => ({ filename: f.originalname, size: f.size, mimeType: f.mimetype }));
 
+    // html was never wired here (unlike email.js's own /send route) --
+    // sendEmail has always fully supported it; needed for a FileFetch link's
+    // styled button (and any other rich-formatted email sent through either
+    // compose path).
     const emailService = require('../services/emailService');
-    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, inReplyTo, references, attachments: mailAttachments });
+    const info = await emailService.sendEmail(parseInt(account_id), { to, cc, bcc, subject, text: body, html, inReplyTo, references, attachments: mailAttachments });
 
     const { data, error } = await sup.from('communications').insert({
       type: 'email', direction: 'outbound',
-      subject, body: body || '', sender: account.email, recipient: to,
+      subject, body: body || '', body_html: html || null, sender: account.email, recipient: to,
       message_id: info.messageId,
       thread_id: threadId || info.messageId,
       created_at: new Date().toISOString(),

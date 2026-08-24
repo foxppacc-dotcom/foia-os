@@ -44,6 +44,7 @@ const Profile = lazy(() => import('./pages/Profile'));
 const ListDetail = lazy(() => import('./pages/ListDetail'));
 const Inbox = lazy(() => import('./pages/Inbox'));
 const MessageView = lazy(() => import('./pages/MessageView'));
+const PublicUpload = lazy(() => import('./pages/PublicUpload'));
 const TeamPermissions = lazy(() => import('./components/TeamPermissions'));
 const Forum = lazy(() => import('./pages/Forum'));
 
@@ -108,6 +109,19 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  // The one genuinely public page in this app -- an external agency opening
+  // a FileFetch link has no account and never will. Checked before the
+  // loading/login gates below (not just before the authenticated shell, like
+  // /inbox/message/:id is), since this must render with zero dependency on
+  // auth state at all.
+  if (window.location.pathname.startsWith('/upload/')) {
+    return (
+      <Suspense fallback={<AppFallback />}>
+        <Routes><Route path="/upload/:token" element={<PublicUpload />} /></Routes>
+      </Suspense>
+    );
+  }
 
   if (loading) {
     return (

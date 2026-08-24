@@ -35,7 +35,7 @@ const routes = [
   'automation', 'gdrive', 'phoneAndMail', 'portals', 'production',
   'settings', 'activity', 'classifier',
   'case_detail.routes', 'checklist', 'assignees', 'teamManagement', 'team.routes',
-  'teams', 'permissions', 'pipelineLists', 'forum',
+  'teams', 'permissions', 'pipelineLists', 'forum', 'fileFetch',
 ];
 
 // Diagnostics and truly-public callbacks (no user Bearer token possible) must be
@@ -75,6 +75,20 @@ try {
   }
 } catch (e) {
   console.error('[index] gdrive oauth-callback mount failed:', e.message);
+}
+try {
+  // FileFetch's public upload endpoints -- an external agency with a link
+  // has no account and can never carry a Bearer token, same reasoning as
+  // the gdrive block above. Must resolve before cases.js's blanket
+  // requireAuth would otherwise 401 every request that reaches it first.
+  const fileFetchRoute = require('./routes/fileFetch');
+  if (fileFetchRoute.publicLinkInfoHandler) {
+    app.get('/api/public/upload/:token', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicLinkInfoHandler);
+    app.post('/api/public/upload/:token/session', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicUploadSessionHandler);
+    app.post('/api/public/upload/:token/finalize', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicUploadFinalizeHandler);
+  }
+} catch (e) {
+  console.error('[index] fileFetch public routes mount failed:', e.message);
 }
 try {
   app.use('/api', require('./routes/cron'));
