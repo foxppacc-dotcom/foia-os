@@ -344,6 +344,17 @@ router.post('/gdrive/finalize', requireAuth, async (req, res) => {
     }
     if (error) throw error;
 
+    // Without this, the session row lingers 'active' forever -- a LATER,
+    // unrelated upload attempt of a same-named/same-sized file to this same
+    // case would match it in POST /gdrive/upload-session's own lookup and
+    // (correctly, but confusingly) get told the transfer is already
+    // "completed" before it ever started. Same gap fixed in fileFetch.js's
+    // public finalize handler.
+    try {
+      await sup.from('drive_upload_sessions').update({ status: 'completed', updated_at: new Date().toISOString() })
+        .eq('case_id', parseInt(case_id)).eq('file_name', original_name || meta.name).eq('file_size', parseInt(meta.size) || 0).eq('status', 'active');
+    } catch (e) { console.error('[gdrive] session completion update failed:', e.message); }
+
     // The small-file upload path (case_detail.routes.js's POST
     // /cases/:id/documents) already notifies the case team on a new
     // document -- this large-file/chunked path led to the exact same

@@ -1,7 +1,7 @@
 import { getApiBase } from '../../../api';
 const API = getApiBase();
 import { useState, useEffect, useMemo } from 'react';
-import { Search, Trash2, FileText, Image, Video, Music, Folder, Upload, Eye, CheckSquare, Square, X, Download, Pencil, Share2, Mail, CloudUpload, Link2, Loader2, Copy } from 'lucide-react';
+import { Search, Trash2, FileText, Image, Video, Music, Upload, Eye, CheckSquare, Square, X, Download, Pencil, Share2, Mail, CloudUpload, Link2, Loader2, Copy } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import UploadZone from '../../drive/components/UploadZone';
 import AppBadge from '../../../components/ds/AppBadge';
@@ -43,6 +43,10 @@ function shortenSize(bytes) {
 /** Where did this file come from? 'email' if the backend recorded an email
  *  origin (mailPoller / compose), otherwise 'manual' (Documents tab upload). */
 function detectSource(doc) {
+  // fileFetch.js stamps this explicitly -- checked first so an externally
+  // (no-login) submitted file is never lumped in with an ordinary manual
+  // upload, which was the whole point of tagging it in the first place.
+  if (doc?.upload_source === 'file_fetch_link') return 'filefetch';
   if (doc?.source === 'email') return 'email';
   if (doc?.source === 'manual') return 'manual';
   // Fallback heuristics on existing fields (no schema change needed):
@@ -277,6 +281,8 @@ export default function DocumentsTab() {
                   <span className="w-20 hidden md:flex items-center">
                     {source === 'email' ? (
                       <AppBadge variant="info" size="sm"><Mail className="w-2.5 h-2.5 inline mr-0.5" />إيميل</AppBadge>
+                    ) : source === 'filefetch' ? (
+                      <AppBadge variant="warning" size="sm"><Link2 className="w-2.5 h-2.5 inline mr-0.5" />FileFetch</AppBadge>
                     ) : (
                       <AppBadge variant="neutral" size="sm"><CloudUpload className="w-2.5 h-2.5 inline mr-0.5" />يدوي</AppBadge>
                     )}

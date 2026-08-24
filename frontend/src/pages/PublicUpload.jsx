@@ -62,18 +62,22 @@ async function uploadOneFile(token, file, onProgress) {
     // A 10GB transfer over a connection we don't control WILL drop at least
     // once -- the backend already resumes the SAME Drive session on a
     // retry (drive_upload_sessions), but that's wasted unless the client
-    // also starts from the byte Drive already has, not from 0.
-    const resumeOffset = sessionData.resume_offset || 0;
-    if (resumeOffset > 0) onProgress(resumeOffset);
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    const firstChunk = Math.min(Math.floor(resumeOffset / CHUNK_SIZE), totalChunks);
-    for (let i = firstChunk; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE, end = Math.min(start + CHUNK_SIZE, file.size);
+    // also starts from the EXACT byte Drive confirms it has. Google's
+    // protocol expects the next Content-Range to start precisely at that
+    // offset -- rounding down to a chunk boundary (re-sending a slice of
+    // already-committed bytes) risks Drive rejecting the range outright,
+    // since a drop can happen mid-chunk. cursor tracks the real byte
+    // position, independent of any fixed chunk grid.
+    let cursor = sessionData.resume_offset || 0;
+    if (cursor > 0) onProgress(cursor);
+    while (cursor < file.size) {
+      const end = Math.min(cursor + CHUNK_SIZE, file.size);
       let attempt = 0;
       while (true) {
         try {
-          const result = await putChunk(sessionUrl, file.slice(start, end), start, end, file.size, onProgress);
+          const result = await putChunk(sessionUrl, file.slice(cursor, end), cursor, end, file.size, onProgress);
           if (result?.id) driveFileId = result.id;
+          cursor = end;
           break;
         } catch (e) {
           attempt++;

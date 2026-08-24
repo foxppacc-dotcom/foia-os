@@ -78,6 +78,26 @@ async function resolveActiveLink(sup, token) {
   return data || null;
 }
 
+// Files here can legitimately run ~10GB; nothing else in the request path
+// enforces an upper bound (bytes never touch our backend, so there's no
+// natural body-size ceiling to lean on). Without this, a holder of a valid,
+// non-revoked token could declare an arbitrary size and open resumable
+// sessions indefinitely, consuming Drive storage with no limit at all.
+const MAX_UPLOAD_BYTES = 12 * 1024 * 1024 * 1024; // 12GB -- headroom above the ~10GB the feature is meant for.
+
+// Drive's own indexing can lag a few seconds behind a just-finished upload.
+// Shared by both the session handler (recognizing an already-completed
+// transfer) and finalize (registering it) so neither gives up on a genuine
+// success just because it asked half a second too early.
+async function findExistingFileRetrying(folderId, fileName, size) {
+  let existing = null;
+  for (let attempt = 0; attempt < 3 && !existing; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
+    existing = await gdrive.findExistingFile(folderId, fileName, size);
+  }
+  return existing;
+}
+
 // GET /api/public/upload/:token — the ONLY thing this exposes about the case
 // is its title, so the upload page can greet the sender. No other case
 // field, no document list, nothing else is ever reachable through this token.
@@ -105,6 +125,7 @@ async function publicUploadSessionHandler(req, res) {
 
     const { file_name, mime_type, size } = req.body;
     if (!file_name || !size) return res.status(400).json({ error: 'file_name, size مطلوبون' });
+    if (parseInt(size) > MAX_UPLOAD_BYTES) return res.status(400).json({ error: `الملف أكبر من الحد المسموح (${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024 / 1024)} جيجابايت)` });
     const caseId = link.case_id;
     const folderId = await gdrive.ensureSubfolder(caseId, 'Incoming');
 
@@ -123,7 +144,7 @@ async function publicUploadSessionHandler(req, res) {
       try {
         const progress = await gdrive.checkSessionProgress(existingSession.session_url, parseInt(size));
         if (progress.completed) {
-          const doneFile = await gdrive.findExistingFile(folderId, file_name, size);
+          const doneFile = await findExistingFileRetrying(folderId, file_name, size);
           if (doneFile) return res.json({ success: true, existing: true, drive_file_id: doneFile.id, resume_offset: parseInt(size), completed: true });
           return res.json({ success: true, existing: true, resume_offset: parseInt(size), completed: true });
         }
@@ -135,18 +156,44 @@ async function publicUploadSessionHandler(req, res) {
       }
     }
 
-    const existing = await gdrive.findExistingFile(folderId, file_name, size);
+    const existing = await findExistingFileRetrying(folderId, file_name, size);
     if (existing) return res.json({ success: true, existing: true, drive_file_id: existing.id, resume_offset: parseInt(size) });
 
     const sessionUrl = await gdrive.createResumableSession(file_name, mime_type, folderId, size);
     if (sessionUrl && typeof sessionUrl === 'object' && sessionUrl.__existing) {
       return res.json({ success: true, existing: true, drive_file_id: sessionUrl.__existing.id, resume_offset: parseInt(size) });
     }
-    await sup.from('drive_upload_sessions').insert({
+    // A partial unique index (migration 035) rejects a second concurrent
+    // 'active' row for the same (case_id, file_name, file_size) -- two
+    // people uploading the identically-named/sized file to the same case
+    // at the same moment would otherwise both open a separate Drive
+    // session and both finalize into two duplicate case_documents rows. On
+    // conflict, someone else's insert already won this race -- fetch and
+    // hand back THEIR session instead of silently erroring.
+    const { error: insertErr } = await sup.from('drive_upload_sessions').insert({
       case_id: caseId, file_name, file_size: parseInt(size),
       mime_type, category: 'incoming', folder_id: folderId,
       session_url: sessionUrl, uploaded_bytes: 0, status: 'active',
-    }).then(() => {}).catch((e) => console.error('[fileFetch] save session failed:', e.message));
+    });
+    if (insertErr) {
+      if (/duplicate key|unique constraint/i.test(insertErr.message)) {
+        const { data: winner } = await sup.from('drive_upload_sessions')
+          .select('session_url').eq('case_id', caseId).eq('file_name', file_name).eq('file_size', parseInt(size)).eq('status', 'active').maybeSingle();
+        if (winner?.session_url) {
+          // Ask Drive how far the WINNING session actually got -- assuming
+          // 0 here would repeat this exact byte-offset mismatch bug against
+          // whatever the other request has already sent.
+          try {
+            const progress = await gdrive.checkSessionProgress(winner.session_url, parseInt(size));
+            return res.json({ success: true, resumable: !progress.completed, existing: progress.completed, session_url: winner.session_url, sessionUrl: winner.session_url, resume_offset: progress.offset, folder_id: folderId });
+          } catch (e) {
+            return res.json({ success: true, resumable: true, session_url: winner.session_url, sessionUrl: winner.session_url, resume_offset: 0, folder_id: folderId });
+          }
+        }
+      } else {
+        console.error('[fileFetch] save session failed:', insertErr.message);
+      }
+    }
     res.json({ success: true, resumable: true, session_url: sessionUrl, sessionUrl, resume_offset: 0, folder_id: folderId });
   } catch (err) { res.status(500).json({ error: err.message }); }
 }
@@ -201,6 +248,16 @@ async function publicUploadFinalizeHandler(req, res) {
       ({ data, error } = await sup.from('case_documents').insert(insertData).select().single());
     }
     if (error) throw error;
+
+    // Without this, the session row lingers 'active' forever -- a LATER,
+    // unrelated upload attempt of a same-named/same-sized file to this same
+    // case would match it via the SELECT in the session handler and
+    // (correctly, but confusingly) get told the transfer is already
+    // "completed" before it ever started.
+    try {
+      await sup.from('drive_upload_sessions').update({ status: 'completed', updated_at: new Date().toISOString() })
+        .eq('case_id', caseId).eq('file_name', original_name || meta.name).eq('file_size', parseInt(size) || parseInt(meta.size) || 0).eq('status', 'active');
+    } catch (e) { console.error('[fileFetch] session completion update failed:', e.message); }
 
     try {
       await sup.from('case_upload_links').update({
