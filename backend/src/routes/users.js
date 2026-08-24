@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole, bcrypt } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission, bcrypt } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 
 // All routes require auth; mutating routes additionally require admin
@@ -18,9 +18,21 @@ router.get('/users', async (req, res) => {
     .select(`id, name, email, role, team_id, teams!left(name), created_at`)
     .order('created_at', { ascending: false });
 
+  // Users.jsx's "التخصصات" column reads u.specialties as an array of
+  // specialty ids -- never populated here before, so it always fell back to
+  // showing "—" for every user regardless of what was actually assigned via
+  // the create-user form (see the matching fix in POST /users below).
+  const userIds = (users || []).map(u => u.id);
+  const specIdsByUser = {};
+  if (userIds.length) {
+    const { data: links } = await sup.from('user_specialties').select('user_id, specialty_id').in('user_id', userIds);
+    for (const l of links || []) (specIdsByUser[l.user_id] ||= []).push(l.specialty_id);
+  }
+
   const mapped = (users || []).map(u => ({
     ...u,
     team_name: u.teams?.name || null,
+    specialties: specIdsByUser[u.id] || [],
     teams: undefined
   }));
 
@@ -37,8 +49,8 @@ async function getValidRoleNames(sup) {
 }
 
 // POST /api/users — create user
-router.post('/users', requireRole('admin'), async (req, res) => {
-  const { name, email, password, role, team_id } = req.body;
+router.post('/users', requirePermission('users', 'invite'), async (req, res) => {
+  const { name, email, password, role, team_id, specialties } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, password required' });
 
   const sup = getSupabase();
@@ -57,11 +69,20 @@ router.post('/users', requireRole('admin'), async (req, res) => {
 
   if (error) throw error;
 
+  // Users.jsx's create-user form lets an admin pick specialties up front,
+  // but this was silently dropped -- the checkboxes did nothing.
+  if (Array.isArray(specialties) && specialties.length) {
+    const { error: specErr } = await sup.from('user_specialties').insert(
+      specialties.map(specialty_id => ({ user_id: created.id, specialty_id }))
+    );
+    if (specErr) console.error(`[users] user_specialties insert failed for user ${created.id}:`, specErr.message);
+  }
+
   res.json({ success: true, id: created.id, message: `✅ تم إضافة ${name}` });
 });
 
 // PUT /api/users/:id — update user
-router.put('/users/:id', async (req, res) => {
+router.put('/users/:id', requirePermission('users', 'edit'), async (req, res) => {
   const { name, email, password, role, team_id, is_active } = req.body;
   const sup = getSupabase();
 
@@ -69,6 +90,13 @@ router.put('/users/:id', async (req, res) => {
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   if (role) {
+    // `users:edit` is grantable to any custom role for ordinary
+    // team-management (name/email/team/active-status) -- role assignment
+    // itself is a separate, higher-privilege action (it's how you'd become
+    // admin), so require actual admin regardless of what users:edit allows.
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden — تغيير الدور متاح فقط للمسؤول (admin)' });
+    }
     const validRoles = await getValidRoleNames(sup);
     if (!validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
   }
@@ -83,25 +111,33 @@ router.put('/users/:id', async (req, res) => {
 
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields to update' });
 
-  await sup.from('users').update(updates).eq('id', parseInt(req.params.id));
+  // supabase-js resolves {data, error} rather than throwing on a DB-level
+  // rejection (e.g. a stale CHECK constraint on users.role) -- ignoring
+  // `error` here meant a rejected update still reported success while the
+  // row silently stayed unchanged. Concretely reproduced with a newly
+  // created custom role: assigning it to a user looked like it worked, but
+  // the role never actually changed.
+  const { error } = await sup.from('users').update(updates).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
 
   res.json({ success: true, message: '✅ تم تحديث المستخدم' });
 });
 
 // POST /api/users/:id/reset-password — admin sets a new password directly
-router.post('/users/:id/reset-password', async (req, res) => {
+router.post('/users/:id/reset-password', requirePermission('users', 'edit'), async (req, res) => {
   const { password } = req.body;
   if (!password || password.length < 6) return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 6 أحرف' });
   const sup = getSupabase();
   const { data: user } = await sup.from('users').select('id').eq('id', parseInt(req.params.id)).maybeSingle();
   if (!user) return res.status(404).json({ error: 'User not found' });
   const hash = bcrypt.hashSync(password, 10);
-  await sup.from('users').update({ password_hash: hash }).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('users').update({ password_hash: hash }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true, message: '✅ تم إعادة تعيين كلمة المرور' });
 });
 
 // DELETE /api/users/:id
-router.delete('/users/:id', async (req, res) => {
+router.delete('/users/:id', requirePermission('users', 'delete'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
   if (id === req.user.id) return res.status(400).json({ error: 'لا يمكن حذف نفسك' });

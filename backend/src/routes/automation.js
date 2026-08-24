@@ -2,12 +2,13 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
+const { canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
 
 // All automation routes require auth
 router.use(requireAuth);
 
 // GET /api/automations — list all
-router.get('/automations', async (req, res) => {
+router.get('/automations', requireRole('admin'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data, error } = await sup.from('automations').select('*').order('created_at', { ascending: false });
@@ -108,13 +109,37 @@ router.post('/automations/run-all', requireRole('admin'), async (req, res) => {
 router.get('/automations/logs', async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data, error } = await sup.from('automation_logs')
-      .select('*, automations!left(name), cases!left(title)')
-      .order('created_at', { ascending: false }).limit(50);
+    // Same case-visibility rule GET /cases already enforces -- this had NO
+    // access check at all (not even a role gate, just requireAuth), so any
+    // authenticated user could see every OTHER case's title through the
+    // automation run history regardless of their own assigned-cases scope.
+    const restricted = !(await canViewAllCases(sup, req.user.role));
+    const visibleCaseIds = restricted ? await getVisibleCaseIds(sup, req.user.id) : null;
+    if (restricted && !visibleCaseIds.length) return res.json({ success: true, data: [] });
+
+    // No FK-embed relied on (`automations!left(...)`/`cases!left(...)`) --
+    // PostgREST's schema-cache-based embeds have been unreliable elsewhere in
+    // this codebase (see portals.js) and this one genuinely always 500'd
+    // ("Could not find a relationship between 'automation_logs' and 'cases'
+    // in the schema cache") -- this route was completely broken for every
+    // user, not something my scoping change introduced. Batch-fetch by id
+    // instead, same defensive pattern used throughout case_detail.routes.js.
+    let query = sup.from('automation_logs').select('*').order('created_at', { ascending: false }).limit(50);
+    if (restricted) query = query.in('case_id', visibleCaseIds);
+    const { data, error } = await query;
     if (error) throw error;
+
+    const automationIds = [...new Set((data || []).map(l => l.automation_id).filter(Boolean))];
+    const caseIds = [...new Set((data || []).map(l => l.case_id).filter(Boolean))];
+    const [{ data: automations }, { data: cases }] = await Promise.all([
+      automationIds.length ? sup.from('automations').select('id, name').in('id', automationIds) : Promise.resolve({ data: [] }),
+      caseIds.length ? sup.from('cases').select('id, title').in('id', caseIds) : Promise.resolve({ data: [] }),
+    ]);
+    const automationMap = Object.fromEntries((automations || []).map(a => [a.id, a.name]));
+    const caseMap = Object.fromEntries((cases || []).map(c => [c.id, c.title]));
+
     const logs = (data || []).map(l => ({
-      ...l, automation_name: l.automations?.name || null, case_title: l.cases?.title || null,
-      automations: undefined, cases: undefined,
+      ...l, automation_name: automationMap[l.automation_id] || null, case_title: caseMap[l.case_id] || null,
     }));
     res.json({ success: true, data: logs });
   } catch (err) {
@@ -164,7 +189,7 @@ async function executeAutomation(a, sup) {
 
   // CASE 3: Auto-classify newly created cases without classification
   else if (a.action_type === 'auto_classify') {
-    const { data: openCases } = await sup.from('cases').select('id, title, description').eq('status', 'open');
+    const { data: openCases } = await sup.from('cases').select('id, title, description').eq('status', 'open').limit(20);
     const openIds = (openCases || []).map(c => c.id);
     const caseMap = {}; (openCases || []).forEach(c => caseMap[c.id] = c);
 
@@ -172,17 +197,27 @@ async function executeAutomation(a, sup) {
       ? await sup.from('requests').select('id, case_id, notes').is('classification_id', null).in('case_id', openIds).limit(20)
       : { data: [] };
 
+    // Resolved by name_en rather than hardcoded 1-7 -- pipeline_lists ids are
+    // seeded/inserted, not guaranteed sequential from 1 (this environment's
+    // real ids start at 15), so a literal listId = 1 silently pointed at
+    // whatever list (if any) happened to have that id, or a nonexistent row.
+    // Same bug already fixed in classifier.js/cases.js/production.js/
+    // dashboard.js/pipelineLists.js this session.
+    const { data: allLists } = await sup.from('pipeline_lists').select('id, name_en');
+    const listIdByName = Object.fromEntries((allLists || []).map(l => [l.name_en, l.id]));
+
     for (const r of unclassified || []) {
       const c = caseMap[r.case_id];
       const txt = `${c?.title || ''} ${c?.description || ''} ${r.notes || ''}`.toLowerCase();
-      let listId = null;
-      if (/body[- ]?cam|footage|video|تسجيل|فيديو/.test(txt)) listId = 1;
-      else if (/payment|fee|charge|رسوم|دفع/.test(txt)) listId = 2;
-      else if (/no.*record|unavailable|doesn.*exist|مفيش|غير.*متوف/.test(txt)) listId = 3;
-      else if (/denied|refused|reject|رفض|مرفوض/.test(txt)) listId = 4;
-      else if (/court|pending|investigat|محكمة|قيد.*التحقيق/.test(txt)) listId = 5;
-      else if (/no.*bodycam|doesn.*use|لا.*تستخدم/.test(txt)) listId = 6;
-      else if (/citizenship|identity|إثبات|مواطنة|هوية/.test(txt)) listId = 7;
+      let listName = null;
+      if (/body[- ]?cam|footage|video|تسجيل|فيديو/.test(txt)) listName = 'Records Received';
+      else if (/payment|fee|charge|رسوم|دفع/.test(txt)) listName = 'Payment Required';
+      else if (/no.*record|unavailable|doesn.*exist|مفيش|غير.*متوف/.test(txt)) listName = 'No Records Available';
+      else if (/denied|refused|reject|رفض|مرفوض/.test(txt)) listName = 'Denied by Law';
+      else if (/court|pending|investigat|محكمة|قيد.*التحقيق/.test(txt)) listName = 'Case Pending in Court';
+      else if (/no.*bodycam|doesn.*use|لا.*تستخدم/.test(txt)) listName = 'Agency Has No Bodycams';
+      else if (/citizenship|identity|إثبات|مواطنة|هوية/.test(txt)) listName = 'Citizenship Needed';
+      const listId = listName ? listIdByName[listName] : null;
 
       if (listId) {
         await sup.from('requests').update({ classification_id: listId }).eq('id', r.id);
@@ -209,9 +244,18 @@ async function executeAutomation(a, sup) {
 
   // CASE 5: Auto-close cases where all requests are responded
   else if (a.action_type === 'auto_close_completed') {
-    const { data: openCases } = await sup.from('cases').select('id, title').neq('status', 'closed');
+    const { data: openCases } = await sup.from('cases').select('id, title').neq('status', 'closed').limit(20);
+    const openCaseIds = (openCases || []).map(c => c.id);
+    // Batched instead of one requests query per case (the auto_classify
+    // branch above already does this correctly) -- at real scale this was
+    // hundreds of sequential round trips per automation run.
+    const { data: allReqs } = openCaseIds.length
+      ? await sup.from('requests').select('case_id, status').in('case_id', openCaseIds)
+      : { data: [] };
+    const reqsByCase = {};
+    (allReqs || []).forEach(r => { (reqsByCase[r.case_id] ||= []).push(r); });
     for (const c of openCases || []) {
-      const { data: reqs } = await sup.from('requests').select('status').eq('case_id', c.id);
+      const reqs = reqsByCase[c.id];
       if (!reqs || reqs.length === 0) continue;
       if (reqs.every(r => r.status === 'responded')) {
         await sup.from('cases').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', c.id);

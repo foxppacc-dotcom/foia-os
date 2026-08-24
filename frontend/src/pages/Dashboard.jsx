@@ -1,11 +1,26 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { useNavigate } from 'react-router-dom';
-import { 
-  BarChart3, FolderOpen, Clock, AlertTriangle, TrendingUp, 
-  Activity, Building2, Mail, Target, Sparkles, CheckCircle2,
-  Calendar, ArrowRight, FileText
+import {
+  BarChart3, FolderOpen, Clock, AlertTriangle, TrendingUp,
+  Activity, Building2, Mail, Target, CheckCircle2,
+  Calendar, ArrowRight, FileText, History
 } from 'lucide-react';
+import FoxBotIcon from '../components/icons/FoxBotIcon';
+import {
+  WIDGET_HIDDEN_KEY, WIDGET_VISIBILITY_EVENT,
+  DASHBOARD_BUTTON_HIDDEN_KEY, DASHBOARD_BUTTON_VISIBILITY_EVENT,
+} from '../aiWidgetVisibility';
+
+function timeAgo(dateStr) {
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'الآن';
+  if (mins < 60) return `منذ ${mins} د`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `منذ ${hrs} س`;
+  return `منذ ${Math.floor(hrs / 24)} يوم`;
+}
 
 const statCards = [
   { key: 'totalCases', label: 'إجمالي القضايا', icon: FolderOpen, color: 'var(--accent)', bg: 'from-[#D4A843]/20 to-transparent' },
@@ -18,11 +33,63 @@ const statCards = [
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
+  const [timeline, setTimeline] = useState(null);
+  const [error, setError] = useState('');
   const navigate = useNavigate();
-
+  // Doesn't navigate anywhere -- this button only toggles the floating
+  // widget's own visibility (same localStorage flag + event
+  // AIAssistantWidget.jsx also reads), so the state stays in sync regardless
+  // of which control last changed it. Color-only feedback (filled = shown,
+  // outline = hidden) -- the label never changes.
+  const [widgetHidden, setWidgetHidden] = useState(() => { try { return localStorage.getItem(WIDGET_HIDDEN_KEY) === '1'; } catch { return false; } });
+  const toggleWidget = () => {
+    const next = !widgetHidden;
+    try { localStorage.setItem(WIDGET_HIDDEN_KEY, next ? '1' : '0'); } catch {}
+    setWidgetHidden(next);
+    window.dispatchEvent(new Event(WIDGET_VISIBILITY_EVENT));
+  };
+  // Whether THIS button itself even renders -- a separate, independent
+  // toggle living on "الربط الذكي" (DashboardButtonVisibilityToggle), since
+  // once this button is hidden there'd be no other way to reach the bubble
+  // toggle at all otherwise.
+  const [buttonHidden, setButtonHidden] = useState(() => { try { return localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1'; } catch { return false; } });
   useEffect(() => {
-    api.getDashboard().then(setData).catch(() => {});
+    const onVisibility = () => { try { setButtonHidden(localStorage.getItem(DASHBOARD_BUTTON_HIDDEN_KEY) === '1'); } catch {} };
+    window.addEventListener(DASHBOARD_BUTTON_VISIBILITY_EVENT, onVisibility);
+    return () => window.removeEventListener(DASHBOARD_BUTTON_VISIBILITY_EVENT, onVisibility);
   }, []);
+
+  const fetchDashboard = () => {
+    setError('');
+    api.getDashboard().then(setData).catch(() => setError('تعذر تحميل لوحة التحكم'));
+  };
+
+  // Previously .catch(() => {}) with no error state at all -- on any
+  // failure (network blip, 500, timeout) `data` stayed null forever and
+  // this is the app's landing page, so it just spun indefinitely with
+  // zero feedback and no way to retry short of a manual page refresh.
+  useEffect(() => { fetchDashboard(); }, []);
+
+  // System-wide activity feed -- gated by its own permission (resource
+  // 'timeline', action 'view') so an admin decides per-role who sees it,
+  // same fail-closed-until-configured convention as every other resource.
+  useEffect(() => {
+    api.get('/permissions/mine').then(perm => {
+      const canView = perm.wildcard || (perm.permissions || []).some(p => p.resource === 'timeline' && p.action === 'view');
+      if (canView) api.get('/activity?limit=20').then(d => setTimeline(d.data || [])).catch(() => {});
+    }).catch(() => {});
+  }, []);
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
+        <p className="text-sm" style={{ color: '#ef4444' }}>⚠️ {error}</p>
+        <button onClick={fetchDashboard} className="px-4 py-2 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+          إعادة المحاولة
+        </button>
+      </div>
+    );
+  }
 
   if (!data) {
     return (
@@ -50,11 +117,14 @@ export default function Dashboard() {
           <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>FOIA OS — نظام إدارة طلبات السجلات</p>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/intake')} 
-            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all active:scale-[0.97] btn-accent">
-            <Sparkles className="w-4 h-4" />
-            استقبال ذكي
-          </button>
+          {!buttonHidden && (
+            <button onClick={toggleWidget} title={widgetHidden ? 'إظهار المساعد الذكي' : 'إخفاء المساعد الذكي'}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm transition-all active:scale-[0.97] ${widgetHidden ? '' : 'btn-accent'}`}
+              style={widgetHidden ? { background: 'var(--bg-tertiary)', color: 'var(--text-muted)', border: '1px solid var(--border)' } : undefined}>
+              <FoxBotIcon className="w-4 h-4" />
+              المساعد الذكي
+            </button>
+          )}
         </div>
       </div>
 
@@ -78,6 +148,33 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
+      {/* Overdue Responses — requests whose agency never responded by the
+          expected date, aggregated system-wide (mirrors the same section
+          shown per-case in CaseHeader). */}
+      {data.overdueResponses?.length > 0 && (
+        <div className="rounded-2xl p-5" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.3)', boxShadow: 'var(--shadow-md)' }}>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: '#EF4444' }}>
+              <AlertTriangle className="w-4 h-4" />
+              تخطّى الموعد المتوقع للرد ({data.overdueResponses.length})
+            </h2>
+          </div>
+          <div className="flex gap-3 overflow-x-auto pb-1">
+            {data.overdueResponses.map(r => (
+              <div key={r.id} onClick={() => navigate(`/cases/${r.case_id}`)}
+                className="shrink-0 text-right rounded-xl p-3 min-w-[180px] cursor-pointer transition-colors"
+                style={{ background: 'var(--bg-primary)', border: '1px solid rgba(239,68,68,0.2)' }}
+                onMouseOver={e => e.currentTarget.style.background = 'var(--bg-elevated)'}
+                onMouseOut={e => e.currentTarget.style.background = 'var(--bg-primary)'}>
+                <p className="text-xs font-medium truncate mb-1" style={{ color: 'var(--text-primary)' }}>{r.case_title || `قضية #${r.case_id}`}</p>
+                <p className="text-[10px] truncate mb-1.5" style={{ color: 'var(--text-muted)' }}>{r.agency_name || 'جهة'}</p>
+                <span className="text-[10px] font-medium" style={{ color: '#EF4444' }}>متأخر {r.days_overdue} يوم</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Status Distribution + Pipeline Summary */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -279,6 +376,41 @@ export default function Dashboard() {
           <p className="text-xs text-center py-4" style={{ color: 'var(--text-muted)' }}>لا توجد مراسلات</p>
         )}
       </div>
+
+      {/* Timeline — system-wide activity feed. Only rendered for roles
+          granted resource 'timeline' action 'view' (see useEffect above);
+          absent entirely otherwise, not just visually hidden. */}
+      {timeline && (
+        <div className="rounded-2xl p-5" style={{
+          background: 'var(--bg-tertiary)',
+          border: '1px solid var(--border-strong)',
+          boxShadow: 'var(--shadow-md)',
+        }}>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>الخط الزمني الشامل</h2>
+            <History className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+          </div>
+          {timeline.length > 0 ? (
+            <div className="space-y-1">
+              {timeline.map(log => (
+                <div key={log.id} onClick={() => log.target_type === 'case' && navigate(`/cases/${log.target_id}`)}
+                  className={`flex items-center gap-3 p-2.5 rounded-xl transition-colors ${log.target_type === 'case' ? 'cursor-pointer' : ''}`}
+                  style={{ background: 'var(--bg-primary)' }}
+                  onMouseOver={e => log.target_type === 'case' && (e.currentTarget.style.background = 'var(--bg-elevated)')}
+                  onMouseOut={e => e.currentTarget.style.background = 'var(--bg-primary)'}>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{log.target_title || log.action_type}</p>
+                    <p className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>{log.user_name || 'النظام'}</p>
+                  </div>
+                  <span className="text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>{timeAgo(log.created_at)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-center py-4" style={{ color: 'var(--text-muted)' }}>لا توجد أنشطة بعد</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

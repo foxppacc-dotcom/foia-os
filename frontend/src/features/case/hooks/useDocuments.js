@@ -24,5 +24,21 @@ export function useDocuments(caseId, onUpdate) {
     catch (e) { alert('❌ ' + e.message); }
   }, [caseId, onUpdate]);
 
-  return { newDoc, setNewDoc, previewFile, setPreviewFile, addDocument, removeDocument, detectFileType };
+  // Bulk delete previously called removeDocument() once per selected file --
+  // each call opens its OWN blocking confirm() before its first await, so
+  // selecting N files popped N sequential dialogs with no combined progress
+  // or error report (dismissing dialog #3 of 10 left no way to tell which
+  // of the first 10 actually got deleted). One confirm for the whole batch,
+  // then delete in parallel, then report failures together.
+  const removeDocuments = useCallback(async (docIds) => {
+    if (!docIds.length) return;
+    if (!confirm(`حذف ${docIds.length} ملف؟`)) return;
+    const results = await Promise.allSettled(docIds.map(id => deleteDocument(caseId, id)));
+    const failed = results.filter(r => r.status === 'rejected').length;
+    onUpdate(true);
+    ModuleBridge.notifyCaseChanged(caseId, 'document.deleted');
+    if (failed) alert(`❌ فشل حذف ${failed} من ${docIds.length} ملف`);
+  }, [caseId, onUpdate]);
+
+  return { newDoc, setNewDoc, previewFile, setPreviewFile, addDocument, removeDocument, removeDocuments, detectFileType };
 }

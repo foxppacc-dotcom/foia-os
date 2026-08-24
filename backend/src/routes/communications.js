@@ -3,9 +3,14 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
+const { requireCaseAccess } = require('../services/caseAccess');
+// Every route here previously had no per-case access check -- a role
+// restricted to its own assigned cases could read/write any case's
+// correspondence just by knowing its id.
+const caseGate = requireCaseAccess('caseId');
 
 // GET /api/cases/:caseId/communications - list comms for investigation
-router.get('/cases/:caseId/communications', async (req, res) => {
+router.get('/cases/:caseId/communications', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
@@ -27,7 +32,7 @@ router.get('/cases/:caseId/communications', async (req, res) => {
 });
 
 // POST /api/cases/:caseId/communications - create comm record
-router.post('/cases/:caseId/communications', async (req, res) => {
+router.post('/cases/:caseId/communications', caseGate, async (req, res) => {
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
@@ -71,7 +76,7 @@ router.post('/cases/:caseId/communications', async (req, res) => {
 });
 
 // GET /api/cases/:caseId/threads - alias for case communications (frontend expects this)
-router.get('/cases/:caseId/threads', async (req, res) => {
+router.get('/cases/:caseId/threads', caseGate, async (req, res) => {
   const sup = getSupabase();
   const { data, error } = await sup.from('communications').select('*').eq('case_id', parseInt(req.params.caseId)).order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });

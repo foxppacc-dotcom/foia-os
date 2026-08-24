@@ -1,14 +1,16 @@
 import { useCaseContext } from '../context/CaseContext';
-import { Phone, Siren, Camera, Video, Car, Mic, ClipboardList, FileText, CheckCircle, Circle, MinusCircle, Building2, Users } from 'lucide-react';
+import { Phone, Siren, Camera, Video, Car, Mic, ClipboardList, FileText, Building2, Users, Activity, MessageSquare } from 'lucide-react';
 import AppSection from '../../../components/ds/AppSection';
+import AppBadge from '../../../components/ds/AppBadge';
 import AppEmptyState from '../../../components/ds/AppEmptyState';
 import AppStack from '../../../components/ds/AppStack';
 import InvestigationSummary from './InvestigationSummary';
-import NextActionPanel from './NextActionPanel';
 import FollowUpCenter from './FollowUpCenter';
 import InvestigationNotes from './InvestigationNotes';
 import SourceBadge from './SourceBadge';
 import CaseClassificationSelector from './CaseClassificationSelector';
+import TeamDiscussion from './TeamDiscussion';
+import TriageResultCard from './TriageResultCard';
 
 const recordMeta = {
   '911_calls': { label: 'مكالمات 911', icon: Phone },
@@ -20,36 +22,54 @@ const recordMeta = {
   'victim_statement': { label: 'التحقيق مع الضحية', icon: ClipboardList },
 };
 
-const statusLabels = {
-  received: 'تم الاستلام', pending: 'قيد الانتظار', not_started: 'لم يبدأ',
-  requested: 'تم الطلب', waiting: 'بانتظار الرد', partially_received: 'استلمت جزئياً',
-  completed: 'مكتمل', rejected: 'مرفوض', not_applicable: 'غير مطبق',
-};
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'الآن';
+  if (mins < 60) return `منذ ${mins} د`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `منذ ${hrs} س`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `منذ ${days} يوم`;
+  return new Date(dateStr).toLocaleDateString('ar-EG');
+}
 
 export default function OverviewTab() {
-  const { c, requests, team, documents, checklist, timeline, records_progress } = useCaseContext();
+  const { c, requests, team, documents, checklist, timeline, comments, records_progress, setActiveTab } = useCaseContext();
 
   const stats = [
     { v: requests?.length || 0, l: 'جهات', c: 'var(--ds-accent)', icon: Building2 },
     { v: team?.length || 0, l: 'فريق', c: 'var(--ds-info)', icon: Users },
     { v: documents?.length || 0, l: 'ملفات', c: '#8B5CF6', icon: FileText },
+    { v: timeline?.length || 0, l: 'نشاط', c: 'var(--ds-warning)', icon: Activity },
   ];
 
-  const received = checklist?.filter(i => i.status === 'completed' || i.status === 'received' || i.receipt_status === 'received').length || 0;
-  const missing = checklist?.filter(i => i.status === 'rejected' || i.status === 'will_not_receive' || i.receipt_status === 'will_not_receive' || i.doc_status === 'no_documents').length || 0;
-  const pending = (checklist?.length || 0) - received - missing;
+  // Each checklist item's own notes thread lives in the same case_comments
+  // table as نقاش الفريق, scoped by record_type -- reused here just to show
+  // the latest note per item, so "السجلات" reads as a live snapshot instead
+  // of a frozen status badge nobody updates anymore.
+  const notesByType = {};
+  for (const cm of comments || []) {
+    if (!cm.record_type) continue;
+    if (!notesByType[cm.record_type] || new Date(cm.created_at) > new Date(notesByType[cm.record_type].created_at)) {
+      notesByType[cm.record_type] = cm;
+    }
+  }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 ds-animate-fadeIn">
-      <div className="lg:col-span-7 space-y-3">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 ds-animate-fadeIn">
+      <div className="lg:col-span-7 space-y-4">
         <CaseClassificationSelector />
         <InvestigationSummary />
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <NextActionPanel />
-        </div>
-        <div className="grid grid-cols-3 gap-2.5">
+      </div>
+      <div className="lg:col-span-5 space-y-4">
+        {/* Quick stats + السجلات -- kept in their own column, independent of
+            معلومات القضية's height, so expanding ملخص القضية (resizable) on
+            the left never pushes or disrupts these. */}
+        <div className="grid grid-cols-4 gap-2.5">
           {stats.map((s, i) => (
-            <div key={i} className="flex items-center gap-2.5 p-3 rounded-lg ds-hover-lift" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
+            <div key={i} className="flex flex-col items-center gap-1.5 p-3 rounded-lg text-center ds-hover-lift" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
               <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: s.c + '18' }}>
                 <s.icon className="w-4 h-4" style={{ color: s.c }} />
               </div>
@@ -60,43 +80,43 @@ export default function OverviewTab() {
             </div>
           ))}
         </div>
+        <TriageResultCard />
+        <TeamDiscussion />
         <AppSection title="السجلات">
-          {checklist?.length > 0 && (
-            <div className="flex items-center gap-3 mb-2.5 text-[11px]">
-              <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3" style={{ color: 'var(--ds-success)' }} /> {received} مستلم</span>
-              <span className="flex items-center gap-1"><MinusCircle className="w-3 h-3" style={{ color: 'var(--ds-warning)' }} /> {pending} معلق</span>
-              <span className="flex items-center gap-1"><Circle className="w-3 h-3" style={{ color: 'var(--ds-text-muted)' }} /> {missing} غير متوفر</span>
-            </div>
-          )}
           {checklist?.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-1 gap-2">
               {checklist.map(item => {
                 const meta = recordMeta[item.record_type];
-                const RIcon = meta?.icon || FileText;
-                const isDone = item.receipt_status === 'received' || item.status === 'received';
-                const isNeg = item.receipt_status === 'will_not_receive' || item.status === 'will_not_receive' || item.doc_status === 'no_documents';
-                const Icon = isDone ? CheckCircle : isNeg ? Circle : MinusCircle;
-                const icoColor = isDone ? 'var(--ds-success)' : isNeg ? 'var(--ds-text-muted)' : 'var(--ds-warning)';
-                const statusText = statusLabels[item.status] || statusLabels[item.receipt_status] || '';
+                const Icon = meta?.icon || FileText;
+                const latest = notesByType[item.record_type];
                 return (
-                  <div key={item.id ?? item.record_type} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
-                    <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: icoColor }} />
-                    <span className="text-xs flex-1" style={{ color: 'var(--ds-text-primary)' }}>{meta?.label || item.record_type}</span>
-                    {statusText && <span className="text-[10px]" style={{ color: icoColor }}>{statusText}</span>}
+                  <div key={item.id ?? item.record_type}
+                    className="flex items-center gap-2.5 p-3 rounded-lg cursor-pointer ds-hover-lift"
+                    style={{ background: 'var(--ds-bg-tertiary)' }}
+                    onClick={() => setActiveTab?.('checklist')}>
+                    <Icon className="w-4 h-4 shrink-0" style={{ color: 'var(--ds-accent)' }} />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm" style={{ color: 'var(--ds-text-primary)' }}>{meta?.label || item.record_type}</span>
+                      {latest && (
+                        <p className="text-[11px] truncate" style={{ color: 'var(--ds-text-muted)' }}>
+                          <span style={{ color: 'var(--ds-text-secondary)' }}>{latest.user_name || 'النظام'}</span>
+                          {': '}{latest.content || latest.attachment_name || '—'} · {timeAgo(latest.created_at)}
+                        </p>
+                      )}
+                    </div>
+                    {latest && <AppBadge variant="neutral" className="shrink-0"><MessageSquare className="w-3 h-3" /></AppBadge>}
                   </div>
                 );
               })}
             </div>
           ) : <AppEmptyState compact title="لم يتم إعداد قائمة التدقيق" />}
         </AppSection>
-      </div>
-      <div className="lg:col-span-5 space-y-3">
-        <div className="p-3.5 rounded-xl" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
-          <p className="text-xs font-semibold mb-2.5" style={{ color: 'var(--ds-text-secondary)' }}>آخر المستندات ({documents?.length || 0})</p>
+        <div className="p-4 rounded-xl" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
+          <p className="text-xs font-semibold mb-3" style={{ color: 'var(--ds-text-secondary)' }}>آخر المستندات ({documents?.length || 0})</p>
           {documents?.length > 0 ? (
-            <AppStack gap="6px">
+            <AppStack gap="8px">
               {documents.slice(0, 5).map(doc => (
-                <div key={doc.id} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
+                <div key={doc.id} className="flex items-center gap-2 p-2.5 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
                   <FileText className="w-4 h-4 shrink-0" style={{ color: 'var(--ds-text-muted)' }} />
                   <span className="text-xs flex-1 truncate" style={{ color: 'var(--ds-text-primary)' }}>{doc.original_name || doc.filename}</span>
                   <SourceBadge reliability="official" importance="high" />

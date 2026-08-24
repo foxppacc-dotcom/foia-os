@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requirePermission } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
+const { canViewAllCases, getVisibleCaseIds, canAccessCase } = require('../services/caseAccess');
 
 // GET /api/pipeline — returns all 7 lists with their tasks grouped
-router.get('/pipeline', async (req, res) => {
+router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { caseId, sort_by } = req.query;
@@ -16,6 +17,15 @@ router.get('/pipeline', async (req, res) => {
       .select('*')
       .order('list_number', { ascending: true });
 
+    // A role restricted to its own assigned cases (cases.view_all = false)
+    // could otherwise see every OTHER case's title/status/tasks on this
+    // board too -- requirePermission('pipeline','view') only confirms the
+    // role can see the board at all, not which cases' data belongs on it.
+    // Same visibility rule GET /cases already applies (caseAccess.js).
+    const restricted = !(await canViewAllCases(sup, req.user.role));
+    const visibleCaseIds = restricted ? await getVisibleCaseIds(sup, req.user.id) : null;
+    if (restricted && !visibleCaseIds.length) return res.json([]);
+
     let tasksQuery = sup
       .from('case_tasks')
       .select(`*, pipeline_lists!left(name_ar, name_en, color), users!left(name)`)
@@ -24,6 +34,7 @@ router.get('/pipeline', async (req, res) => {
     if (caseId) {
       tasksQuery = tasksQuery.eq('case_id', parseInt(caseId));
     }
+    if (restricted) tasksQuery = tasksQuery.in('case_id', visibleCaseIds);
 
     const { data: allTasks } = await tasksQuery;
 
@@ -41,12 +52,13 @@ router.get('/pipeline', async (req, res) => {
     // Also get requests grouped by classification
     let requestsQuery = sup
       .from('requests')
-      .select(`*, pipeline_lists!classification_id!left(name_ar, name_en, color), agencies!left(name_en), cases!left(title)`)
+      .select(`*, pipeline_lists!classification_id!left(name_ar, name_en, color), agencies!left(name_ar, name_en), cases!left(title)`)
       .order('created_at', { ascending: sortOrder === 'oldest' });
 
     if (caseId) {
       requestsQuery = requestsQuery.eq('case_id', parseInt(caseId));
     }
+    if (restricted) requestsQuery = requestsQuery.in('case_id', visibleCaseIds);
 
     const { data: allRequests } = await requestsQuery;
 
@@ -56,7 +68,13 @@ router.get('/pipeline', async (req, res) => {
       classification_name_ar: r.pipeline_lists?.name_ar || null,
       classification_name_en: r.pipeline_lists?.name_en || null,
       classification_color: r.pipeline_lists?.color || null,
+      // Pipeline.jsx renders agency_name_ar on each card to distinguish
+      // multiple requests for the same case (e.g. two agencies both landing
+      // in "مطلوب دفع") -- this key was never set, so every card silently
+      // fell back to showing nothing there, making distinct per-agency
+      // cards look like unexplained duplicates of the same case.
       agency_name: r.agencies?.name_en || null,
+      agency_name_ar: r.agencies?.name_ar || r.agencies?.name_en || null,
       case_title: r.cases?.title || null,
       pipeline_lists: undefined,
       agencies: undefined,
@@ -71,10 +89,18 @@ router.get('/pipeline', async (req, res) => {
       return new Date(b.created_at) - new Date(a.created_at);
     });
 
-    // Group by lists
+    // Group by lists. A request with classification_id === null (never
+    // explicitly classified -- some creation paths besides POST /cases
+    // still don't set one) has to land SOMEWHERE, not just vanish off the
+    // board entirely with zero visible trace. "لم يبدأ بعد" (Not Started) is
+    // that catch-all: a request literally classified as list.id AND any
+    // still-unclassified request both belong here, since "not started" and
+    // "never classified" are the same real-world state.
+    const notStartedList = (lists || []).find(l => l.name_en === 'Not Started');
     const pipeline = (lists || []).map(list => {
       const tasks = tasksMapped.filter(t => t.list_id === list.id);
-      const items = requestsMapped.filter(r => r.classification_id === list.id);
+      const isNotStarted = notStartedList && list.id === notStartedList.id;
+      const items = requestsMapped.filter(r => r.classification_id === list.id || (isNotStarted && r.classification_id == null));
       return {
         ...list,
         tasks,
@@ -91,7 +117,7 @@ router.get('/pipeline', async (req, res) => {
 });
 
 // PUT /api/pipeline/tasks/:id — update task's list_id (drag-drop)
-router.put('/pipeline/tasks/:id', async (req, res) => {
+router.put('/pipeline/tasks/:id', requirePermission('pipeline', 'move'), async (req, res) => {
   try {
     const sup = getSupabase();
     const taskId = parseInt(req.params.id);
@@ -110,6 +136,13 @@ router.put('/pipeline/tasks/:id', async (req, res) => {
     if (!existing) {
       return res.status(404).json({ error: 'Task not found' });
     }
+    // case_tasks is case-scoped (case_id) exactly like the other sub-resources
+    // caseAccess.js's requireCaseAccess already protects elsewhere -- this
+    // route only ever checked the role-level 'pipeline','move' permission,
+    // never whether THIS task's case is one the user is allowed to touch.
+    if (existing.case_id && !(await canAccessCase(sup, req.user, existing.case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     const { data: list } = await sup
       .from('pipeline_lists')
@@ -121,10 +154,11 @@ router.put('/pipeline/tasks/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid list_id' });
     }
 
-    await sup
+    const { error: moveErr } = await sup
       .from('case_tasks')
       .update({ list_id })
       .eq('id', taskId);
+    if (moveErr) return res.status(400).json({ error: moveErr.message });
 
     const { data: updated } = await sup
       .from('case_tasks')

@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { logActivity } = require('../services/activityLogger');
+const { canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
 
 // ==================== PIPELINE LIST MANAGEMENT ====================
 
@@ -73,12 +74,25 @@ router.put('/pipeline-lists/:id/reorder', requireAuth, requireRole('admin'), asy
   const newIdx = Math.max(0, Math.min(newNum - 1, all.length));
   all.splice(newIdx, 0, target);
 
-  // Update each list's list_number
+  // list_number is INTEGER NOT NULL UNIQUE (immediate, non-deferrable), and
+  // writing each row's FINAL number one at a time -- while the rest of the
+  // table still holds its OLD number -- collides on essentially every
+  // reorder: e.g. swapping list #1 and #2 tries to set list B's number to 1
+  // while list A (not yet updated) still holds 1, so Postgres rejects the
+  // very first UPDATE and nothing moves. Two-phase update avoids any
+  // collision: first push every affected row to a guaranteed-unique negative
+  // placeholder (nothing else can ever hold a negative list_number), THEN
+  // assign the real final numbers once no row holds a conflicting old value.
   for (let i = 0; i < all.length; i++) {
-    await sup
+    const { error: tempErr } = await sup.from('pipeline_lists').update({ list_number: -(i + 1) }).eq('id', all[i].id);
+    if (tempErr) return res.status(400).json({ error: tempErr.message });
+  }
+  for (let i = 0; i < all.length; i++) {
+    const { error: reorderErr } = await sup
       .from('pipeline_lists')
       .update({ list_number: i + 1 })
       .eq('id', all[i].id);
+    if (reorderErr) return res.status(400).json({ error: reorderErr.message });
   }
 
   const { data: lists } = await sup
@@ -105,7 +119,8 @@ router.put('/pipeline-lists/:id', requireAuth, requireRole('admin'), async (req,
   if (reminder_days !== undefined) updates.reminder_days = reminder_days;
   if (responsible_team_id !== undefined) updates.responsible_team_id = responsible_team_id;
 
-  await sup.from('pipeline_lists').update(updates).eq('id', id);
+  const { error: updateErr } = await sup.from('pipeline_lists').update(updates).eq('id', id);
+  if (updateErr) return res.status(400).json({ error: updateErr.message });
 
   const { data: updated } = await sup.from('pipeline_lists').select('*').eq('id', id).single();
   res.json({ success: true, data: updated });
@@ -120,8 +135,20 @@ router.delete('/pipeline-lists/:id', requireAuth, requireRole('admin'), async (r
   if (!list) return res.status(404).json({ error: 'قائمة غير موجودة' });
 
   // Unlink all requests in this list
-  await sup.from('requests').update({ classification_id: null }).eq('classification_id', id);
-  await sup.from('pipeline_lists').delete().eq('id', id);
+  const { error: unlinkErr } = await sup.from('requests').update({ classification_id: null }).eq('classification_id', id);
+  if (unlinkErr) return res.status(400).json({ error: unlinkErr.message });
+  const { error: deleteErr } = await sup.from('pipeline_lists').delete().eq('id', id);
+  if (deleteErr) return res.status(400).json({ error: deleteErr.message });
+
+  // Close the gap left in list_number -- otherwise it stops being contiguous
+  // with array position, and /reorder's index math (which assumes it is)
+  // starts producing no-op or off-by-one moves for any list after this gap.
+  const { data: remaining } = await sup.from('pipeline_lists').select('id, list_number').order('list_number', { ascending: true });
+  for (let i = 0; i < (remaining || []).length; i++) {
+    if (remaining[i].list_number !== i + 1) {
+      await sup.from('pipeline_lists').update({ list_number: i + 1 }).eq('id', remaining[i].id);
+    }
+  }
 
   logActivity({
     action_type: 'delete_pipeline_list',
@@ -142,11 +169,30 @@ router.get('/pipeline/lists/:id', requireAuth, async (req, res) => {
   const { data: list } = await sup.from('pipeline_lists').select('*').eq('id', listId).single();
   if (!list) return res.status(404).json({ error: 'قائمة غير موجودة' });
 
-  const { data: requests } = await sup
+  // Same case-visibility rule the board itself (pipeline.js) already
+  // enforces -- without this, a role restricted to its own assigned cases
+  // could still see every OTHER case's title/uuid/priority by opening a
+  // pipeline list's detail page directly.
+  const restricted = !(await canViewAllCases(sup, req.user.role));
+  const visibleCaseIds = restricted ? await getVisibleCaseIds(sup, req.user.id) : null;
+  if (restricted && !visibleCaseIds.length) {
+    return res.json({ success: true, data: { ...list, requests: [], assignees: [], activity: [], count: 0 } });
+  }
+
+  // Same fix as GET /pipeline's board grouping: a request with
+  // classification_id === null (never explicitly classified) belongs in
+  // "لم يبدأ بعد" (Not Started) too, not just requests literally carrying
+  // this list's id -- otherwise this exact list's own detail page shows
+  // empty despite the board correctly counting those same requests in it.
+  let requestsQuery = sup
     .from('requests')
     .select(`*, cases!left(title, uuid, priority), agencies!left(name_ar, name_en)`)
-    .eq('classification_id', listId)
     .order('created_at', { ascending: false });
+  requestsQuery = list.name_en === 'Not Started'
+    ? requestsQuery.or(`classification_id.eq.${listId},classification_id.is.null`)
+    : requestsQuery.eq('classification_id', listId);
+  if (restricted) requestsQuery = requestsQuery.in('case_id', visibleCaseIds);
+  const { data: requests } = await requestsQuery;
 
   const requestsMapped = (requests || []).map(r => ({
     ...r,

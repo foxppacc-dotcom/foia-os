@@ -23,6 +23,13 @@ class GoogleDriveService {
 
   newOAuthClient() {
     const { google } = require('googleapis');
+    // Applies to every request every Google API client makes from here on --
+    // without it, a stalled connection to Google (as opposed to a fast
+    // rejection like invalid_grant) has no bound and a route can hang
+    // forever even inside a try/catch, since try/catch only catches
+    // rejections, not requests that never settle. Set once; safe to call
+    // repeatedly (idempotent global default).
+    google.options({ timeout: 20000 });
     return new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
@@ -67,6 +74,26 @@ class GoogleDriveService {
     return !!(await this.getStoredRefreshToken());
   }
 
+  /**
+   * A stored refresh token doesn't mean it still WORKS -- Google revokes/
+   * expires it silently (e.g. an OAuth consent screen left in "Testing"
+   * publishing status auto-expires refresh tokens after 7 days), and
+   * isConnected() above would keep reporting "connected" forever since it
+   * only checks presence, not validity. This makes one cheap real call
+   * (about.get) so the status page can tell "متصل" from "متصل لكن معطّل".
+   */
+  async verifyConnection() {
+    const drive = await this.initRealDrive();
+    if (!drive) return { ok: false, reason: 'not_configured' };
+    try {
+      const res = await drive.about.get({ fields: 'user(emailAddress)' });
+      return { ok: true, email: res.data?.user?.emailAddress || null };
+    } catch (err) {
+      const invalidGrant = /invalid_grant/i.test(err.message || '');
+      return { ok: false, reason: invalidGrant ? 'invalid_grant' : 'error', error: err.message };
+    }
+  }
+
   async getConnectedEmail() {
     const sup = getSupabase();
     const { data } = await sup.from('system_settings').select('value').eq('key', 'gdrive_connected_email').maybeSingle();
@@ -103,7 +130,7 @@ class GoogleDriveService {
     if (!drive) return { configured: false, files: [] };
 
     const res = await drive.files.list({
-      q: `'${folderId}' in parents and trashed=false`,
+      q: `'${String(folderId).replace(/'/g, "\\'")}' in parents and trashed=false`,
       fields: 'files(id, name, mimeType, size, webViewLink, iconLink, modifiedTime)',
       pageSize: 100,
     });
@@ -266,7 +293,7 @@ class GoogleDriveService {
     const drive = await this.initRealDrive();
     if (!drive) return null;
     try {
-      const q = `'${folderId}' in parents and name='${String(fileName).replace(/'/g, "\\'")}' and trashed=false`;
+      const q = `'${String(folderId).replace(/'/g, "\\'")}' in parents and name='${String(fileName).replace(/'/g, "\\'")}' and trashed=false`;
       const res = await drive.files.list({ q, fields: 'files(id, name, size)', pageSize: 10 });
       const files = res.data.files || [];
       if (fileSize != null) {
@@ -407,6 +434,23 @@ class GoogleDriveService {
     const drive = await this.initRealDrive();
     if (!drive) throw new Error('Google Drive غير متصل');
     const res = await drive.files.get({ fileId, fields: 'id, name, size, mimeType, webViewLink, webContentLink, md5Checksum' });
+    return res.data;
+  }
+
+  /**
+   * Stream a file's raw bytes via the Drive API (alt=media), for the image
+   * proxy route -- embedding a Drive URL directly in an <img src> looked
+   * fine on direct navigation but was silently blocked by the browser once
+   * embedded cross-origin from our own app: drive.usercontent.google.com
+   * sends `Cross-Origin-Resource-Policy: same-site`, which Chrome enforces
+   * regardless of Access-Control-Allow-Origin. Proxying through our own
+   * backend makes the image same-origin from the browser's point of view,
+   * sidestepping CORP entirely.
+   */
+  async getFileStream(fileId) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+    const res = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'stream' });
     return res.data;
   }
 

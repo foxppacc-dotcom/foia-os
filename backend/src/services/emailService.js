@@ -72,13 +72,26 @@ class EmailService {
         filename: a.filename,
         path: a.path,
         content: a.content,
+        // Dropped before: callers do capture the browser/multer-reported
+        // mimetype for storage metadata, but it was never forwarded here,
+        // so nodemailer fell back to guessing from the filename extension
+        // -- wrong for extensionless files or a genuine type/extension
+        // mismatch (e.g. a mislabeled scan).
+        contentType: a.contentType,
       })),
     });
 
-    // Increment sent_today
+    // Re-read the count right before writing rather than reusing the value
+    // captured at function entry (stale after the awaited SMTP round-trip) --
+    // two concurrent sends from the same account would otherwise both read
+    // the same starting count and both write back the same incremented
+    // value, silently losing one send from the counter and letting the
+    // account exceed daily_limit with no trace. Same fix already applied to
+    // ai_provider_configs.daily_request_count.
+    const { data: fresh } = await sup.from('email_accounts').select('sent_today').eq('id', accountId).maybeSingle();
     await sup
       .from('email_accounts')
-      .update({ sent_today: (account.sent_today || 0) + 1 })
+      .update({ sent_today: (fresh?.sent_today ?? account.sent_today ?? 0) + 1 })
       .eq('id', accountId);
 
     return { messageId: info.messageId, accepted: info.accepted, rejected: info.rejected };
@@ -122,6 +135,21 @@ class EmailService {
     const mailPoller = require('./mailPoller');
     const messages = await mailPoller.pollAccount(account);
     const { count, errors } = await mailPoller.processMessages(accountId, messages, caseId);
+    // pollAccount uses this to bound its IMAP SEARCH to "since last poll" --
+    // advance the cursor only after every message this pass processed
+    // cleanly. IMAP SEARCH SINCE is day-granular: once the cursor crosses
+    // into the next day, a message dated today that failed to insert (e.g.
+    // a transient DB error) would drop out of every future search range and
+    // never be retried. Message-ID dedup already makes re-searching the
+    // same day free on a clean run, so only skip advancing when something
+    // actually failed. Best-effort either way: supabase-js resolves
+    // {error} rather than throwing, so this can't itself blow up the request.
+    if (!errors.length) {
+      const { error: touchErr } = await sup.from('email_accounts').update({ last_checked: new Date().toISOString() }).eq('id', accountId);
+      if (touchErr) console.warn('[emailService] failed to update last_checked:', touchErr.message);
+    } else {
+      console.warn(`[emailService] not advancing last_checked for account ${accountId} -- ${errors.length} message(s) failed to process`);
+    }
     return { emails_fetched: messages.length, communications_created: count, errors };
   }
 }

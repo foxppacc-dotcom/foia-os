@@ -61,7 +61,7 @@ export default function CaseGDrive() {
 
   const disconnectDrive = async () => {
     if (!confirm('قطع الاتصال بحساب جوجل درايف الحالي؟')) return;
-    try { await api.post('/gdrive/disconnect', {}); fetchStatus(); } catch {}
+    try { await api.post('/gdrive/disconnect', {}); fetchStatus(); } catch (e) { alert('❌ ' + e.message); }
   };
 
   const linkFile = async () => {
@@ -72,7 +72,11 @@ export default function CaseGDrive() {
       file_name: fileForm.file_name,
       web_link: fileForm.web_link,
     };
-    try { const res = await api.post('/gdrive/link', payload); if (res.success) { setShowLinkFile(false); setFileForm({ file_id: '', file_name: '', web_link: '' }); fetchFiles(selectedCaseId); } } catch {}
+    try {
+      const res = await api.post('/gdrive/link', payload);
+      if (!res.success) { alert('❌ ' + (res.error || 'تعذر ربط الملف')); return; }
+      setShowLinkFile(false); setFileForm({ file_id: '', file_name: '', web_link: '' }); fetchFiles(selectedCaseId);
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const linkFolder = async () => {
@@ -81,17 +85,18 @@ export default function CaseGDrive() {
       const res = await api.post('/gdrive/folder', {
         case_id: parseInt(selectedCaseId), folder_id: folderForm.folder_id, folder_name: folderForm.folder_name
       });
-      if (res.success) { setShowLinkFolder(false); setFolderForm({ folder_id: '', folder_name: '' }); fetchFiles(selectedCaseId); }
-    } catch {}
+      if (!res.success) { alert('❌ ' + (res.error || 'تعذر ربط المجلد')); return; }
+      setShowLinkFolder(false); setFolderForm({ folder_id: '', folder_name: '' }); fetchFiles(selectedCaseId);
+    } catch (e) { alert('❌ ' + e.message); }
   };
 
   const deleteFile = async (id) => {
-    try { await api.delete(`/gdrive/file/${id}`); fetchFiles(selectedCaseId); } catch {}
+    try { await api.delete(`/gdrive/file/${id}`); fetchFiles(selectedCaseId); } catch (e) { alert('❌ ' + e.message); }
   };
 
   const unlinkFolder = async () => {
     if (!confirm('إزالة ربط المجلد من هذه القضية؟')) return;
-    try { await api.delete(`/gdrive/folder/${selectedCaseId}`); fetchFiles(selectedCaseId); } catch {}
+    try { await api.delete(`/gdrive/folder/${selectedCaseId}`); fetchFiles(selectedCaseId); } catch (e) { alert('❌ ' + e.message); }
   };
 
   const inputStyle = {
@@ -139,9 +144,21 @@ export default function CaseGDrive() {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-3">
               <XCircle className="w-5 h-5 shrink-0" style={{ color: 'var(--warning)' }} />
-              <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>غير متصل بجوجل درايف</p>
+              <div>
+                <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                  {status.needsReconnect ? 'انتهت صلاحية الاتصال بجوجل درايف' : 'غير متصل بجوجل درايف'}
+                </p>
+                {status.needsReconnect && (
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {status.email ? `الحساب السابق: ${status.email} — ` : ''}
+                    الرفع سيفشل حتى تعيد الربط من الزر بجانب هذا.
+                  </p>
+                )}
+              </div>
             </div>
-            <AppButton size="sm" icon={<CloudCog className="w-3.5 h-3.5" />} onClick={connectDrive}>ربط حساب جوجل درايف</AppButton>
+            <AppButton size="sm" icon={<CloudCog className="w-3.5 h-3.5" />} onClick={connectDrive}>
+              {status.needsReconnect ? 'إعادة الربط' : 'ربط حساب جوجل درايف'}
+            </AppButton>
           </div>
         )}
       </AppCard>

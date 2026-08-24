@@ -52,6 +52,7 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
     }
 
     let imported = 0;
+    const importErrors = [];
     for (const row of data) {
       const name_en = String(row[colMap.name_en] || '').trim();
       if (!name_en) continue;
@@ -59,7 +60,7 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
       const { data: exists } = await sup.from('agencies').select('id').eq('name_en', name_en).maybeSingle();
       if (exists) continue;
 
-      await sup.from('agencies').insert({
+      const { error: insertErr } = await sup.from('agencies').insert({
         name_ar: row[colMap.name_ar] ? String(row[colMap.name_ar]).trim() : null,
         name_en,
         state: row[colMap.state] ? String(row[colMap.state]).trim() : null,
@@ -70,6 +71,10 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
         portal_url: row[colMap.portal_url] ? String(row[colMap.portal_url]).trim() : null,
         notes: row[colMap.notes] ? String(row[colMap.notes]).trim() : null
       });
+      // Was never checked -- imported++ ran regardless, so "تم استيراد X
+      // جهة" could overstate what actually landed if a row failed (bad
+      // encoding, a too-long field, etc).
+      if (insertErr) { importErrors.push({ name_en, error: insertErr.message }); continue; }
       imported++;
     }
 
@@ -85,7 +90,8 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
       success: true,
       imported,
       total_rows: data.length,
-      message: `تم استيراد ${imported} جهة من ${data.length}`
+      message: `تم استيراد ${imported} جهة من ${data.length}`,
+      errors: importErrors.length ? importErrors : undefined
     });
   } catch (err) {
     console.error('Upload error:', err);
@@ -94,14 +100,27 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
 });
 
 // GET /api/agencies — قائمة الجهات (بحث + فلترة + صفحات)
-router.get('/agencies', requireAuth, async (req, res) => {
+router.get('/agencies', requireAuth, requirePermission('agencies', 'view'), async (req, res) => {
   const sup = getSupabase();
   const { search, type, status, page = 1, limit = 100 } = req.query;
 
   let query = sup.from('agencies').select('*', { count: 'exact' });
 
   if (search) {
-    query = query.or(`name_ar.ilike.%${search}%,name_en.ilike.%${search}%,state.ilike.%${search}%,city.ilike.%${search}%`);
+    // Resolved via 4 separate single-column ilike queries instead of a
+    // hand-rolled .or("name_ar.ilike.%x%,...") string -- PostgREST parses
+    // that string's own commas/parens as ITS filter-grammar syntax, so a
+    // search term that happens to contain either broke the ENTIRE query
+    // with a 500 instead of just not matching.
+    const [byNameAr, byNameEn, byState, byCity] = await Promise.all([
+      sup.from('agencies').select('id').ilike('name_ar', `%${search}%`),
+      sup.from('agencies').select('id').ilike('name_en', `%${search}%`),
+      sup.from('agencies').select('id').ilike('state', `%${search}%`),
+      sup.from('agencies').select('id').ilike('city', `%${search}%`),
+    ]);
+    const matchedIds = [...new Set([...(byNameAr.data || []), ...(byNameEn.data || []), ...(byState.data || []), ...(byCity.data || [])].map(r => r.id))];
+    if (!matchedIds.length) return res.json({ success: true, data: [], total: 0, page: parseInt(page), limit: parseInt(limit) });
+    query = query.in('id', matchedIds);
   }
   if (type) query = query.eq('type', type);
   if (status === 'active') query = query.eq('is_active', true);
@@ -124,7 +143,7 @@ router.get('/agencies', requireAuth, async (req, res) => {
 });
 
 // GET /api/agencies/:id — تفاصيل جهة كاملة (بيانات + جهات اتصال من notes JSON)
-router.get('/agencies/:id', requireAuth, async (req, res) => {
+router.get('/agencies/:id', requireAuth, requirePermission('agencies', 'view'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
   const { data: agency } = await sup.from('agencies').select('*').eq('id', id).single();
@@ -187,7 +206,8 @@ router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), 
   const { data: existing } = await sup.from('agencies').select('id').eq('id', id).single();
   if (!existing) return res.status(404).json({ error: 'Not found' });
 
-  const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, is_active, reply_to, default_email_account_id, website, tracking_portal_url } = req.body;
+  const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, is_active, reply_to, default_email_account_id, website, tracking_portal_url,
+    primary_email, secondary_emails, preferred_contact, assigned_email_account_id, average_response_days, last_communication } = req.body;
 
   const updates = {};
   if (name_ar !== undefined) updates.name_ar = name_ar;
@@ -205,6 +225,19 @@ router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), 
   if (default_email_account_id !== undefined) updates.default_email_account_id = default_email_account_id || null;
   if (website !== undefined) updates.website = website || null;
   if (tracking_portal_url !== undefined) updates.tracking_portal_url = tracking_portal_url || null;
+  // These 6 used to only be handled by a second, duplicate PUT /agencies/:id
+  // registered in teamManagement.js -- which mounts AFTER this router in
+  // index.js's routes array, so Express always dispatched here first and
+  // that duplicate handler never actually ran. Nothing could ever set these
+  // fields even though Cases.jsx already displays average_response_days when
+  // present. Merged in here (the one route that's actually live) instead of
+  // leaving a dead, unreachable copy elsewhere.
+  if (primary_email !== undefined) updates.primary_email = primary_email;
+  if (secondary_emails !== undefined) updates.secondary_emails = secondary_emails;
+  if (preferred_contact !== undefined) updates.preferred_contact = preferred_contact;
+  if (assigned_email_account_id !== undefined) updates.assigned_email_account_id = assigned_email_account_id || null;
+  if (average_response_days !== undefined) updates.average_response_days = average_response_days;
+  if (last_communication !== undefined) updates.last_communication = last_communication;
 
   let { error } = await sup.from('agencies').update(updates).eq('id', id);
   let skipped = [];
@@ -224,9 +257,10 @@ router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), 
 });
 
 // DELETE /api/agencies/:id
-router.delete('/agencies/:id', requireAuth, requireRole('admin'), async (req, res) => {
+router.delete('/agencies/:id', requireAuth, requirePermission('agencies', 'delete'), async (req, res) => {
   const sup = getSupabase();
-  await sup.from('agencies').delete().eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('agencies').delete().eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
 
@@ -243,7 +277,7 @@ router.post('/agencies/bulk/status', requireAuth, requirePermission('agencies', 
 });
 
 // POST /api/agencies/bulk/delete — حذف جماعي
-router.post('/agencies/bulk/delete', requireAuth, requireRole('admin'), async (req, res) => {
+router.post('/agencies/bulk/delete', requireAuth, requirePermission('agencies', 'delete'), async (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids مطلوبة' });
   const sup = getSupabase();
@@ -314,7 +348,8 @@ router.put('/agencies/:id/contacts/:contactId', requireAuth, requirePermission('
   contacts[idx].updated_at = new Date().toISOString();
 
   parsed._contacts = contacts;
-  await sup.from('agencies').update({ notes: JSON.stringify(parsed) }).eq('id', agency_id);
+  const { error } = await sup.from('agencies').update({ notes: JSON.stringify(parsed) }).eq('id', agency_id);
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
 
@@ -331,7 +366,8 @@ router.delete('/agencies/:id/contacts/:contactId', requireAuth, requirePermissio
   try { if (agency.notes) parsed = JSON.parse(agency.notes); } catch {}
   parsed._contacts = (parsed._contacts || []).filter(c => c.id !== contactId);
 
-  await sup.from('agencies').update({ notes: JSON.stringify(parsed) }).eq('id', agency_id);
+  const { error } = await sup.from('agencies').update({ notes: JSON.stringify(parsed) }).eq('id', agency_id);
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
 

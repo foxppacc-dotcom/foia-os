@@ -10,6 +10,8 @@
   ],
   "crons": [
     { "path": "/api/cron/imap-poll", "schedule": "0 6 * * *" },
-    { "path": "/api/cron/deadline-check", "schedule": "0 7 * * *" }
+    { "path": "/api/cron/deadline-check", "schedule": "0 7 * * *" },
+    { "path": "/api/cron/reset-email-counters", "schedule": "0 0 * * *" },
+    { "path": "/api/cron/gdrive-check", "schedule": "0 8 * * *" }
   ]
 }

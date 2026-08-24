@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { Sun, Moon, Bell, Settings as SettingsIcon, UserCircle, LogOut, ChevronDown } from 'lucide-react';
+import { Sun, Moon, Bell, UserCircle, LogOut, ChevronDown, Menu } from 'lucide-react';
 import { api } from '../api';
 
 function timeAgo(dateStr) {
@@ -19,12 +19,14 @@ const PAGE_META = [
   { test: p => /^\/cases\/\d+/.test(p), eyebrow: 'القضايا', title: 'تفاصيل القضية' },
   { test: p => p.startsWith('/cases'), eyebrow: 'إدارة', title: 'القضايا' },
   { test: p => p.startsWith('/pipeline'), eyebrow: 'سير العمل', title: 'خط الإنتاج' },
+  { test: p => p.startsWith('/production-lists'), eyebrow: 'النظام', title: 'إدارة قوائم الإنتاج' },
   { test: p => p.startsWith('/production'), eyebrow: 'سير العمل', title: 'مونتاج' },
   { test: p => p.startsWith('/agencies'), eyebrow: 'إدارة', title: 'الجهات' },
   { test: p => p.startsWith('/portals'), eyebrow: 'إدارة', title: 'البوابات الإلكترونية' },
   { test: p => p.startsWith('/email-accounts'), eyebrow: 'إدارة', title: 'حسابات البريد' },
   { test: p => p.startsWith('/teams'), eyebrow: 'إدارة', title: 'الفرق' },
-  { test: p => p.startsWith('/settings'), eyebrow: 'النظام', title: 'الإعدادات' },
+  { test: p => p.startsWith('/theme-settings'), eyebrow: 'النظام', title: 'الألوان والثيم' },
+  { test: p => p.startsWith('/settings'), eyebrow: 'النظام', title: 'ترتيب القائمة الجانبية' },
   { test: p => p.startsWith('/profile'), eyebrow: 'حسابي', title: 'الملف الشخصي' },
 ];
 
@@ -32,19 +34,29 @@ function getPageMeta(pathname) {
   return PAGE_META.find(m => m.test(pathname)) || { eyebrow: 'FOIA OS', title: '' };
 }
 
-export default function Topbar({ user, onLogout, theme, toggleTheme }) {
+export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [roleLabel, setRoleLabel] = useState(null);
   const menuRef = useRef(null);
   const notifRef = useRef(null);
   const meta = getPageMeta(pathname);
 
+  // Guards against a slow poll's response landing AFTER a later, faster
+  // poll's response -- without this, the stale one would silently overwrite
+  // the fresher notification list/unread count (e.g. right after markAllRead
+  // reset it locally to 0).
+  const notifRequestRef = useRef(0);
   const loadNotifications = () => {
-    api.get('/notifications').then(d => { setNotifications(d.data || []); setUnreadCount(d.unreadCount || 0); }).catch(() => {});
+    const requestId = ++notifRequestRef.current;
+    api.get('/notifications').then(d => {
+      if (requestId !== notifRequestRef.current) return;
+      setNotifications(d.data || []); setUnreadCount(d.unreadCount || 0);
+    }).catch(() => {});
   };
 
   useEffect(() => {
@@ -52,6 +64,21 @@ export default function Topbar({ user, onLogout, theme, toggleTheme }) {
     const interval = setInterval(loadNotifications, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  // The role chip used to hardcode only admin/manager and fall back to the
+  // generic "عضو" for everything else -- so any custom role created from
+  // "فريق العمل" (e.g. "Order Management Specialist") displayed as plain
+  // "Member" here, making it look like the role assignment hadn't taken.
+  // Resolve the real label from /roles instead.
+  useEffect(() => {
+    let cancelled = false;
+    api.get('/roles').then(d => {
+      if (cancelled) return;
+      const match = (d.roles || []).find(r => r.name === user?.role);
+      setRoleLabel(match?.label || null);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [user?.role]);
 
   useEffect(() => {
     const onClick = (e) => {
@@ -64,29 +91,50 @@ export default function Topbar({ user, onLogout, theme, toggleTheme }) {
 
   const openNotification = async (n) => {
     if (!n.is_read) {
-      try { await api.put(`/notifications/${n.id}/read`, {}); } catch {}
-      setNotifications(p => p.map(x => x.id === n.id ? { ...x, is_read: true } : x));
-      setUnreadCount(c => Math.max(0, c - 1));
+      // Only reflect "read" locally once the server actually confirms it --
+      // applying it unconditionally meant a failed request (network blip,
+      // expired session) still showed the notification as read and the
+      // badge decremented, silently reverting back on the next 60s poll
+      // with no error ever surfaced to the user.
+      try {
+        await api.put(`/notifications/${n.id}/read`, {});
+        setNotifications(p => p.map(x => x.id === n.id ? { ...x, is_read: true } : x));
+        setUnreadCount(c => Math.max(0, c - 1));
+      } catch {}
     }
     setNotifOpen(false);
     if (n.target_type === 'case' && n.target_id) navigate(`/cases/${n.target_id}`);
+    else if (n.target_type === 'pipeline_list') navigate('/pipeline');
+    else if (n.target_type === 'email_account') navigate('/email-accounts');
+    else if (n.target_type === 'forum_topic' && n.target_id) navigate(`/forum?topic=${n.target_id}`);
+    else if (n.target_type === 'settings') navigate('/gdrive');
   };
 
   const markAllRead = async () => {
-    try { await api.put('/notifications/read-all', {}); } catch {}
-    setNotifications(p => p.map(x => ({ ...x, is_read: true })));
-    setUnreadCount(0);
+    try {
+      await api.put('/notifications/read-all', {});
+      setNotifications(p => p.map(x => ({ ...x, is_read: true })));
+      setUnreadCount(0);
+    } catch {}
   };
 
   return (
-    <header className="sticky top-0 z-20 flex items-center justify-between px-6 h-[68px] shrink-0"
+    <header className="sticky top-0 z-20 flex items-center justify-between gap-2 px-3 md:px-6 h-[68px] shrink-0"
       style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border)' }}>
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--accent)' }}>{meta.eyebrow}</p>
-        <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>{meta.title}</h1>
+      <div className="flex items-center gap-2 min-w-0">
+        <button onClick={onMenuClick} className="md:hidden p-2 rounded-xl shrink-0 transition-colors" style={{ color: 'var(--text-secondary)' }}
+          onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
+          onMouseOut={e => e.currentTarget.style.background = 'transparent'}
+          title="القائمة">
+          <Menu className="w-5 h-5" />
+        </button>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: 'var(--accent)' }}>{meta.eyebrow}</p>
+          <h1 className="text-lg font-bold truncate" style={{ color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>{meta.title}</h1>
+        </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1 md:gap-2 shrink-0">
         <button onClick={toggleTheme} className="p-2.5 rounded-xl transition-colors" style={{ color: 'var(--text-secondary)' }}
           onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
           onMouseOut={e => e.currentTarget.style.background = 'transparent'}
@@ -144,7 +192,7 @@ export default function Topbar({ user, onLogout, theme, toggleTheme }) {
             <div className="text-right hidden sm:block">
               <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{user?.name}</p>
               <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                {user?.role === 'admin' ? 'مدير النظام' : user?.role === 'manager' ? 'مدير' : 'عضو'}
+                {roleLabel || (user?.role === 'admin' ? 'مدير النظام' : user?.role === 'manager' ? 'مدير' : 'عضو')}
               </p>
             </div>
             <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>
@@ -160,12 +208,6 @@ export default function Topbar({ user, onLogout, theme, toggleTheme }) {
                 onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
                 onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
                 <UserCircle className="w-4 h-4" /> ملفي الشخصي
-              </Link>
-              <Link to="/settings" onClick={() => setMenuOpen(false)}
-                className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm transition-colors" style={{ color: 'var(--text-secondary)' }}
-                onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
-                onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
-                <SettingsIcon className="w-4 h-4" /> الإعدادات
               </Link>
               <div className="my-1.5" style={{ borderTop: '1px solid var(--border)' }} />
               <button onClick={onLogout}

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api, getCurrentUser } from '../api';
-import { Plus, Trash2, KeyRound, Search, UserCog, ShieldCheck, Pencil, Check, X } from 'lucide-react';
+import { Plus, Trash2, KeyRound, Search, UserCog, ShieldCheck, Pencil, Check, X, Save, Undo2, Briefcase, UserCircle } from 'lucide-react';
 import { useToast } from './ui/Toast';
 import Button from './ui/Button';
 import Input from './ui/Input';
@@ -13,7 +14,18 @@ import EmptyState from './ui/EmptyState';
 import Spinner from './ui/Spinner';
 import { TableShell, Thead, Th, Td, Tr } from './ui/Table';
 
-const ACTION_LABEL = { view: 'عرض', view_all: 'عرض كل القضايا (وليس المسندة فقط)', create: 'إنشاء', edit: 'تعديل', delete: 'حذف', move: 'نقل', export: 'تصدير', manage: 'إدارة', invite: 'دعوة' };
+const ACTION_LABEL = {
+  view: 'عرض', view_all: 'عرض كل القضايا (وليس المسندة فقط)', create: 'إنشاء', edit: 'تعديل', delete: 'حذف',
+  move: 'نقل', export: 'تصدير', manage: 'إدارة', invite: 'دعوة',
+  delete_any: 'حذف أي تعليق/موضوع (بغض النظر عن الكاتب)', create_topic: 'إنشاء موضوع جديد',
+  comment: 'التعليق', pin: 'تثبيت الإعلانات المهمة',
+  promote: 'اعتماد ونقل القضية للقضايا الجاهزة', manage_criteria: 'إدارة معايير الفرز',
+  override_lock: 'فك قيد استخدام حساب بريد لجهة مقفلة على قضية أخرى',
+  // ai_assistant's only per-role action -- gates WHO may open the chat.
+  // What the assistant is itself allowed to DO is a separate, global toggle
+  // set managed from its own "الربط الذكي" page, not here.
+  use_chat: 'استخدام المساعد الذكي (الدردشة)',
+};
 
 export default function TeamPermissions() {
   const toast = useToast();
@@ -33,7 +45,7 @@ export default function TeamPermissions() {
 
   const tabs = [
     { key: 'members', label: 'الأعضاء' },
-    ...(isAdmin ? [{ key: 'roles', label: 'الأدوار' }, { key: 'permissions', label: 'الصلاحيات' }] : []),
+    ...(isAdmin ? [{ key: 'roles', label: 'الأدوار' }, { key: 'permissions', label: 'الصلاحيات' }, { key: 'team_titles', label: 'المسميات الوظيفية' }] : []),
   ];
 
   return (
@@ -50,6 +62,7 @@ export default function TeamPermissions() {
         tab === 'members' ? <MembersPanel toast={toast} roles={roles} roleLabel={roleLabel} isAdmin={isAdmin} /> :
         tab === 'roles' && isAdmin ? <RolesPanel toast={toast} roles={roles} onRolesChanged={fetchRoles} /> :
         tab === 'permissions' && isAdmin ? <PermissionsPanel toast={toast} roles={roles.filter(r => r.name !== 'admin')} roleLabel={roleLabel} /> :
+        tab === 'team_titles' && isAdmin ? <TeamTitlesPanel toast={toast} /> :
         <MembersPanel toast={toast} roles={roles} roleLabel={roleLabel} isAdmin={isAdmin} />
       )}
     </div>
@@ -57,6 +70,7 @@ export default function TeamPermissions() {
 }
 
 function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
+  const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -135,7 +149,7 @@ function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
         <EmptyState icon={UserCog} title="لا يوجد أعضاء" />
       ) : (
         <TableShell>
-          <Thead><Th>العضو</Th><Th>الدور</Th><Th>الحالة</Th>{isAdmin && <Th align="center">إجراءات</Th>}</Thead>
+          <Thead><Th>العضو</Th><Th>الدور</Th><Th>الحالة</Th><Th align="center">إجراءات</Th></Thead>
           <tbody>
             {filtered.map(u => (
               <Tr key={u.id}>
@@ -163,20 +177,31 @@ function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
                     <Badge variant={u.is_active === false ? 'neutral' : 'success'} dot>{u.is_active === false ? 'معطّل' : 'نشط'}</Badge>
                   )}
                 </Td>
-                {isAdmin && (
-                  <Td align="center">
-                    <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => setResetTarget(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
-                        onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'} title="إعادة تعيين كلمة المرور">
-                        <KeyRound className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => setConfirmDelete(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
-                        onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </Td>
-                )}
+                <Td align="center">
+                  <div className="flex items-center justify-center gap-1">
+                    {/* Full task/case history + KPI for this employee --
+                        viewing your own is always allowed; viewing someone
+                        else's is gated server-side by the
+                        employee_performance permission (a manager evaluating
+                        performance), not by isAdmin here. */}
+                    <button onClick={() => navigate(`/profile/${u.id}`)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                      onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'} title="عرض الملف الشخصي وتقييم الأداء">
+                      <UserCircle className="w-4 h-4" />
+                    </button>
+                    {isAdmin && (
+                      <>
+                        <button onClick={() => setResetTarget(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                          onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'} title="إعادة تعيين كلمة المرور">
+                          <KeyRound className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => setConfirmDelete(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                          onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </Td>
               </Tr>
             ))}
           </tbody>
@@ -301,11 +326,123 @@ function RolesPanel({ toast, roles, onRolesChanged }) {
   );
 }
 
+function TeamTitlesPanel({ toast }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ value: '', label: '', color: '#636366' });
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ label: '', color: '#636366' });
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  const fetchItems = () => {
+    setLoading(true);
+    api.get('/case-team-roles').then(d => setItems(d.data || [])).catch(() => {}).finally(() => setLoading(false));
+  };
+  useEffect(() => { fetchItems(); }, []);
+
+  const create = async () => {
+    if (!form.value.trim() || !form.label.trim()) return;
+    try {
+      await api.post('/case-team-roles', form);
+      toast.success('تمت إضافة المسمى الوظيفي');
+      setForm({ value: '', label: '', color: '#636366' });
+      setShowAdd(false);
+      fetchItems();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const saveEdit = async (id) => {
+    try {
+      await api.put(`/case-team-roles/${id}`, editForm);
+      toast.success('تم التحديث');
+      setEditingId(null);
+      fetchItems();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const doDelete = async () => {
+    if (!confirmDelete) return;
+    try { await api.delete(`/case-team-roles/${confirmDelete.id}`); toast.success('تم الحذف'); setConfirmDelete(null); fetchItems(); }
+    catch (e) { toast.error(e.message); setConfirmDelete(null); }
+  };
+
+  if (loading) return <Spinner full />;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>المسميات الوظيفية التي تظهر عند إضافة موظف لفريق أي قضية (محقق، باحث، مراجع قانوني...) — عدّلها من هنا بدل التعديل في الكود.</p>
+        <Button icon={Plus} onClick={() => setShowAdd(true)}>مسمى جديد</Button>
+      </div>
+
+      {items.length === 0 ? <EmptyState icon={Briefcase} title="لا توجد مسميات وظيفية" /> : (
+        <TableShell>
+          <Thead><Th>اللون</Th><Th>الاسم المعروض</Th><Th>القيمة البرمجية</Th><Th align="center">إجراءات</Th></Thead>
+          <tbody>
+            {items.map(it => (
+              <Tr key={it.id}>
+                <Td>
+                  {editingId === it.id ? (
+                    <input type="color" value={editForm.color} onChange={e => setEditForm(f => ({ ...f, color: e.target.value }))} className="w-8 h-8 rounded cursor-pointer border-0 bg-transparent" />
+                  ) : (
+                    <span className="inline-block w-4 h-4 rounded-full" style={{ background: it.color }} />
+                  )}
+                </Td>
+                <Td>
+                  {editingId === it.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <Input value={editForm.label} onChange={e => setEditForm(f => ({ ...f, label: e.target.value }))} containerClassName="flex-1" />
+                      <button onClick={() => saveEdit(it.id)} style={{ color: 'var(--success)' }}><Check className="w-4 h-4" /></button>
+                      <button onClick={() => setEditingId(null)} style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+                    </div>
+                  ) : (
+                    <button className="flex items-center gap-1.5" onClick={() => { setEditingId(it.id); setEditForm({ label: it.label, color: it.color }); }} style={{ color: 'var(--text-primary)' }}>
+                      {it.label} <Pencil className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
+                    </button>
+                  )}
+                </Td>
+                <Td><code className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>{it.value}</code></Td>
+                <Td align="center">
+                  <button onClick={() => setConfirmDelete(it)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                    onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </Td>
+              </Tr>
+            ))}
+          </tbody>
+        </TableShell>
+      )}
+
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="مسمى وظيفي جديد">
+        <div className="space-y-3">
+          <Input label="الاسم المعروض" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder="محقق ميداني" />
+          <Input label="القيمة البرمجية (بالإنجليزية، بدون مسافات)" value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} placeholder="field_investigator" />
+          <div className="flex items-center gap-2">
+            <label className="text-sm" style={{ color: 'var(--text-secondary)' }}>اللون</label>
+            <input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} className="w-8 h-8 rounded cursor-pointer border-0 bg-transparent" />
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button className="flex-1" onClick={create}>إنشاء</Button>
+            <Button variant="secondary" className="flex-1" onClick={() => setShowAdd(false)}>إلغاء</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmDialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} onConfirm={doDelete}
+        title="حذف المسمى الوظيفي" confirmLabel="حذف" message={`هل أنت متأكد من حذف "${confirmDelete?.label}"؟ سيفشل الحذف إذا كان مستخدمًا في تعيينات فرق قضايا حالية.`} />
+    </div>
+  );
+}
+
 function PermissionsPanel({ toast, roles, roleLabel }) {
   const [schema, setSchema] = useState(null);
-  const [matrix, setMatrix] = useState([]); // [{role, resource, action, allowed}]
+  const [matrix, setMatrix] = useState([]); // [{role, resource, action, allowed}] -- last saved state from server
+  const [pending, setPending] = useState({}); // key `${role}|${resource}|${action}` -> {role, resource, action, allowed} -- unsaved edits
   const [activeRole, setActiveRole] = useState(roles[0]?.name || '');
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const fetchAll = () => {
     setLoading(true);
@@ -316,32 +453,63 @@ function PermissionsPanel({ toast, roles, roleLabel }) {
   useEffect(() => { fetchAll(); }, []);
   useEffect(() => { if (!activeRole && roles.length) setActiveRole(roles[0].name); }, [roles]);
 
+  // Two different fail-safe defaults exist server-side for an unconfigured
+  // (no row yet) cell, and the checkbox must mirror whichever one actually
+  // applies or it lies to the admin about what the role can really do:
+  // - nav / production_line / cases.view_all: fail-OPEN (unconfigured =
+  //   visible/unrestricted) so shipping this feature never silently hid
+  //   something from an existing role that no one had configured yet.
+  // - every other resource/action (requirePermission middleware): fail-
+  //   CLOSED (unconfigured = denied) as the secure default for real
+  //   permission gates.
+  const defaultsOpen = (resource, action) => resource === 'nav' || resource === 'production_line' || (resource === 'cases' && action === 'view_all');
+  const cellKey = (role, resource, action) => `${role}|${resource}|${action}`;
   const isAllowed = (role, resource, action) => {
+    const key = cellKey(role, resource, action);
+    if (key in pending) return pending[key].allowed;
     const row = matrix.find(m => m.role === role && m.resource === resource && m.action === action);
-    return row ? row.allowed !== false : false;
+    if (row) return row.allowed !== false;
+    return defaultsOpen(resource, action);
   };
 
-  const toggle = async (resource, action) => {
+  // Toggling only stages the change locally -- nothing hits the server until
+  // "حفظ التغييرات" is clicked, so an admin can review a whole role's matrix
+  // before committing it (and can discard a misclick without side effects).
+  const toggle = (resource, action) => {
     const current = isAllowed(activeRole, resource, action);
-    const next = !current;
-    setMatrix(prev => {
-      const exists = prev.find(m => m.role === activeRole && m.resource === resource && m.action === action);
-      if (exists) return prev.map(m => m === exists ? { ...m, allowed: next } : m);
-      return [...prev, { role: activeRole, resource, action, allowed: next }];
-    });
+    const key = cellKey(activeRole, resource, action);
+    setPending(prev => ({ ...prev, [key]: { role: activeRole, resource, action, allowed: !current } }));
+  };
+
+  const pendingCount = Object.keys(pending).length;
+
+  const discardChanges = () => setPending({});
+
+  const saveChanges = async () => {
+    const changes = Object.values(pending);
+    if (!changes.length) return;
+    setSaving(true);
     try {
-      await api.put('/permissions', { role: activeRole, resource, action, allowed: next });
+      await Promise.all(changes.map(c => api.put('/permissions', c)));
+      toast.success(`تم حفظ ${changes.length} تغيير`);
+      setPending({});
+      fetchAll();
     } catch (e) {
       toast.error(e.message);
-      fetchAll();
+    } finally {
+      setSaving(false);
     }
   };
 
   if (loading) return <Spinner full />;
   if (!schema) return <EmptyState icon={ShieldCheck} title="تعذر تحميل نظام الصلاحيات" />;
 
+  // Kept in sync with backend/src/routes/permissions.js RESOURCE_VIEW_NAV_KEYS —
+  // any resource with a 'view' action drives its own sidebar link directly.
+  const derivedNavKeys = schema.resources.filter(r => r.actions.includes('view')).map(r => r.key);
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-16">
       <div className="flex items-center gap-1 flex-wrap">
         {roles.map(r => (
           <button key={r.name} onClick={() => setActiveRole(r.name)}
@@ -374,13 +542,26 @@ function PermissionsPanel({ toast, roles, roleLabel }) {
           حدد عناصر القائمة الجانبية الظاهرة لهذا الدور — العنصر المخفي لا يظهر إطلاقًا (لا يشغل مساحة، لا يُعطَّل).
         </p>
         <div className="flex items-center gap-3 flex-wrap">
-          {(schema.navItems || []).map(item => (
-            <label key={item.key} className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={isAllowed(activeRole, 'nav', item.key)} onChange={() => toggle('nav', item.key)}
-                className="w-4 h-4 rounded" style={{ accentColor: 'var(--accent)' }} />
-              <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
-            </label>
-          ))}
+          {(schema.navItems || []).map(item => {
+            // Cases/Agencies/Pipeline/Production share their sidebar visibility
+            // with that resource's own "عرض" checkbox above -- a role that can't
+            // view a resource can't see its sidebar link either, and vice versa.
+            // Keeping a second independent toggle for the same concept was the
+            // actual bug: an admin would enable "عرض" up top and still find the
+            // link hidden because this row was never separately switched on.
+            const derivedFromResource = derivedNavKeys.includes(item.key);
+            const checked = derivedFromResource ? isAllowed(activeRole, item.key, 'view') : isAllowed(activeRole, 'nav', item.key);
+            return (
+              <label key={item.key} className="flex items-center gap-2 select-none" style={{ cursor: derivedFromResource ? 'default' : 'pointer', opacity: derivedFromResource ? 0.7 : 1 }}
+                title={derivedFromResource ? 'يتبع صلاحية "عرض" الخاصة بهذا المورد أعلاه' : undefined}>
+                <input type="checkbox" checked={checked} disabled={derivedFromResource} onChange={() => !derivedFromResource && toggle('nav', item.key)}
+                  className="w-4 h-4 rounded" style={{ accentColor: 'var(--accent)' }} />
+                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  {item.label}{derivedFromResource && <span className="text-xs" style={{ color: 'var(--text-muted)' }}> (يتبع صلاحية العرض)</span>}
+                </span>
+              </label>
+            );
+          })}
         </div>
       </Card>
 
@@ -400,6 +581,17 @@ function PermissionsPanel({ toast, roles, roleLabel }) {
         </div>
       </Card>
       <p className="text-xs text-center" style={{ color: 'var(--text-muted)' }}>مدير النظام (admin) لديه صلاحية كاملة على كل الموارد دائمًا — غير موجود في هذه القائمة لأنه لا يمكن تقييده.</p>
+
+      {pendingCount > 0 && (
+        <div className="fixed bottom-0 inset-x-0 z-40 flex justify-center px-4 pb-4 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-2xl border"
+            style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-strong)', boxShadow: 'var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.15))' }}>
+            <Badge variant="warning" dot>{pendingCount} تغيير غير محفوظ</Badge>
+            <Button variant="secondary" icon={Undo2} onClick={discardChanges} disabled={saving}>تراجع</Button>
+            <Button icon={Save} onClick={saveChanges} loading={saving}>حفظ التغييرات</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

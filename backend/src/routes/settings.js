@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 
 // GET /api/settings — get all settings
-router.get('/settings', requireAuth, async (req, res) => {
+router.get('/settings', requireAuth, requirePermission('settings', 'view'), async (req, res) => {
   const sup = getSupabase();
   const { data: rows } = await sup.from('system_settings').select('key, value').order('key', { ascending: true });
   const settings = {};
@@ -13,7 +13,7 @@ router.get('/settings', requireAuth, async (req, res) => {
 });
 
 // PUT /api/settings — update one or more settings
-router.put('/settings', requireAuth, requireRole('admin'), async (req, res) => {
+router.put('/settings', requireAuth, requirePermission('settings', 'manage'), async (req, res) => {
   const sup = getSupabase();
   const updates = req.body; // { key: value, key2: value2 }
 
@@ -25,10 +25,11 @@ router.put('/settings', requireAuth, requireRole('admin'), async (req, res) => {
     const { data: exists } = await sup.from('system_settings').select('key').eq('key', key).maybeSingle();
     if (!exists) continue; // skip unknown keys
 
-    await sup
+    const { error } = await sup
       .from('system_settings')
       .update({ value: String(value), updated_at: new Date().toISOString() })
       .eq('key', key);
+    if (error) return res.status(400).json({ error: error.message });
     count++;
   }
 
@@ -41,7 +42,7 @@ router.put('/settings', requireAuth, requireRole('admin'), async (req, res) => {
 });
 
 // POST /api/settings/reset — reset to defaults
-router.post('/settings/reset', requireAuth, requireRole('admin'), async (req, res) => {
+router.post('/settings/reset', requireAuth, requirePermission('settings', 'manage'), async (req, res) => {
   const sup = getSupabase();
   const defaults = {
     theme_mode: 'light',
@@ -62,17 +63,18 @@ router.post('/settings/reset', requireAuth, requireRole('admin'), async (req, re
 
   const now = new Date().toISOString();
   for (const [key, value] of Object.entries(defaults)) {
-    await sup
+    const { error } = await sup
       .from('system_settings')
       .update({ value, updated_at: now })
       .eq('key', key);
+    if (error) return res.status(400).json({ error: error.message });
   }
 
   res.json({ success: true, message: '✅ تم إعادة تعيين الإعدادات' });
 });
 
 // GET /api/settings/theme-css — get CSS variables string
-router.get('/settings/theme-css', requireAuth, async (req, res) => {
+router.get('/settings/theme-css', requireAuth, requirePermission('settings', 'view'), async (req, res) => {
   const sup = getSupabase();
   const { data: rows } = await sup.from("system_settings").select('key, value').like('key', 'theme_%');
 

@@ -62,4 +62,20 @@ function requirePermission(resource, action) {
   };
 }
 
-module.exports = { requireAuth, requireRole, requirePermission, generateToken, bcrypt };
+/**
+ * Same role_permissions lookup as requirePermission, but as a plain boolean
+ * check instead of a hard route gate -- for routes where permission is one
+ * of several ways to be allowed in (e.g. "own comment within 60s OR admin OR
+ * this role's delete_any grant"), not the only way.
+ */
+async function hasPermission(sup, user, resource, action) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  try {
+    const { data } = await sup.from('role_permissions')
+      .select('allowed').eq('role', user.role).eq('resource', resource).eq('action', action).maybeSingle();
+    return !!data?.allowed;
+  } catch (e) { return false; }
+}
+
+module.exports = { requireAuth, requireRole, requirePermission, hasPermission, generateToken, bcrypt };

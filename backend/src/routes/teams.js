@@ -61,7 +61,8 @@ router.put('/teams/:id', async (req, res) => {
   if (!name) return res.status(400).json({ error: 'Team name required' });
 
   const sup = getSupabase();
-  await sup.from('teams').update({ name }).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('teams').update({ name }).eq('id', parseInt(req.params.id));
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true, message: '✅ تم تحديث الفريق' });
 });
 
@@ -71,8 +72,10 @@ router.delete('/teams/:id', async (req, res) => {
   const id = parseInt(req.params.id);
 
   // Unlink users from this team
-  await sup.from('users').update({ team_id: null }).eq('team_id', id);
-  await sup.from('teams').delete().eq('id', id);
+  const { error: unlinkErr } = await sup.from('users').update({ team_id: null }).eq('team_id', id);
+  if (unlinkErr) return res.status(400).json({ error: unlinkErr.message });
+  const { error } = await sup.from('teams').delete().eq('id', id);
+  if (error) return res.status(400).json({ error: error.message });
 
   res.json({ success: true, message: '✅ تم حذف الفريق' });
 });

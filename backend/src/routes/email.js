@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requirePermission, hasPermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { encrypt, decrypt } = require('../services/crypto');
 const emailService = require('../services/emailService');
+const { checkLock } = require('../services/emailAccountLock');
+const { canAccessCase } = require('../services/caseAccess');
 
 /**
  * Real Email Engine for FOIA OS
@@ -24,7 +26,7 @@ router.get('/email-accounts', requireAuth, (req, res) => {
 });
 
 // POST /api/email-accounts — add new (alias)
-router.post('/email-accounts', requireAuth, requireRole('admin'), async (req, res) => {
+router.post('/email-accounts', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   const sup = getSupabase();
   try {
     const { email, name, provider, smtp_host, smtp_port, smtp_user, smtp_pass, imap_host, imap_port, imap_user, imap_pass, daily_limit } = req.body;
@@ -131,7 +133,7 @@ router.put('/accounts/:id', requireAuth, requireRole('admin'), async (req, res) 
 });
 
 // PUT alias — /email-accounts/:id
-router.put('/email-accounts/:id', requireAuth, requireRole('admin'), async (req, res) => {
+router.put('/email-accounts/:id', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   const sup = getSupabase();
   try {
     const id = parseInt(req.params.id);
@@ -165,7 +167,8 @@ router.put('/email-accounts/:id', requireAuth, requireRole('admin'), async (req,
 router.delete('/accounts/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   try {
-    await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    const { error } = await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true, message: '✅ تم حذف الحساب' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -173,10 +176,11 @@ router.delete('/accounts/:id', requireAuth, requireRole('admin'), async (req, re
 });
 
 // DELETE alias — email-accounts/:id
-router.delete('/email-accounts/:id', requireAuth, requireRole('admin'), async (req, res) => {
+router.delete('/email-accounts/:id', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   const sup = getSupabase();
   try {
-    await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    const { error } = await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true, message: '✅ تم حذف الحساب' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -200,17 +204,21 @@ router.post('/send', requireAuth, async (req, res) => {
     // Link to case if provided
     if (case_id) {
       const sup = getSupabase();
+      if (!(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
       await sup.from('communications').insert({
         case_id: parseInt(case_id),
         type: 'email',
         direction: 'outbound',
         subject,
         body: body || html || '',
+        body_html: html || null,
         sender: to,
         recipient: cc || '',
         message_id: result.messageId,
         thread_id: result.messageId,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        email_account_id: parseInt(account_id),
+        is_read: true,
       });
 
       await sup.from('case_comments').insert({
@@ -234,6 +242,10 @@ router.post('/fetch', requireAuth, async (req, res) => {
   try {
     const { account_id, case_id } = req.body;
     if (!account_id) return res.status(400).json({ error: 'account_id مطلوب' });
+    if (case_id) {
+      const sup = getSupabase();
+      if (!(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
     const result = await emailService.processIncomingEmails(parseInt(account_id), case_id ? parseInt(case_id) : null);
 
@@ -248,13 +260,17 @@ router.post('/fetch', requireAuth, async (req, res) => {
 router.post('/fetch-all', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data: accounts, error } = await sup
+    // is_active is a real boolean in this environment (not the INTEGER 1/0
+    // some other code paths assumed) -- .eq('is_active', 1) matched zero
+    // rows every time, so this route silently "succeeded" against no
+    // accounts at all. Same bug already fixed via JS-side filtering in
+    // mailPoller.pollAll() and agencies.js's bulk-import active check.
+    const { data: allAccounts, error } = await sup
       .from('email_accounts')
-      .select('id')
-      .eq('is_active', 1)
-      .not('imap_host', 'is', null);
+      .select('id, is_active, imap_host');
 
     if (error) return res.status(500).json({ error: error.message });
+    const accounts = (allAccounts || []).filter(a => (a.is_active === true || a.is_active === 1) && a.imap_host);
 
     let totalFetched = 0;
     let totalCreated = 0;
@@ -302,6 +318,7 @@ router.post('/receive', requireAuth, async (req, res) => {
     if (!case_id || !subject || !body) {
       return res.status(400).json({ error: 'case_id, subject, body required' });
     }
+    if (!(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
 
     await sup.from('communications').insert({
       case_id: parseInt(case_id),
@@ -340,6 +357,88 @@ router.post('/receive', requireAuth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ============ PER-CASE ACCOUNT/AGENCY LOCK ============
+
+// GET /api/email-accounts/agency-lock-status?agency_id=&case_id= — lock
+// status for EVERY account against this agency, so the composer's account
+// <select> can mark each locked option up front instead of only revealing
+// the conflict after the user has already picked one and waited for a
+// separate per-account check to come back.
+router.get('/email-accounts/agency-lock-status', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const agencyId = parseInt(req.query.agency_id);
+    const caseId = parseInt(req.query.case_id);
+    if (!agencyId || !caseId) return res.status(400).json({ error: 'agency_id و case_id مطلوبان' });
+    // This response includes another case's id+title once locked -- without
+    // this check, a role restricted to its own assigned cases could learn
+    // that just by passing any case_id here, matching the class of gap the
+    // earlier case-scoping audit fixed across other routes.
+    if (!(await canAccessCase(sup, req.user, caseId))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+
+    const { data: accounts, error } = await sup.from('email_accounts').select('id');
+    if (error) return res.status(500).json({ error: error.message });
+    const canOverride = await hasPermission(sup, req.user, 'email_accounts', 'override_lock');
+
+    const statuses = await Promise.all((accounts || []).map(async (a) => {
+      const result = await checkLock(sup, a.id, agencyId, caseId);
+      return [a.id, { locked: result.locked, lockedByCase: result.lockedByCase && !result.overridden ? result.lockedByCase : null }];
+    }));
+
+    res.json({ statuses: Object.fromEntries(statuses), canOverride });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/email-accounts/:id/agency-lock?agency_id=&case_id= — is this
+// account already tied to this agency on a DIFFERENT case? Checked as the
+// user picks agency+account in the composer, before they even try to send.
+router.get('/email-accounts/:id/agency-lock', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const emailAccountId = parseInt(req.params.id);
+    const agencyId = parseInt(req.query.agency_id);
+    const caseId = parseInt(req.query.case_id);
+    if (!agencyId || !caseId) return res.status(400).json({ error: 'agency_id و case_id مطلوبان' });
+    if (!(await canAccessCase(sup, req.user, caseId))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+
+    const result = await checkLock(sup, emailAccountId, agencyId, caseId);
+    const canOverride = await hasPermission(sup, req.user, 'email_accounts', 'override_lock');
+    res.json({
+      locked: result.locked,
+      lockedByCase: result.lockedByCase && !result.overridden ? result.lockedByCase : null,
+      canOverride,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/email-accounts/:id/agency-lock/override — manually allow this
+// account+agency pair for this case despite it already being used elsewhere.
+router.post('/email-accounts/:id/agency-lock/override', requireAuth, requirePermission('email_accounts', 'override_lock'), async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const emailAccountId = parseInt(req.params.id);
+    const { agency_id, case_id } = req.body;
+    if (!agency_id || !case_id) return res.status(400).json({ error: 'agency_id و case_id مطلوبان' });
+    if (!(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+
+    const { error } = await sup.from('email_account_agency_overrides').upsert({
+      email_account_id: emailAccountId, agency_id: parseInt(agency_id), case_id: parseInt(case_id),
+      created_by: req.user?.id,
+    }, { onConflict: 'email_account_id,agency_id,case_id' });
+    if (error) return res.status(400).json({ error: error.message });
+
+    try {
+      await sup.from('activity_logs').insert({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'update_channel', target_type: 'case', target_id: parseInt(case_id),
+        target_title: '🔓 فك قيد استخدام حساب بريد لهذه الجهة',
+      });
+    } catch (e) { console.error('[email-accounts] override activity log failed:', e.message); }
+
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============ RESET DAILY COUNTERS ============

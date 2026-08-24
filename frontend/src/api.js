@@ -41,6 +41,17 @@ async function request(path, options = {}) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
+    // A 401 mid-session (expired/invalid token) previously just surfaced as
+    // a generic "فشل الطلب" error on whatever action triggered it, forever,
+    // with nothing ever routing the user back to login -- they'd sit there
+    // clicking things that silently keep failing until they think to
+    // manually reload. Login itself legitimately 401s on wrong credentials,
+    // so that one path is excluded to avoid a reload loop there.
+    if (res.status === 401 && path !== '/auth/login' && TOKEN) {
+      TOKEN = null;
+      localStorage.removeItem('foia_token');
+      window.location.reload();
+    }
     throw new Error(err.error || 'Request failed');
   }
   return res.json();

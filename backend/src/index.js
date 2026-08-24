@@ -11,8 +11,18 @@ const app = express();
 app.use(cors());
 const PORT = CONFIG.server.port;
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// Previously a hardcoded {status:'ok'} with no real dependency check -- it
+// would report healthy even with Supabase completely unreachable, which
+// defeats the point of a health endpoint for any future uptime monitor.
+app.get('/api/health', async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { error } = await sup.from('users').select('id').limit(1);
+    if (error) throw error;
+    res.json({ status: 'ok', database: 'ok', timestamp: new Date().toISOString() });
+  } catch (e) {
+    res.status(503).json({ status: 'degraded', database: 'unreachable', error: e.message, timestamp: new Date().toISOString() });
+  }
 });
 
 app.use(express.json());
@@ -23,9 +33,9 @@ const routes = [
   'auth', 'cases', 'requests', 'pipeline', 'agencies', 'communications',
   'dashboard', 'intake', 'email', 'emailProduction', 'aiAssistant', 'users',
   'automation', 'gdrive', 'phoneAndMail', 'portals', 'production',
-  'settings', 'activity', 'classifier', 'cleanup', 'migration',
+  'settings', 'activity', 'classifier',
   'case_detail.routes', 'checklist', 'assignees', 'teamManagement', 'team.routes',
-  'teams', 'permissions', 'pipelineLists', 'cron',
+  'teams', 'permissions', 'pipelineLists', 'forum', 'fileFetch',
 ];
 
 // Diagnostics and truly-public callbacks (no user Bearer token possible) must be
@@ -36,18 +46,55 @@ const routes = [
 // — including paths that router doesn't itself define. Google's OAuth
 // redirect can never carry our Bearer token, so /gdrive/oauth-callback must
 // resolve here before it can hit one of those routers and 401.
+//
+// cron.js is the same story and was previously listed LAST in `routes` above
+// -- meaning 'cases' (2nd in the list, right after 'auth') intercepted every
+// single /api/cron/* request first with its own blanket requireAuth, and
+// rejected it as 401 before cron.js's own CRON_SECRET check ever ran.
+// Confirmed live: /api/cron/imap-poll and /api/cron/deadline-check both
+// returned "Unauthorized - missing token" even with no test changes to
+// either route -- Vercel's actual scheduled invocations (Authorization:
+// Bearer <CRON_SECRET>, never a valid signed JWT) would have failed the
+// exact same way every single time they fired. Registered here instead so
+// it resolves before any blanket-requireAuth router can shadow it.
 const working = [];
 const failed = [];
 app.get('/api/debug/routes', (req, res) => {
-  res.json({ working, failed, totalRoutes: routes.length + 1 });
+  res.json({ working, failed, totalRoutes: routes.length + 2 });
 });
 try {
   const gdriveRoute = require('./routes/gdrive');
   if (gdriveRoute && gdriveRoute.oauthCallbackHandler) {
     app.get('/api/gdrive/oauth-callback', gdriveRoute.oauthCallbackHandler);
   }
+  // Same reasoning as oauth-callback above: an <img src> can never carry our
+  // Bearer token, so this must resolve before cases.js's blanket
+  // `router.use(requireAuth)` (no path) can intercept and 401 it first.
+  if (gdriveRoute && gdriveRoute.imageProxyHandler) {
+    app.get('/api/gdrive/image/:fileId', gdriveRoute.imageProxyHandler);
+  }
 } catch (e) {
   console.error('[index] gdrive oauth-callback mount failed:', e.message);
+}
+try {
+  // FileFetch's public upload endpoints -- an external agency with a link
+  // has no account and can never carry a Bearer token, same reasoning as
+  // the gdrive block above. Must resolve before cases.js's blanket
+  // requireAuth would otherwise 401 every request that reaches it first.
+  const fileFetchRoute = require('./routes/fileFetch');
+  if (fileFetchRoute.publicLinkInfoHandler) {
+    app.get('/api/public/upload/:token', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicLinkInfoHandler);
+    app.post('/api/public/upload/:token/session', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicUploadSessionHandler);
+    app.post('/api/public/upload/:token/finalize', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicUploadFinalizeHandler);
+  }
+} catch (e) {
+  console.error('[index] fileFetch public routes mount failed:', e.message);
+}
+try {
+  app.use('/api', require('./routes/cron'));
+  working.push('cron');
+} catch (e) {
+  failed.push({ name: 'cron', error: e.message });
 }
 
 // Try each route, skip if it fails

@@ -25,7 +25,7 @@ export default function CaseDetail() {
   const [activeTab, setActiveTab] = useState('overview');
   const { data, loading, users, specializedUsers, allAgencies, refetch } = useCaseData(id);
   const { updateChecklist, debouncedSaveNote } = useChecklist(id, refetch);
-  const { newDoc, setNewDoc, previewFile, setPreviewFile, addDocument, removeDocument, detectFileType } = useDocuments(id, refetch);
+  const { newDoc, setNewDoc, previewFile, setPreviewFile, addDocument, removeDocument, removeDocuments, detectFileType } = useDocuments(id, refetch);
   const { handleAddTeam, handleRemoveTeam, getFilteredUsers } = useAssignments(id, refetch);
 
   if (loading) return <Spinner full />;
@@ -34,8 +34,8 @@ export default function CaseDetail() {
       action={<Link to="/cases" className="text-sm hover:underline" style={{ color: 'var(--accent)' }}>العودة للقضايا</Link>} />
   );
 
-  const { case: c, team, requests, checklist, documents, timeline, records_progress } = data;
-  const ctx = { id, c, team, requests, checklist, documents, timeline, records_progress, users, specializedUsers, allAgencies, refetch, updateChecklist, debouncedSaveNote, newDoc, setNewDoc, addDocument, removeDocument, detectFileType, previewFile, setPreviewFile, handleAddTeam, handleRemoveTeam, getFilteredUsers, activeTab, setActiveTab };
+  const { case: c, team, requests, checklist, documents, timeline, records_progress, channels, comments } = data;
+  const ctx = { id, c, team, requests, checklist, documents, timeline, records_progress, channels, comments, users, specializedUsers, allAgencies, refetch, updateChecklist, debouncedSaveNote, newDoc, setNewDoc, addDocument, removeDocument, removeDocuments, detectFileType, previewFile, setPreviewFile, handleAddTeam, handleRemoveTeam, getFilteredUsers, activeTab, setActiveTab };
 
   return (
     <CaseProvider value={ctx}>

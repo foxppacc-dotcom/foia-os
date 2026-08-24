@@ -3,11 +3,20 @@ const router = express.Router();
 const { requireAuth } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
+const { canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
 
 // GET /api/dashboard — stats
 router.get('/dashboard', async (req, res) => {
   try {
     const sup = getSupabase();
+
+    // Same case-visibility rule GET /cases already enforces -- without this,
+    // a role restricted to its own assigned cases (cases.view_all = false)
+    // still saw the org-wide caseload snapshot on every login: every OTHER
+    // case's title/status/priority/deadlines, and org-wide totals/counts.
+    const restricted = !(await canViewAllCases(sup, req.user.role));
+    const visibleCaseIds = restricted ? await getVisibleCaseIds(sup, req.user.id) : null;
+    const scopeCases = (q, col = 'id') => restricted ? q.in(col, visibleCaseIds.length ? visibleCaseIds : [-1]) : q;
 
     // All of these are independent reads -- fire them together instead of
     // one-at-a-time (was ~9 sequential round trips, now 1 round trip's
@@ -19,11 +28,11 @@ router.get('/dashboard', async (req, res) => {
       { data: recentCases },
       { data: recentCommunications },
     ] = await Promise.all([
-      sup.from('cases').select('*', { count: 'exact', head: true }),
-      sup.from('cases').select('status'),
-      sup.from('cases').select('priority'),
-      sup.from('cases').select(`id, uuid, title, status, priority, created_at, agencies!left(name_en)`).order('created_at', { ascending: false }).limit(10),
-      sup.from('communications').select(`*, cases!left(title)`).order('created_at', { ascending: false }).limit(10),
+      scopeCases(sup.from('cases').select('*', { count: 'exact', head: true })),
+      scopeCases(sup.from('cases').select('status')),
+      scopeCases(sup.from('cases').select('priority')),
+      scopeCases(sup.from('cases').select(`id, uuid, title, status, priority, created_at, agencies!left(name_en)`)).order('created_at', { ascending: false }).limit(10),
+      scopeCases(sup.from('communications').select(`*, cases!left(title)`), 'case_id').order('created_at', { ascending: false }).limit(10),
     ]);
 
     const byStatus = (() => {
@@ -53,16 +62,27 @@ router.get('/dashboard', async (req, res) => {
 
     // Deadlines — includes overdue (deadline already passed) so the
     // "متأخرة" stat below isn't always zero; ordered soonest/most-overdue first.
+    const todayStr = new Date().toISOString().split('T')[0];
     const [
       { data: upcomingDeadlines },
       { count: totalAgencies },
       { count: totalRequests },
       { data: pipelineLists },
+      { data: overdueResponses },
     ] = await Promise.all([
-      sup.from('cases').select(`id, uuid, title, deadline, status, priority, agencies!left(name_en), users!left(name)`).not('deadline', 'is', null).neq('status', 'closed').order('deadline', { ascending: true }).limit(10),
+      scopeCases(sup.from('cases').select(`id, uuid, title, deadline, status, priority, agencies!left(name_en), users!left(name)`)).not('deadline', 'is', null).neq('status', 'closed').order('deadline', { ascending: true }).limit(10),
       sup.from('agencies').select('*', { count: 'exact', head: true }),
-      sup.from('requests').select('*', { count: 'exact', head: true }),
+      scopeCases(sup.from('requests').select('*', { count: 'exact', head: true }), 'case_id'),
       sup.from('pipeline_lists').select('id, name_ar, name_en, color, list_number').order('list_number', { ascending: true }),
+      // Requests whose agency never responded by the expected date -- same
+      // "تخطّى الموعد المتوقع للرد" concept the deadline-overdue notification
+      // cron alerts on (services/deadlineChecker.js), surfaced here as its
+      // own visible dashboard section instead of only a background alert.
+      scopeCases(sup.from('requests')
+        .select(`id, case_id, expected_response_date, cases!left(title), agencies!left(name_ar, name_en)`), 'case_id')
+        .lt('expected_response_date', todayStr).is('response_date', null).neq('status', 'closed')
+        .is('overdue_ack_by', null)
+        .order('expected_response_date', { ascending: true }),
     ]);
 
     const upcomingDeadlinesMapped = (upcomingDeadlines || []).map(c => ({
@@ -77,17 +97,37 @@ router.get('/dashboard', async (req, res) => {
     // Pipeline list counts — 2 grouped queries instead of 2 per list (was
     // 14 sequential round trips on every dashboard load for 7 lists).
     const pipelineListIds = (pipelineLists || []).map(pl => pl.id);
+    const notStartedListId = (pipelineLists || []).find(pl => pl.name_en === 'Not Started')?.id;
     const taskCountByList = {}, requestCountByList = {};
     if (pipelineListIds.length) {
-      const [{ data: taskRows }, { data: requestRows }] = await Promise.all([
-        sup.from('case_tasks').select('list_id').in('list_id', pipelineListIds),
-        sup.from('requests').select('classification_id').in('classification_id', pipelineListIds),
+      // .in() never matches a NULL classification_id (never explicitly
+      // classified) regardless of what's in pipelineListIds, so those
+      // requests silently never counted toward ANY list here -- same gap
+      // already fixed on the board (pipeline.js) and the list-detail page
+      // (pipelineLists.js). Fetch the unclassified ones too and fold them
+      // into "لم يبدأ بعد"'s count specifically.
+      const [{ data: taskRows }, { data: requestRows }, { count: unclassifiedCount }] = await Promise.all([
+        scopeCases(sup.from('case_tasks').select('list_id, case_id'), 'case_id').in('list_id', pipelineListIds),
+        scopeCases(sup.from('requests').select('classification_id, case_id'), 'case_id').in('classification_id', pipelineListIds),
+        notStartedListId != null
+          ? scopeCases(sup.from('requests').select('id', { count: 'exact', head: true }), 'case_id').is('classification_id', null)
+          : Promise.resolve({ count: 0 }),
       ]);
       for (const t of taskRows || []) taskCountByList[t.list_id] = (taskCountByList[t.list_id] || 0) + 1;
       for (const r of requestRows || []) requestCountByList[r.classification_id] = (requestCountByList[r.classification_id] || 0) + 1;
+      if (notStartedListId != null) requestCountByList[notStartedListId] = (requestCountByList[notStartedListId] || 0) + (unclassifiedCount || 0);
     }
     const pipelineCounts = (pipelineLists || []).map(pl => ({
       ...pl, task_count: taskCountByList[pl.id] || 0, request_count: requestCountByList[pl.id] || 0,
+    }));
+
+    const overdueResponsesMapped = (overdueResponses || []).map(r => ({
+      id: r.id,
+      case_id: r.case_id,
+      case_title: r.cases?.title || null,
+      agency_name: r.agencies?.name_ar || r.agencies?.name_en || null,
+      expected_response_date: r.expected_response_date,
+      days_overdue: Math.floor((new Date(todayStr) - new Date(r.expected_response_date)) / (1000 * 60 * 60 * 24)),
     }));
 
     res.json({
@@ -99,7 +139,8 @@ router.get('/dashboard', async (req, res) => {
       upcomingDeadlines: upcomingDeadlinesMapped,
       totalAgencies: totalAgencies || 0,
       totalRequests: totalRequests || 0,
-      pipelineCounts
+      pipelineCounts,
+      overdueResponses: overdueResponsesMapped,
     });
   } catch (err) {
     console.error('Error getting dashboard:', err);

@@ -4,22 +4,38 @@ import { Plus, Search, Globe, Trash2, Eye, EyeOff, KeyRound } from 'lucide-react
 
 export default function Portals() {
   const [portals, setPortals] = useState([]);
+  const [agencies, setAgencies] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
-    portal_name: '', portal_url: '', username: '', registered_email: '', password: '', agency: ''
+    portal_name: '', portal_url: '', username: '', registered_email: '', password: '', agency_id: ''
   });
   const [passwordModal, setPasswordModal] = useState(null); // { id, password, portal_name }
   const [search, setSearch] = useState('');
 
   const fetchPortals = () => {
-    api.get('/api/portals')
-      .then(d => setPortals(Array.isArray(d) ? d : d.data || []))
-      .catch(e => console.error('[Portals] fetch failed:', e.message))
+    // api.js's request() already prepends /api to every path -- passing
+    // '/api/portals' here doubled the prefix to /api/api/portals, which
+    // matches no route and 404s. Every call in this file had the same bug.
+    api.get('/portals')
+      .then(d => { setPortals(Array.isArray(d) ? d : d.data || []); setLoadError(''); })
+      // A failed load used to render the same empty state as "genuinely no
+      // portals yet" -- console.error is invisible to the actual user, who
+      // had no way to tell "empty" apart from "failed to load".
+      .catch(e => setLoadError(e.message || 'تعذر تحميل البوابات'))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchPortals(); }, []);
+  useEffect(() => {
+    fetchPortals();
+    // The form used to collect a free-text "agency" string that the backend
+    // never read at all (only a real agency_id FK) -- nothing typed here was
+    // ever saved, and the card list rendered a field the backend never
+    // returned either. A real picker against the same agencies table the
+    // rest of the app uses fixes both directions at once.
+    api.get('/agencies').then(d => setAgencies(Array.isArray(d) ? d : d.data || [])).catch(() => {});
+  }, []);
 
   const createPortal = async () => {
     if (!form.portal_name.trim() || !form.portal_url.trim()) return;
@@ -29,23 +45,27 @@ export default function Portals() {
       username: form.username || null,
       registered_email: form.registered_email || null,
       password: form.password || null,
-      agency: form.agency || null,
+      agency_id: form.agency_id || null,
     };
-    await api.post('/api/portals', payload);
-    setShowForm(false);
-    setForm({ portal_name: '', portal_url: '', username: '', registered_email: '', password: '', agency: '' });
-    fetchPortals();
+    try {
+      await api.post('/portals', payload);
+      setShowForm(false);
+      setForm({ portal_name: '', portal_url: '', username: '', registered_email: '', password: '', agency_id: '' });
+      fetchPortals();
+    } catch (err) { alert('فشل إضافة البوابة: ' + err.message); }
   };
 
   const deletePortal = async (id) => {
     if (!confirm('هل أنت متأكد من حذف هذه البوابة؟')) return;
-    await api.delete(`/api/portals/${id}`);
-    fetchPortals();
+    try {
+      await api.delete(`/portals/${id}`);
+      fetchPortals();
+    } catch (err) { alert('فشل حذف البوابة: ' + err.message); }
   };
 
   const decryptPassword = async (id, portalName) => {
     try {
-      const res = await api.post(`/api/portals/${id}/decrypt`);
+      const res = await api.post(`/portals/${id}/decrypt`);
       setPasswordModal({ id, password: res.password || res.data?.password || '—', portal_name: portalName });
     } catch (err) {
       alert('فشل فك تشفير كلمة المرور: ' + err.message);
@@ -57,7 +77,8 @@ export default function Portals() {
     p.portal_name?.toLowerCase().includes(search.toLowerCase()) ||
     p.portal_url?.toLowerCase().includes(search.toLowerCase()) ||
     p.username?.toLowerCase().includes(search.toLowerCase()) ||
-    p.agency?.toLowerCase().includes(search.toLowerCase())
+    p.agency_name_ar?.toLowerCase().includes(search.toLowerCase()) ||
+    p.agency_name_en?.toLowerCase().includes(search.toLowerCase())
   );
 
   if (loading) return (
@@ -68,6 +89,11 @@ export default function Portals() {
 
   return (
     <div className="space-y-6 animate-fadeIn">
+      {loadError && (
+        <div className="px-4 py-3 rounded-xl text-sm" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#EF4444' }}>
+          ❌ تعذر تحميل البوابات: {loadError}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-white">إدارة البوابات الإلكترونية</h1>
         <button onClick={() => setShowForm(true)} className="flex items-center gap-2 btn-accent px-4 py-2 text-sm">
@@ -97,7 +123,10 @@ export default function Portals() {
             </div>
             <div className="flex gap-3">
               <input value={form.password} onChange={e => setForm({...form, password: e.target.value})} placeholder="كلمة المرور (مشفر)" type="password" className="flex-1 px-4 py-3 input-base" />
-              <input value={form.agency} onChange={e => setForm({...form, agency: e.target.value})} placeholder="الجهة" className="flex-1 px-4 py-3 input-base" />
+              <select value={form.agency_id} onChange={e => setForm({...form, agency_id: e.target.value})} className="flex-1 px-4 py-3 input-base">
+                <option value="">الجهة (اختياري)</option>
+                {agencies.map(a => <option key={a.id} value={a.id}>{a.name_ar || a.name_en}</option>)}
+              </select>
             </div>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowForm(false)} className="btn-secondary px-4 py-2 text-sm">إلغاء</button>
@@ -170,9 +199,9 @@ export default function Portals() {
                       <span className="text-gray-600">📧 البريد: </span>{p.registered_email}
                     </p>
                   )}
-                  {p.agency && (
+                  {(p.agency_name_ar || p.agency_name_en) && (
                     <p className="text-[11px] text-gray-400">
-                      <span className="text-gray-600">🏛️ الجهة: </span>{p.agency}
+                      <span className="text-gray-600">🏛️ الجهة: </span>{p.agency_name_ar || p.agency_name_en}
                     </p>
                   )}
                 </div>

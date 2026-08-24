@@ -3,13 +3,79 @@ const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const gdrive = require('../services/googleDriveService');
+const { canAccessCase } = require('../services/caseAccess');
+const { notifyUsers, getCaseRecipients, getCaseActivityRecipients } = require('../services/notificationService');
+
+// Every case-scoped route below previously had NO case-ownership check at
+// all -- any authenticated user (including a role restricted to only their
+// assigned cases everywhere else in the app) could list, upload into, share,
+// or delete Drive documents on ANY case just by knowing/guessing its id.
+// This mirrors the same canAccessCase(sup, req.user, caseId) gate every
+// other case-scoped route in cases.js/case_detail.routes.js already uses.
+async function assertCaseAccess(req, res, caseId) {
+  const sup = getSupabase();
+  if (!(await canAccessCase(sup, req.user, caseId))) {
+    res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    return false;
+  }
+  return true;
+}
 
 // GET /api/gdrive/status — is real Drive integration configured + connected?
+// "connected" here means an actual live call to Google succeeded, not just
+// that a refresh token is stored -- a stored-but-expired/revoked token (e.g.
+// Google auto-expiring it after 7 days for an app still in "Testing"
+// publishing status) used to still report "متصل" until upload time.
 router.get('/gdrive/status', requireAuth, async (req, res) => {
-  const connected = await gdrive.isConnected();
-  const email = connected ? await gdrive.getConnectedEmail() : null;
-  res.json({ configured: gdrive.configured, connected, email });
+  const hasToken = await gdrive.isConnected();
+  if (!hasToken) return res.json({ configured: gdrive.configured, connected: false, email: null });
+  const check = await gdrive.verifyConnection();
+  const storedEmail = await gdrive.getConnectedEmail();
+  res.json({
+    configured: gdrive.configured,
+    connected: check.ok,
+    email: check.ok ? (check.email || storedEmail) : storedEmail,
+    needsReconnect: !check.ok,
+    reason: check.ok ? null : check.reason,
+  });
 });
+
+// GET /api/gdrive/image/:fileId — proxy an image's bytes through our own
+// backend so an <img src> pointing here is same-origin from the browser's
+// perspective. Deliberately no requireAuth: a plain <img> tag can't attach
+// our Bearer token, and this mirrors the exact security model every Drive
+// share link already has in this app -- "anyone holding the unguessable
+// file id/link can view it," not a new, weaker exposure.
+//
+// Exported and mounted directly on `app` in index.js, BEFORE the
+// per-feature routers -- same reason as oauthCallbackHandler below:
+// cases.js's `router.use(requireAuth)` (no path) intercepts ANY /api/*
+// request that reaches it first, and an <img> tag can never carry our
+// Bearer token, so this route 401'd before ever reaching this router at all
+// when only registered here.
+async function imageProxyHandler(req, res) {
+  try {
+    const { fileId } = req.params;
+    const meta = await gdrive.getFileMetadata(fileId);
+    // SVG excluded even though it's technically 'image/*' -- it can embed
+    // <script>, and serving it same-origin with its own content-type lets
+    // that script run if the URL is ever opened directly (not just used as
+    // an <img src>, which wouldn't execute it). Checked here regardless of
+    // whatever mimetype was recorded at upload time, so this is the one
+    // place that actually decides what's safe to serve inline.
+    if (!meta.mimeType || !meta.mimeType.startsWith('image/') || meta.mimeType === 'image/svg+xml') {
+      return res.status(400).json({ error: 'This endpoint only serves image files' });
+    }
+    res.setHeader('Content-Type', meta.mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    const stream = await gdrive.getFileStream(fileId);
+    stream.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+    stream.pipe(res);
+  } catch (err) {
+    res.status(404).json({ error: 'تعذر تحميل الصورة' });
+  }
+}
+router.get('/gdrive/image/:fileId', imageProxyHandler);
 
 // GET /api/gdrive/auth-url — build the Google consent screen URL (admin only, one-time setup)
 router.get('/gdrive/auth-url', requireAuth, requireRole('admin'), (req, res) => {
@@ -140,6 +206,7 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
   try {
     const { case_id, file_name, mime_type, size, category } = req.body;
     if (!case_id || !file_name) return res.status(400).json({ error: 'case_id, file_name مطلوبون' });
+    if (!(await assertCaseAccess(req, res, parseInt(case_id)))) return;
     if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
 
     const sup = getSupabase();
@@ -218,6 +285,7 @@ router.post('/gdrive/finalize', requireAuth, async (req, res) => {
   try {
     let { case_id, drive_file_id, original_name, file_type, description } = req.body;
     if (!case_id) return res.status(400).json({ error: 'case_id مطلوب' });
+    if (!(await assertCaseAccess(req, res, parseInt(case_id)))) return;
     if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
 
     const sup = getSupabase();
@@ -275,6 +343,22 @@ router.post('/gdrive/finalize', requireAuth, async (req, res) => {
       ({ data, error } = await sup.from('case_documents').insert(insertData).select().single());
     }
     if (error) throw error;
+
+    // The small-file upload path (case_detail.routes.js's POST
+    // /cases/:id/documents) already notifies the case team on a new
+    // document -- this large-file/chunked path led to the exact same
+    // real-world outcome (a file landing on the case) but never fired the
+    // same notification, so a >3MB upload was invisible on the case's
+    // activity badge while a <3MB upload of the same file wasn't.
+    try {
+      const recipients = await getCaseActivityRecipients(sup, parseInt(case_id), { excludeUserId: req.user?.id });
+      await notifyUsers(sup, recipients, {
+        type: 'document_uploaded', title: '📎 مستند جديد',
+        body: `${req.user?.name || 'أحد الموظفين'} رفع "${insertData.original_name}" على القضية`,
+        target_type: 'case', target_id: parseInt(case_id),
+      });
+    } catch (e) { console.error('[gdrive] finalize notification failed:', e.message); }
+
     res.status(201).json({ success: true, data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -293,9 +377,10 @@ router.post('/gdrive/share-file', requireAuth, async (req, res) => {
 
     const sup = getSupabase();
     const { data: doc } = await sup.from('case_documents')
-      .select('id, drive_file_id, original_name, storage_provider')
+      .select('id, case_id, drive_file_id, original_name, storage_provider')
       .eq('id', parseInt(document_id)).maybeSingle();
     if (!doc) return res.status(404).json({ error: 'مستند غير موجود' });
+    if (!(await assertCaseAccess(req, res, doc.case_id))) return;
     if (doc.storage_provider !== 'google_drive' || !doc.drive_file_id) {
       return res.status(400).json({ error: 'هذا المستند غير مخزن على Google Drive — المشاركة متاحة للملفات المخزنة على Drive فقط' });
     }
@@ -314,6 +399,7 @@ router.post('/gdrive/link', requireAuth, async (req, res) => {
     if (!case_id || !file_id || !file_name) {
       return res.status(400).json({ error: 'case_id, file_id, file_name مطلوبون' });
     }
+    if (!(await assertCaseAccess(req, res, parseInt(case_id)))) return;
 
     const result = await gdrive.linkToCase(
       parseInt(case_id), file_id, file_name,
@@ -332,6 +418,7 @@ router.post('/gdrive/link', requireAuth, async (req, res) => {
 router.get('/gdrive/case/:caseId', requireAuth, async (req, res) => {
   try {
     const caseId = parseInt(req.params.caseId);
+    if (!(await assertCaseAccess(req, res, caseId))) return;
     const files = await gdrive.getCaseDriveFiles(caseId);
     const folder = await gdrive.getCaseDriveFolder(caseId);
     res.json({ success: true, data: files, folder });
@@ -345,6 +432,7 @@ router.post('/gdrive/folder', requireAuth, async (req, res) => {
   try {
     const { case_id, folder_id, folder_name } = req.body;
     if (!case_id || !folder_id) return res.status(400).json({ error: 'case_id, folder_id required' });
+    if (!(await assertCaseAccess(req, res, parseInt(case_id)))) return;
 
     await gdrive.setCaseDriveFolder(parseInt(case_id), folder_id, folder_name || '');
     res.json({ success: true, message: '✅ تم ربط مجلد Drive بالقضية' });
@@ -362,6 +450,7 @@ router.post('/gdrive/case/:caseId/create-folder', requireAuth, async (req, res) 
   try {
     if (!gdrive.configured) return res.status(503).json({ error: 'Google Drive is not configured yet — set GOOGLE_CLIENT_ID/SECRET/DRIVE_ROOT_FOLDER' });
     const caseId = parseInt(req.params.caseId);
+    if (!(await assertCaseAccess(req, res, caseId))) return;
     const folderId = await gdrive.ensureCaseFolder(caseId);
     res.json({ success: true, configured: true, folderId });
   } catch (err) {
@@ -372,7 +461,27 @@ router.post('/gdrive/case/:caseId/create-folder', requireAuth, async (req, res) 
 // GET /api/gdrive/list/:folderId — list files in a Drive folder
 router.get('/gdrive/list/:folderId', requireAuth, async (req, res) => {
   try {
-    const result = await gdrive.listFolder(req.params.folderId);
+    const folderId = req.params.folderId;
+    const sup = getSupabase();
+    // This folderId isn't a case_id -- it's a raw Drive folder id, so
+    // resolve it back to the case that owns it (its own root folder or one
+    // of its cached subfolders) before deciding access, same as every other
+    // route in this file already does via assertCaseAccess.
+    const { data: caseRow } = await sup.from('cases').select('id').eq('drive_folder_id', folderId).maybeSingle();
+    let caseId = caseRow?.id || null;
+    if (!caseId) {
+      const { data: cacheRow } = await sup.from('folder_cache').select('case_id').eq('drive_folder_id', folderId).maybeSingle();
+      caseId = cacheRow?.case_id || null;
+    }
+    if (caseId) {
+      if (!(await assertCaseAccess(req, res, caseId))) return;
+    } else if (req.user.role !== 'admin') {
+      // Unrecognized folder (e.g. a system folder, not tied to any case) --
+      // no case-level check applies, so fail closed to admin-only rather
+      // than letting any authenticated user list an arbitrary Drive folder.
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const result = await gdrive.listFolder(folderId);
     res.json({ success: true, configured: result.configured, data: result.files });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -383,6 +492,8 @@ router.get('/gdrive/list/:folderId', requireAuth, async (req, res) => {
 router.delete('/gdrive/file/:id', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
+    const { data: doc } = await sup.from('case_documents').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
+    if (doc && !(await assertCaseAccess(req, res, doc.case_id))) return;
     const { error } = await sup.from('case_documents').delete().eq('id', parseInt(req.params.id)).eq('file_type', 'gdrive_link');
     if (error) throw error;
     res.json({ success: true });
@@ -394,6 +505,8 @@ router.delete('/gdrive/file/:id', requireAuth, async (req, res) => {
 // DELETE /api/gdrive/folder/:caseId — unlink a case's Drive folder
 router.delete('/gdrive/folder/:caseId', requireAuth, async (req, res) => {
   try {
+    const caseId = parseInt(req.params.caseId);
+    if (!(await assertCaseAccess(req, res, caseId))) return;
     const sup = getSupabase();
     const { error } = await sup.from('cases').update({ drive_folder_id: null, drive_folder_status: null }).eq('id', parseInt(req.params.caseId));
     if (error) throw error;
@@ -405,3 +518,4 @@ router.delete('/gdrive/folder/:caseId', requireAuth, async (req, res) => {
 
 module.exports = router;
 module.exports.oauthCallbackHandler = oauthCallbackHandler;
+module.exports.imageProxyHandler = imageProxyHandler;

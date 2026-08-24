@@ -13,6 +13,7 @@ export default function MailLogs() {
   const [cases, setCases] = useState([]);
   const [selectedCaseId, setSelectedCaseId] = useState('');
   const [logs, setLogs] = useState([]);
+  const [logsError, setLogsError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
@@ -28,31 +29,42 @@ export default function MailLogs() {
   }, []);
 
   const fetchLogs = (caseId) => {
-    if (!caseId) { setLogs([]); return; }
-    api.get(`/api/cases/${caseId}/mail-logs`)
+    if (!caseId) { setLogs([]); setLogsError(false); return; }
+    setLogsError(false);
+    // api.js's request() already prepends /api -- passing '/api/cases/...'
+    // here doubled the prefix to /api/api/cases/..., which 404s. Same bug
+    // in createLog/deleteLog below.
+    api.get(`/cases/${caseId}/mail-logs`)
       .then(d => setLogs(Array.isArray(d) ? d : d.data || []))
-      .catch(() => setLogs([]));
+      // A failed fetch used to render identically to "no mail logged" --
+      // with no way for the user to tell a real empty case apart from a
+      // network/permission failure.
+      .catch(() => { setLogs([]); setLogsError(true); });
   };
 
   useEffect(() => { if (selectedCaseId) fetchLogs(selectedCaseId); else setLogs([]); }, [selectedCaseId]);
 
   const createLog = async () => {
     if (!form.sender_name.trim()) return;
-    await api.post('/api/cases/' + selectedCaseId + '/mail-logs', {
-      case_id: parseInt(selectedCaseId), ...form,
-      tracking_number: form.tracking_number || null, courier: form.courier || null,
-      recipient_name: form.recipient_name || null, sent_date: form.sent_date || null,
-      received_date: form.received_date || null, notes: form.notes || null,
-    });
-    setShowForm(false);
-    setForm({ case_id: '', direction: 'inbound', mail_type: 'letter', tracking_number: '', courier: '', sender_name: '', recipient_name: '', sent_date: '', received_date: '', notes: '' });
-    fetchLogs(selectedCaseId);
+    try {
+      await api.post('/cases/' + selectedCaseId + '/mail-logs', {
+        case_id: parseInt(selectedCaseId), ...form,
+        tracking_number: form.tracking_number || null, courier: form.courier || null,
+        recipient_name: form.recipient_name || null, sent_date: form.sent_date || null,
+        received_date: form.received_date || null, notes: form.notes || null,
+      });
+      setShowForm(false);
+      setForm({ case_id: '', direction: 'inbound', mail_type: 'letter', tracking_number: '', courier: '', sender_name: '', recipient_name: '', sent_date: '', received_date: '', notes: '' });
+      fetchLogs(selectedCaseId);
+    } catch (err) { alert('فشل إضافة المراسلة: ' + err.message); }
   };
 
   const deleteLog = async (id) => {
     if (!confirm('هل أنت متأكد من حذف هذه المراسلة؟')) return;
-    await api.delete(`/api/cases/${selectedCaseId}/mail-logs/${id}`);
-    fetchLogs(selectedCaseId);
+    try {
+      await api.delete(`/cases/${selectedCaseId}/mail-logs/${id}`);
+      fetchLogs(selectedCaseId);
+    } catch (err) { alert('فشل حذف المراسلة: ' + err.message); }
   };
 
   if (loading) return (
@@ -128,7 +140,14 @@ export default function MailLogs() {
             </div>
           )}
 
-          {logs.length === 0 ? (
+          {logsError ? (
+            <div className="empty-state">
+              <Mail className="w-12 h-12 mb-3" style={{ color: 'var(--danger)' }} />
+              <h3 className="text-base font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>تعذر تحميل المراسلات</h3>
+              <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>حدث خطأ أثناء تحميل السجل -- حاول مرة أخرى</p>
+              <button onClick={() => fetchLogs(selectedCaseId)} className="btn-accent px-5 py-2.5 text-sm">إعادة المحاولة</button>
+            </div>
+          ) : logs.length === 0 ? (
             <div className="empty-state">
               <Mail className="w-12 h-12 mb-3" style={{ color: 'var(--text-muted)' }} />
               <h3 className="text-base font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>لا توجد مراسلات</h3>

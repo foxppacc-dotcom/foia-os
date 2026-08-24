@@ -7,18 +7,31 @@ const { encrypt, decrypt } = require('../services/crypto');
 // ============ PORTAL CREDENTIALS MANAGEMENT ============
 
 // GET /api/portals — list all (passwords NOT in response)
-router.get('/portals', requireAuth, async (req, res) => {
+router.get('/portals', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   const sup = getSupabase();
   const { data, error } = await sup
     .from('portal_credentials')
-    .select('id, portal_name, portal_url, username, registered_email, is_active, last_used, notes, created_at, agency_id, agencies!left(name_ar, name_en)')
+    .select('id, portal_name, portal_url, username, registered_email, is_active, last_used, notes, created_at, agency_id')
     .order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
+
+  // Batch-fetch agency names separately instead of an embedded
+  // agencies!left(...) join -- PostgREST resolves that syntax off its FK
+  // schema cache, which failed here ("Could not find a relationship
+  // between 'portal_credentials' and 'agencies'") even though both tables
+  // and the agency_id column are real. Same defensive pattern already used
+  // for case_assignees/users in case_detail.routes.js.
+  const agencyIds = [...new Set((data || []).map(p => p.agency_id).filter(Boolean))];
+  let agencyMap = {};
+  if (agencyIds.length) {
+    const { data: agencies } = await sup.from('agencies').select('id, name_ar, name_en').in('id', agencyIds);
+    (agencies || []).forEach(a => { agencyMap[a.id] = a; });
+  }
+
   const mapped = (data || []).map(p => ({
     ...p,
-    agency_name_ar: p.agencies?.name_ar || null,
-    agency_name_en: p.agencies?.name_en || null,
-    agencies: undefined,
+    agency_name_ar: agencyMap[p.agency_id]?.name_ar || null,
+    agency_name_en: agencyMap[p.agency_id]?.name_en || null,
   }));
   res.json({ success: true, data: mapped });
 });
