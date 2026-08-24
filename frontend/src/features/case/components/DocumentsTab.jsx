@@ -66,7 +66,7 @@ function statusInfo(doc) {
 }
 
 export default function DocumentsTab() {
-  const { id, c, documents, removeDocument, removeDocuments, setPreviewFile, refetch } = useCaseContext();
+  const { id, c, documents, requests, channels, removeDocument, removeDocuments, setPreviewFile, refetch } = useCaseContext();
   const [categories, setCategories] = useState([]);
   const [fileFetchOpen, setFileFetchOpen] = useState(false);
   const [selected, setSelected] = useState(new Set());
@@ -344,7 +344,7 @@ export default function DocumentsTab() {
           </>
         )}
       </div>
-      <FileFetchModal open={fileFetchOpen} onClose={() => setFileFetchOpen(false)} caseId={id} caseTitle={c?.title} />
+      <FileFetchModal open={fileFetchOpen} onClose={() => setFileFetchOpen(false)} caseId={id} caseTitle={c?.title} requests={requests} channels={channels} />
     </div>
   );
 }
