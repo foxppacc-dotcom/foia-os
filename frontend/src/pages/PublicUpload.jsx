@@ -17,13 +17,30 @@ const RETRY_DELAY_MS = 2000;
 function putChunk(sessionUrl, chunk, start, end, totalSize, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(start + e.loaded); };
+    let bytesSent = 0;
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) { bytesSent = e.loaded; onProgress(start + e.loaded); } };
     xhr.onload = () => {
       if (xhr.status === 200 || xhr.status === 201) { try { resolve(JSON.parse(xhr.responseText)); } catch { resolve(null); } }
       else if (xhr.status === 308) resolve(null);
       else reject(new Error(`فشل رفع جزء من الملف: HTTP ${xhr.status}`));
     };
-    xhr.onerror = () => reject(new Error('خطأ شبكة أثناء الرفع'));
+    // Confirmed live: Google's resumable endpoint doesn't send an
+    // Access-Control-Allow-Origin header on the FINAL chunk's response (the
+    // one carrying the file's metadata, unlike an intermediate 308) -- the
+    // bytes land in Drive successfully (upload progress genuinely reaches
+    // 100%), but the browser blocks the response from ever reaching JS and
+    // fires onerror instead of onload. Treating every onerror as a real
+    // failure meant the upload retried, resent the same bytes into a
+    // session Drive had already closed out, got a real error THAT time, and
+    // permanently failed -- exactly the "100% -> drops -> 100% -> fails"
+    // symptom reported. If every byte of THIS chunk was actually sent, the
+    // upload itself didn't fail -- resolve like an unreadable-but-successful
+    // response (same as a 308) and let finalize's name+size fallback lookup
+    // resolve the real Drive file, instead of resending bytes Google already has.
+    xhr.onerror = () => {
+      if (bytesSent >= (end - start)) resolve(null);
+      else reject(new Error('خطأ شبكة أثناء الرفع'));
+    };
     xhr.open('PUT', sessionUrl);
     xhr.setRequestHeader('Content-Range', `bytes ${start}-${end - 1}/${totalSize}`);
     xhr.send(chunk);
@@ -131,7 +148,7 @@ export default function PublicUpload() {
           style={{ background: dragging ? '#eff6ff' : '#f9fafb', borderColor: dragging ? '#2563eb' : '#d1d5db' }}
         >
           <UploadCloud className="w-8 h-8 mx-auto mb-2" style={{ color: '#6b7280' }} />
-          <p className="text-sm font-medium">اسحب الملفات هنا أو اضغط للاختيار</p>
+          <p className="text-sm font-medium">Drag files here or click to select</p>
           <input ref={inputRef} type="file" multiple className="hidden"
             onChange={e => { if (e.target.files?.length) addFiles(e.target.files); e.target.value = ''; }} />
         </div>

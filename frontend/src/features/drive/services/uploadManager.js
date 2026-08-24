@@ -333,9 +333,11 @@ class UploadManager {
   _putChunkToDrive(sessionUrl, chunk, start, end, totalSize, item) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      let bytesSent = 0;
       if (item.abortController) item.abortController.signal.addEventListener('abort', () => xhr.abort());
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
+          bytesSent = e.loaded;
           // Monotonic guard: when a chunk is retried after a failure, the XHR
           // restarts from 0, which would drag the bar BACK to the chunk's
           // start (e.g. 100% → 50%). Never let progress go backwards — only
@@ -356,7 +358,22 @@ class UploadManager {
           reject(new Error(`فشل رفع جزء من الملف إلى Drive: HTTP ${xhr.status}`));
         }
       };
-      xhr.onerror = () => reject(new Error('خطأ شبكة أثناء الرفع إلى Google Drive'));
+      // Confirmed live: Google's resumable endpoint doesn't return an
+      // Access-Control-Allow-Origin header on the FINAL chunk's response
+      // (the one carrying the file's metadata, unlike an intermediate 308)
+      // -- the bytes land in Drive successfully, but the browser blocks the
+      // response from reaching JS and fires onerror instead of onload.
+      // Retrying re-sent bytes into a session Drive had already closed,
+      // which failed for real that time -- the exact "100% -> drops -> 100%
+      // -> fails forever" bug this was traced to. If every byte of this
+      // chunk was actually sent, resolve like an unreadable-but-successful
+      // response (same as 308) and let finalize's name+size fallback
+      // resolve the real Drive file, instead of resending bytes Drive
+      // already has.
+      xhr.onerror = () => {
+        if (bytesSent >= (end - start)) resolve(null);
+        else reject(new Error('خطأ شبكة أثناء الرفع إلى Google Drive'));
+      };
       // Without this, aborting mid-chunk (a pause/cancel that lands while
       // this exact chunk is in flight) never settles the promise -- it just
       // hangs, same issue as _simpleUpload above.
