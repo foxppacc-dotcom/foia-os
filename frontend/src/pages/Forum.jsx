@@ -14,6 +14,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Spinner from '../components/ui/Spinner';
 import { useToast } from '../components/ui/Toast';
+import InstallAppButton from '../components/InstallAppButton';
 
 const DELETE_WINDOW_MS = 60 * 1000;
 
@@ -134,6 +135,8 @@ export default function Forum() {
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="موضوع جديد">
         <CreateTopicForm onDone={() => { setShowCreate(false); fetchTopics(); }} toast={toast} />
       </Modal>
+
+      <InstallAppButton />
     </div>
   );
 }
