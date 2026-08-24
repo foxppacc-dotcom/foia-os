@@ -296,9 +296,23 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
         if (doneFile) return res.json({ success: true, existing: true, drive_file_id: doneFile.id, resume_offset: parseInt(size), completed: true });
       }
       if (existingRow?.id) {
-        await sup.from('drive_upload_sessions').update({
+        // Compare-and-swap: only overwrite if the row's session_url is still
+        // what we just read. Two concurrent requests hitting this same stale
+        // row would otherwise both blindly overwrite each other's reclaim,
+        // and the LOSER would keep telling its own client to use a
+        // session_url that's no longer the one tracked in the DB.
+        const { data: reclaimed } = await sup.from('drive_upload_sessions').update({
           session_url: sessionUrl, uploaded_bytes: 0, status: 'active', updated_at: new Date().toISOString(),
-        }).eq('id', existingRow.id);
+        }).eq('id', existingRow.id).eq('session_url', existingRow.session_url).select('id').maybeSingle();
+        if (!reclaimed) {
+          const { data: winner } = await sup.from('drive_upload_sessions').select('session_url').eq('id', existingRow.id).maybeSingle();
+          if (winner?.session_url) {
+            try {
+              const progress = await gdrive.checkSessionProgress(winner.session_url, parseInt(size));
+              return res.json({ success: true, resumable: !progress.completed, existing: progress.completed, session_url: winner.session_url, sessionUrl: winner.session_url, resume_offset: progress.offset, folder_id: folderId });
+            } catch (e) { /* their session's dead too -- fall through and use ours, untracked */ }
+          }
+        }
       }
     } else if (insertErr) {
       console.error('[gdrive] save session failed:', insertErr.message);
@@ -350,6 +364,16 @@ router.post('/gdrive/finalize', requireAuth, async (req, res) => {
     // Drive file id (belonging to a case they can't access) into a case they
     // do have access to, by just calling finalize with someone else's id.
     if (!(meta.parents || []).includes(folderId)) return res.status(403).json({ error: 'الملف غير موجود في مجلد هذه القضية' });
+    // MAX_UPLOAD_BYTES was only ever checked against the client-DECLARED size
+    // at session creation -- the backend never sees the actual PUT bytes, so
+    // a client could under-declare `size` there and simply stream more.
+    // Drive's own reported size here is the one point where the real size
+    // is known, so it's the real enforcement point (mirrors the identical
+    // fix in fileFetch.js's public finalize handler).
+    if (parseInt(meta.size) > MAX_UPLOAD_BYTES) {
+      await gdrive.deleteFile(meta.id).catch(() => {});
+      return res.status(413).json({ error: `الملف أكبر من الحد المسموح (${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024 / 1024)} جيجابايت)` });
+    }
 
     // Idempotency guard: the browser may retry finalize after a lost
     // response even though the chunks already landed in Drive. If a row

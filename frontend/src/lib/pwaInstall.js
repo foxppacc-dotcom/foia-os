@@ -25,6 +25,16 @@ export function getDeferredInstallPrompt() {
   return deferredPrompt;
 }
 
+// The browser only honors ONE call to a captured prompt's own .prompt() --
+// after that it's dead whether the user accepted OR dismissed it. Callers
+// must clear it once they've used it so a second click goes straight to the
+// manual fallback instructions instead of re-calling .prompt() on a dead
+// event and relying on the resulting throw to get there.
+export function clearDeferredInstallPrompt() {
+  deferredPrompt = null;
+  listeners.forEach((cb) => cb(null));
+}
+
 // Returns an unsubscribe function, same convention as every other
 // subscribe-style helper in this codebase (e.g. useEffect cleanup).
 export function onInstallPromptChange(cb) {

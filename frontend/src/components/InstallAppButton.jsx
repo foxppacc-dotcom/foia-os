@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Apple, Smartphone, Monitor, Download, X } from 'lucide-react';
 import AppDialog from './ds/AppDialog';
-import { getDeferredInstallPrompt, onInstallPromptChange, isStandalone } from '../lib/pwaInstall';
+import { getDeferredInstallPrompt, clearDeferredInstallPrompt, onInstallPromptChange, isStandalone } from '../lib/pwaInstall';
 
 // iOS Safari has no beforeinstallprompt (Apple never implemented it) --
 // "Add to Home Screen" there is only ever a manual, user-driven action via
@@ -78,6 +78,10 @@ export default function InstallAppButton() {
       await prompt.userChoice;
     } catch {
       setInstructions(platform);
+    } finally {
+      // Spent either way (accepted or dismissed) -- a second click must not
+      // re-attempt .prompt() on this same dead event.
+      clearDeferredInstallPrompt();
     }
   };
 

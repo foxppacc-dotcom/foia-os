@@ -34,7 +34,11 @@ function computePanelLayout(pos) {
 
   const width = Math.min(PANEL_WIDTH, vw - EDGE_MARGIN * 2);
   const maxHeightSpace = (vertical === 'down' ? spaceBelow : spaceAbove) - EDGE_MARGIN;
-  const maxHeight = Math.max(200, Math.min(desiredHeight, maxHeightSpace));
+  // A floor keeps the panel usable on a very short viewport where neither
+  // side has much room, but it must never be raised past what the FULL
+  // viewport can hold -- otherwise the floor itself would push the panel
+  // off-screen instead of just looking a little cramped.
+  const maxHeight = Math.min(Math.max(140, Math.min(desiredHeight, maxHeightSpace)), vh - EDGE_MARGIN * 2);
 
   return { horizontal, vertical, width, maxHeight };
 }
@@ -125,16 +129,21 @@ export default function AIAssistantWidget() {
     dragState.current = null;
     if (wasMoved) { try { localStorage.setItem(POS_KEY, JSON.stringify(position)); } catch {} return; }
     // A click (no real movement) toggles the widget instead of dragging it.
-    if (collapsed) {
-      setLayout(computePanelLayout(position));
-      setCollapsed(false);
-      setHasUnread(false);
-    }
+    if (collapsed) { setCollapsed(false); setHasUnread(false); }
   };
-  // The panel's own maxHeight/maxWidth are computed from the viewport at the
-  // moment it opens -- a resize while it's already open (rotating a tablet,
-  // resizing a desktop window) would otherwise leave it clipped against
-  // stale numbers instead of the new available space.
+  // Recomputes on every position change while expanded -- not just the
+  // moment it opens. The panel's own header IS the drag handle when
+  // expanded (onPointerDown below), so dragging an already-open panel
+  // keeps calling setPosition just like dragging the collapsed bubble does;
+  // without reacting to that too, the panel would keep anchoring against
+  // wherever it happened to be when it was first opened, running off-screen
+  // if the user then drags it toward the opposite edge. Also covers a
+  // window resize (rotating a tablet, resizing a desktop window) via the
+  // separate listener below, since viewport size isn't React state.
+  useEffect(() => {
+    if (collapsed) return;
+    setLayout(computePanelLayout(position));
+  }, [collapsed, position]);
   useEffect(() => {
     if (collapsed) return;
     const onResize = () => setLayout(computePanelLayout(position));

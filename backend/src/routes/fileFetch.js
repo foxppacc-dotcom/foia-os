@@ -231,10 +231,29 @@ async function publicUploadSessionHandler(req, res) {
         // otherwise block this exact (case_id, file_name, file_size) combo
         // from ever being retried again. Reclaim the row in place instead of
         // leaving our freshly-created Drive session untracked.
+        //
+        // The `.eq('session_url', existingRow.session_url)` makes this a
+        // compare-and-swap: if a second concurrent request reclaimed the
+        // SAME stale row a moment earlier, its session_url no longer
+        // matches what we just read, so this UPDATE matches zero rows
+        // instead of blindly overwriting their (now current) session --
+        // without it, two racing requests would each stomp the other's
+        // reclaim and BOTH would hand their own client a sessionUrl that
+        // isn't the one actually left tracked in the DB.
         if (existingRow?.id) {
-          await sup.from('drive_upload_sessions').update({
+          const { data: reclaimed } = await sup.from('drive_upload_sessions').update({
             session_url: sessionUrl, uploaded_bytes: 0, status: 'active', updated_at: new Date().toISOString(),
-          }).eq('id', existingRow.id);
+          }).eq('id', existingRow.id).eq('session_url', existingRow.session_url).select('id').maybeSingle();
+          if (!reclaimed) {
+            const { data: winner } = await sup.from('drive_upload_sessions')
+              .select('session_url').eq('id', existingRow.id).maybeSingle();
+            if (winner?.session_url) {
+              try {
+                const progress = await gdrive.checkSessionProgress(winner.session_url, parseInt(size));
+                return res.json({ success: true, resumable: !progress.completed, existing: progress.completed, session_url: winner.session_url, sessionUrl: winner.session_url, resume_offset: progress.offset, folder_id: folderId });
+              } catch (e) { /* their session's dead too -- fall through and use ours, untracked */ }
+            }
+          }
         } else {
           console.error('[fileFetch] save session failed:', insertErr.message);
         }
