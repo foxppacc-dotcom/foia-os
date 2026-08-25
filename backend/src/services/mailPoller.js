@@ -60,6 +60,26 @@ async function bumpConfirmed(sup, tierKey) {
   } catch (e) { /* migrations/033 may not have been run yet */ }
 }
 
+// Runs `fn` over `items` with at most `limit` in flight at once -- plain
+// sequential (a for-loop with await inside) meant N independent, mostly
+// I/O-bound units of work (a message's own DB/Drive round trips, an
+// account's own IMAP session) took N times as long as one, with nothing
+// actually requiring that serialization. Capped rather than a bare
+// Promise.all so a mailbox with dozens of new messages in one poll can't
+// burst past what Drive's/Supabase's rate limits comfortably absorb.
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function guessFileType(filename) {
   const dotIdx = (filename || '').lastIndexOf('.');
   const ext = dotIdx >= 0 ? filename.slice(dotIdx).toLowerCase() : '';
@@ -639,14 +659,36 @@ class MailPoller {
 
   async processMessages(accountId, messages, forceCaseId = null) {
     const sup = getSupabase();
-    let newCount = 0;
-    const errors = [];
     // Loaded once for the whole batch, not once per message -- an admin's
     // disabled tier or added keyword rule applies uniformly across every
     // message this poll pass touches.
     const criteria = messages.length ? await loadMatchingCriteria(sup) : null;
 
-    for (const msg of messages) {
+    // Each message is independent -- its own dedup key, its own matching
+    // pipeline, its own insert -- but used to run one at a time, so a poll
+    // that turned up dozens of new messages took as long as dozens of full
+    // sequential pipelines (each with several DB round trips and, for any
+    // attachment, a Drive upload). Capped concurrency, not unbounded, since
+    // a real backlog after downtime could be large enough to burst past
+    // Drive/Supabase rate limits otherwise.
+    const MESSAGE_CONCURRENCY = 4;
+    const results = await mapWithConcurrency(messages, MESSAGE_CONCURRENCY,
+      (msg) => this._processOneMessage(sup, accountId, msg, forceCaseId, criteria));
+
+    let newCount = 0;
+    const errors = [];
+    for (const r of results) {
+      if (r.inserted) newCount++;
+      if (r.error) errors.push(r.error);
+    }
+    return { count: newCount, errors };
+  }
+
+  // The per-message body of the old processMessages loop, unchanged in
+  // substance -- returns its outcome instead of mutating an outer counter/
+  // array, since mapWithConcurrency above needs each call's result back
+  // rather than a shared side effect multiple messages could race on.
+  async _processOneMessage(sup, accountId, msg, forceCaseId, criteria) {
      try {
       // Check for duplicate via messageId. Body-html backfill piggybacks on
       // this same dedup check: a message that's already stored (from before
@@ -699,11 +741,10 @@ class MailPoller {
             if (metaErr) console.error(`[mailPoller] attachment backfill metadata update failed for message ${msg.messageId}:`, metaErr.message);
           }
         }
-        continue;
+        return { inserted: false };
       }
 
       const { matchedCaseId, matchedAgencyId, matchedRequestId, possibleMatches, matchReason } = await this.matchToCase(sup, msg, forceCaseId, criteria);
-      const extractedRefNumber = extractReferenceNumber(msg.subject) || extractReferenceNumber(msg.text);
 
       // Persist attachment content to Google Drive (was previously uploaded
       // to Supabase Storage), and -- when the email matched a case -- also
@@ -711,19 +752,19 @@ class MailPoller {
       // Files tab, not only buried in the email thread. Unmatched emails go
       // into the shared "Unmatched Emails" folder instead (uploadInboundAttachment
       // handles the split) -- still downloadable, just not filed under any
-      // case's own folder/Files tab until it's matched.
-      const storedAttachments = [];
-      for (const att of msg.attachments) {
-        if (!att.content) continue;
+      // case's own folder/Files tab until it's matched. Independent per
+      // attachment, so uploaded concurrently rather than one Drive round
+      // trip at a time.
+      const storedAttachments = await Promise.all((msg.attachments || []).filter(att => att.content).map(async (att) => {
         try {
           const buffer = Buffer.from(att.content, 'base64');
           const { driveFileId, viewUrl } = await uploadInboundAttachment(sup, matchedCaseId, buffer, att.filename, att.contentType, att.size);
-          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, driveFileId, viewUrl });
+          return { filename: att.filename, size: att.size, mimeType: att.contentType, driveFileId, viewUrl };
         } catch (e) {
           console.error(`[mailPoller] attachment upload failed for "${att.filename}":`, e.message);
-          storedAttachments.push({ filename: att.filename, size: att.size, mimeType: att.contentType, error: e.message });
+          return { filename: att.filename, size: att.size, mimeType: att.contentType, error: e.message };
         }
-      }
+      }));
 
       // Insert communication record
       const insertData = {
@@ -770,10 +811,8 @@ class MailPoller {
       }
       if (insertError) {
         console.error(`[mailPoller] communications insert failed for "${msg.subject}":`, insertError.message);
-        errors.push({ subject: msg.subject, messageId: msg.messageId, stage: 'insert', error: insertError.message });
-        continue; // do not count a failed insert as a new message
+        return { inserted: false, error: { subject: msg.subject, messageId: msg.messageId, stage: 'insert', error: insertError.message } };
       }
-      newCount++;
       if (matchedCaseId) await bumpConfirmed(sup, matchReason?.tier_key);
 
       // Create timeline event + notify assignees for matched emails
@@ -793,14 +832,12 @@ class MailPoller {
           await this.notifyCaseUsers(sup, matchedCaseId, msg.subject, msg.from);
         } catch (e) { console.error(`[mailPoller] notifyCaseUsers failed for case ${matchedCaseId}:`, e.message); }
       }
+      return { inserted: true };
      } catch (e) {
        // One bad message must not abort the rest of the batch.
        console.error(`[mailPoller] failed to process message "${msg.subject}":`, e.message);
-       errors.push({ subject: msg.subject, messageId: msg.messageId, stage: 'process', error: e.message });
+       return { inserted: false, error: { subject: msg.subject, messageId: msg.messageId, stage: 'process', error: e.message } };
      }
-    }
-
-    return { count: newCount, errors };
   }
 
   async notifyCaseUsers(sup, caseId, subject, from) {
@@ -829,54 +866,89 @@ class MailPoller {
     const { data: allAccounts, error: acctError } = await sup.from('email_accounts').select('*');
     if (acctError) console.error('[mailPoller] failed to load email_accounts:', acctError.message);
     const accounts = (allAccounts || []).filter(a => a.is_active === true || a.is_active === 1);
+    // Each account is its own independent IMAP session (activeAccountPolls
+    // already guards same-account reentrancy, not cross-account) -- polling
+    // them one at a time meant N configured accounts took N times as long
+    // as one, even though nothing about IMAP or this codebase requires
+    // that. The account count is small and operator-controlled (unlike a
+    // mailbox's message volume), so this runs fully concurrent rather than
+    // capped like message processing below.
+    const results = await Promise.all(accounts.map(acct => this._pollOneAccountSafely(sup, acct)));
+
     let total = 0;
     const errors = [];
-    for (const acct of accounts) {
-      try {
-        const { count, errors: msgErrors } = await this.pollAndProcessAccount(acct);
-        if (count > 0) console.log(`IMAP: ${count} new messages from ${acct.email}`);
-        total += count;
-        for (const e of msgErrors) errors.push({ account: acct.email, ...e });
-        // Advance the "since" cursor pollAccount reads next run -- without
-        // this, every cron pass re-searched from the same stale timestamp
-        // forever (never past the first successful poll's baseline). Only
-        // when every message this pass actually processed cleanly: IMAP
-        // SEARCH SINCE is day-granular, so once the cursor crosses past
-        // today into tomorrow, anything dated today that failed to insert
-        // (e.g. a transient DB error) would drop out of every future
-        // search's range and never be retried. Message-ID dedup already
-        // makes re-searching the same day free on a clean run.
-        if (!msgErrors.length) {
-          const { error: touchErr } = await sup.from('email_accounts').update({ last_checked: new Date().toISOString() }).eq('id', acct.id);
-          if (touchErr) console.warn(`[mailPoller] failed to update last_checked for ${acct.email}:`, touchErr.message);
-        } else {
-          console.warn(`[mailPoller] not advancing last_checked for ${acct.email} -- ${msgErrors.length} message(s) failed to process`);
-        }
-      } catch (e) {
-        console.error(`IMAP error for ${acct.email}:`, e.message);
-        errors.push({ account: acct.email, stage: 'connect', error: e.message });
-        // A broken mailbox (bad password, revoked app-password, connection
-        // refused...) previously failed completely silently -- nothing told
-        // anyone until a human noticed emails had stopped arriving. Notify
-        // whoever can actually fix it (email_accounts manage permission),
-        // not a hardcoded admin list, deduped to once per 20h per account so
-        // a persistently broken mailbox doesn't spam on every cron tick or
-        // manual "Fetch Emails" click.
-        try {
-          const { data: recent } = await sup.from('notifications').select('id')
-            .eq('type', 'mailbox_error').eq('target_id', acct.id)
-            .gte('created_at', new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString()).maybeSingle();
-          if (!recent) {
-            const managers = await getUsersWithPermission(sup, 'email_accounts', 'manage');
-            await notifyUsers(sup, managers, {
-              type: 'mailbox_error', title: '⚠️ فشل الاتصال بحساب بريد', body: `${acct.email}: ${e.message}`,
-              target_type: 'email_account', target_id: acct.id,
-            });
-          }
-        } catch (notifyErr) { console.error('[mailPoller] mailbox_error notification failed:', notifyErr.message); }
-      }
+    const warnings = [];
+    for (const r of results) {
+      total += r.count;
+      errors.push(...r.errors);
+      warnings.push(...r.warnings);
     }
-    return { total, errors };
+    return { total, errors, warnings };
+  }
+
+  // One account's full poll-and-advance-cursor cycle, isolated so pollAll
+  // can run every account concurrently via Promise.all without one
+  // account's throw aborting the others. Same steps/order as before, just
+  // extracted out of the loop body.
+  async _pollOneAccountSafely(sup, acct) {
+    const errors = [];
+    const warnings = [];
+    let count = 0;
+    try {
+      const result = await this.pollAndProcessAccount(acct);
+      count = result.count;
+      if (count > 0) console.log(`IMAP: ${count} new messages from ${acct.email}`);
+      for (const e of result.errors) errors.push({ account: acct.email, ...e });
+      // Advance the "since" cursor pollAccount reads next run -- without
+      // this, every cron pass re-searched from the same stale timestamp
+      // forever (never past the first successful poll's baseline). Only
+      // when every message this pass actually processed cleanly: IMAP
+      // SEARCH SINCE is day-granular, so once the cursor crosses past
+      // today into tomorrow, anything dated today that failed to insert
+      // (e.g. a transient DB error) would drop out of every future
+      // search's range and never be retried. Message-ID dedup already
+      // makes re-searching the same day free on a clean run.
+      if (!result.errors.length) {
+        const { error: touchErr } = await sup.from('email_accounts').update({ last_checked: new Date().toISOString() }).eq('id', acct.id);
+        if (touchErr) {
+          console.warn(`[mailPoller] failed to update last_checked for ${acct.email}:`, touchErr.message);
+          // Confirmed to have happened silently in production before (the
+          // last_checked column itself was missing -- migration 003 was
+          // never actually run): every poll re-scanned the SAME stale
+          // window forever, re-downloading and re-parsing the account's
+          // entire history on every single click, which is exactly what
+          // made "جلب الإيميلات" so slow. Surfaced here so this class of
+          // failure is visible from the button itself from now on, not
+          // only in server logs nobody's watching.
+          warnings.push(`تعذر تحديث آخر وقت فحص لحساب ${acct.email} -- سيُعاد فحص نفس الفترة الطويلة في كل مرة (${touchErr.message})`);
+        }
+      } else {
+        console.warn(`[mailPoller] not advancing last_checked for ${acct.email} -- ${result.errors.length} message(s) failed to process`);
+      }
+    } catch (e) {
+      console.error(`IMAP error for ${acct.email}:`, e.message);
+      errors.push({ account: acct.email, stage: 'connect', error: e.message });
+      // A broken mailbox (bad password, revoked app-password, connection
+      // refused...) previously failed completely silently -- nothing told
+      // anyone until a human noticed emails had stopped arriving. Notify
+      // whoever can actually fix it (email_accounts manage permission),
+      // not a hardcoded admin list, deduped to once per 20h per account so
+      // a persistently broken mailbox doesn't spam on every cron tick or
+      // manual "Fetch Emails" click.
+      try {
+        const { data: recent } = await sup.from('notifications').select('id')
+          .eq('type', 'mailbox_error').eq('target_id', acct.id)
+          .gte('created_at', new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString()).maybeSingle();
+        if (!recent) {
+          const managers = await getUsersWithPermission(sup, 'email_accounts', 'manage');
+          await notifyUsers(sup, managers, {
+            type: 'mailbox_error', title: '⚠️ فشل الاتصال بحساب بريد', body: `${acct.email}: ${e.message}`,
+            target_type: 'email_account', target_id: acct.id,
+          });
+        }
+      } catch (notifyErr) { console.error('[mailPoller] mailbox_error notification failed:', notifyErr.message); }
+    }
+    return { count, errors, warnings };
   }
 
   // One-time enrichment for emails that arrived BEFORE body_html existed --

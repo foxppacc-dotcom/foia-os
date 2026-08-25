@@ -1088,8 +1088,8 @@ router.delete('/communications/:id', requireAuth, async (req, res) => {
 router.post('/imap/poll', requireAuth, async (req, res) => {
   try {
     const mailPoller = require('../services/mailPoller');
-    const { total, errors } = await mailPoller.pollAll();
-    res.json({ success: true, newMessages: total, errors: errors.length ? errors : undefined });
+    const { total, errors, warnings } = await mailPoller.pollAll();
+    res.json({ success: true, newMessages: total, errors: errors.length ? errors : undefined, warnings: warnings?.length ? warnings : undefined });
   } catch (ex) { res.json({ success: false, error: ex.message }); }
 });
 

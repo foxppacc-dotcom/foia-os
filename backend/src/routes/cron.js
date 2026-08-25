@@ -27,9 +27,19 @@ router.get('/cron/imap-poll', async (req, res) => {
 
   try {
     const mailPoller = require('../services/mailPoller');
-    const { total, errors } = await mailPoller.pollAll();
+    const { total, errors, warnings } = await mailPoller.pollAll();
     if (errors.length) console.error('[cron] poll errors:', JSON.stringify(errors));
-    res.json({ success: true, newMessages: total, errors: errors.length ? errors : undefined, polledAt: new Date().toISOString() });
+    // A warning here (e.g. the last_checked cursor failing to save) doesn't
+    // fail the poll outright, but left unnoticed it means every future poll
+    // -- cron AND manual -- keeps re-scanning the same ever-widening window
+    // forever, which is exactly what made "جلب الإيميلات" slow enough to
+    // look hung before this was caught. This runs unattended daily, so it's
+    // the one place this could silently persist the longest.
+    if (warnings?.length) {
+      console.warn('[cron] poll warnings:', JSON.stringify(warnings));
+      await notifyAdminsOfCronFailure('imap_poll_warning', '⚠️ تنبيه من فحص البريد الوارد', warnings.join(' | '));
+    }
+    res.json({ success: true, newMessages: total, errors: errors.length ? errors : undefined, warnings: warnings?.length ? warnings : undefined, polledAt: new Date().toISOString() });
   } catch (ex) {
     console.error('Cron IMAP poll error:', ex.message);
     // A failure here means real inbound emails just stop being processed --

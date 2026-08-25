@@ -229,6 +229,11 @@ export default function InboxPage() {
       const d = await r.json();
       if (d.newMessages > 0) fetchInbox();
       fetchUnread();
+      // Not a hard failure (the poll still ran), but a warning here means
+      // the incremental-fetch cursor didn't save -- left unnoticed, every
+      // future click keeps re-scanning the same ever-widening window,
+      // which is exactly what made this button look like it hangs.
+      if (d.warnings?.length) alert('⚠️ ' + d.warnings.join('\n'));
     } catch {}
     setPolling(false);
   };
