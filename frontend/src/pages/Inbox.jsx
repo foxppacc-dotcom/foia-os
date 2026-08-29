@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, getApiBase, getCurrentUser } from '../api';
 import { Mail, Search, Inbox, Archive, ArchiveRestore, Link2, Unlink, ChevronDown, RefreshCw, Loader2, ExternalLink, Trash2, Send, X, Paperclip, Download, CheckCircle2, ChevronLeft, ChevronRight, AlertTriangle, Filter } from 'lucide-react';
 import AppSection from '../components/ds/AppSection';
@@ -19,8 +20,6 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-const MONTH_NAMES = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
-
 // A clickable popup calendar instead of typed digit segments. Native
 // <input type="date"> renders its numerals/segment order from the BROWSER'S
 // OWN locale, not the page's dir/lang attributes -- Chrome in particular
@@ -29,6 +28,8 @@ const MONTH_NAMES = ['يناير', 'فبراير', 'مارس', 'أبريل', 'م
 // grid ourselves (plain divs/buttons, not a native date widget) sidesteps
 // that entirely while still being a single click to pick a date.
 function CalendarPopup({ value, onChange, placeholder }) {
+  const { t } = useTranslation('common');
+  const monthNames = t('common:months', { returnObjects: true });
   const [open, setOpen] = useState(false);
   const [viewDate, setViewDate] = useState(() => {
     const d = value ? new Date(value + 'T00:00:00') : new Date();
@@ -76,7 +77,7 @@ function CalendarPopup({ value, onChange, placeholder }) {
         <div className="absolute z-30 mt-1 p-2 rounded-xl shadow-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', width: '210px' }} dir="ltr">
           <div className="flex items-center justify-between mb-2 px-0.5">
             <button type="button" onClick={prevMonth} className="p-0.5 rounded" style={{ color: 'var(--ds-text-secondary)' }}><ChevronLeft className="w-3.5 h-3.5" /></button>
-            <span className="text-[11px] font-medium" style={{ color: 'var(--ds-text-primary)' }}>{MONTH_NAMES[viewDate.month]} {viewDate.year}</span>
+            <span className="text-[11px] font-medium" style={{ color: 'var(--ds-text-primary)' }}>{monthNames[viewDate.month]} {viewDate.year}</span>
             <button type="button" onClick={nextMonth} className="p-0.5 rounded" style={{ color: 'var(--ds-text-secondary)' }}><ChevronRight className="w-3.5 h-3.5" /></button>
           </div>
           <div className="grid grid-cols-7 gap-0.5 text-center">
@@ -106,6 +107,7 @@ function CalendarPopup({ value, onChange, placeholder }) {
 const PAGE_SIZE = 50;
 
 export default function InboxPage() {
+  const { t, i18n } = useTranslation(['inbox', 'common']);
   const [messages, setMessages] = useState([]);
   const [total, setTotal] = useState(0);
   // Independent of `total` (which reflects whichever tab is CURRENTLY
@@ -170,12 +172,12 @@ export default function InboxPage() {
       // here with d.data undefined -- rendering as an empty list, identical
       // to "genuinely no messages in range" with zero indication the query
       // itself never ran.
-      if (!r.ok) { setFetchError(d.error || 'فشل تحميل الرسائل'); setMessages([]); setTotal(0); setLoading(false); return; }
+      if (!r.ok) { setFetchError(d.error || t('inbox:errors.loadFailedGeneric')); setMessages([]); setTotal(0); setLoading(false); return; }
       setFetchError('');
       setMessages(d.data || []);
       setTotal(d.total || 0);
       setArchivedMatches(d.archivedMatches || 0);
-    } catch (e) { setFetchError('خطأ في الاتصال'); console.error('Inbox fetch error:', e); }
+    } catch (e) { setFetchError(t('inbox:errors.connectionError')); console.error('Inbox fetch error:', e); }
     setLoading(false);
   };
 
@@ -241,30 +243,30 @@ export default function InboxPage() {
   const handleLink = async (id, caseId, agencyId) => {
     try {
       const r = await fetch(`${BASE}/inbox/${id}/link`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ case_id: caseId, agency_id: agencyId }) });
-      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر ربط الرسالة')); return; }
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert(t('inbox:actionErrors.linkFailed', { message: d.error || t('inbox:actionErrors.linkFailedGeneric') })); return; }
       fetchInbox();
-    } catch (e) { alert('❌ ' + e.message); }
+    } catch (e) { alert(t('inbox:actionErrors.linkFailed', { message: e.message })); }
   };
 
   const handleUnlink = async (id) => {
-    if (!confirm('فك ارتباط هذه الرسالة بالقضية؟')) return;
+    if (!confirm(t('inbox:confirm.unlink'))) return;
     try {
       const r = await fetch(`${BASE}/inbox/${id}/unlink`, { method: 'PUT', headers: hdrs() });
-      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر فك الارتباط')); return; }
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert(t('inbox:actionErrors.unlinkFailed', { message: d.error || t('inbox:actionErrors.unlinkFailedGeneric') })); return; }
       fetchInbox();
-    } catch (e) { alert('❌ ' + e.message); }
+    } catch (e) { alert(t('inbox:actionErrors.unlinkFailed', { message: e.message })); }
   };
 
   // Distinct from a plain unlink -- also tells the matching-criteria system
   // the reason behind this link was wrong, so "معايير ربط الإيميلات" can
   // show which tiers actually produce bad matches.
   const handleRejectMatch = async (id) => {
-    if (!confirm('هذا الربط غير صحيح -- فك الارتباط وتسجيل الملاحظة؟')) return;
+    if (!confirm(t('inbox:confirm.rejectMatch'))) return;
     try {
       const r = await fetch(`${BASE}/inbox/${id}/reject-match`, { method: 'PUT', headers: hdrs() });
-      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر تسجيل الملاحظة')); return; }
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert(t('inbox:actionErrors.rejectFailed', { message: d.error || t('inbox:actionErrors.rejectFailedGeneric') })); return; }
       fetchInbox();
-    } catch (e) { alert('❌ ' + e.message); }
+    } catch (e) { alert(t('inbox:actionErrors.rejectFailed', { message: e.message })); }
   };
 
   const handleReview = async (id) => {
@@ -272,8 +274,8 @@ export default function InboxPage() {
       const r = await fetch(`${BASE}/inbox/${id}/review`, { method: 'PUT', headers: hdrs() });
       const d = await r.json().catch(() => ({}));
       if (r.ok) setMessages(prev => prev.map(m => m.id === id ? { ...m, reviewed_by: d.reviewed_by, reviewed_by_name: d.reviewed_by_name, reviewed_at: d.reviewed_at } : m));
-      else alert('❌ فشل تسجيل الفحص: ' + (d.error || 'خطأ غير معروف'));
-    } catch (e) { alert('❌ فشل تسجيل الفحص: ' + e.message); }
+      else alert(t('inbox:actionErrors.reviewFailed', { message: d.error || t('inbox:actionErrors.reviewFailedGeneric') }));
+    } catch (e) { alert(t('inbox:actionErrors.reviewFailed', { message: e.message })); }
   };
 
   // Expanding a message previously called nothing at all -- it stayed
@@ -302,8 +304,8 @@ export default function InboxPage() {
       const r = await fetch(`${BASE}/communications/${msgId}/attachments/${index}/download`, { headers: hdrs() });
       const d = await r.json().catch(() => ({}));
       if (d.url) window.open(d.url, '_blank', 'noopener,noreferrer');
-      else alert('تعذر تحميل المرفق');
-    } catch { alert('تعذر تحميل المرفق'); }
+      else alert(t('inbox:message.downloadFailed'));
+    } catch { alert(t('inbox:message.downloadFailed')); }
   };
 
   // Sending a fresh, case-unrelated email previously had nowhere to go --
@@ -321,47 +323,47 @@ export default function InboxPage() {
         body: fd,
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok || d.success === false) { setComposeError(d.error || 'فشل الإرسال'); setComposing(false); return; }
+      if (!r.ok || d.success === false) { setComposeError(d.error || t('inbox:composer.sendFailed')); setComposing(false); return; }
       closeComposer();
-      setSendSuccess('تم إرسال الرسالة بنجاح ✓');
+      setSendSuccess(t('inbox:composer.sendSuccess'));
       setTimeout(() => setSendSuccess(''), 4000);
       fetchInbox();
-    } catch (e) { setComposeError('خطأ: ' + (e.message || '')); }
+    } catch (e) { setComposeError(t('inbox:composer.sendError', { message: e.message || '' })); }
     setComposing(false);
   };
 
   const handleArchive = async (id) => {
     try {
       const r = await fetch(`${BASE}/inbox/${id}/archive`, { method: 'PUT', headers: hdrs() });
-      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ فشلت الأرشفة: ' + (d.error || 'خطأ غير معروف')); return; }
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert(t('inbox:actionErrors.archiveFailed', { message: d.error || t('inbox:actionErrors.reviewFailedGeneric') })); return; }
       fetchInbox();
-    } catch (e) { alert('❌ فشلت الأرشفة: ' + e.message); }
+    } catch (e) { alert(t('inbox:actionErrors.archiveFailed', { message: e.message })); }
   };
 
   const handleUnarchive = async (id) => {
     try {
       const r = await fetch(`${BASE}/inbox/${id}/unarchive`, { method: 'PUT', headers: hdrs() });
-      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ فشل إلغاء الأرشفة: ' + (d.error || 'خطأ غير معروف')); return; }
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert(t('inbox:actionErrors.unarchiveFailed', { message: d.error || t('inbox:actionErrors.reviewFailedGeneric') })); return; }
       fetchInbox();
-    } catch (e) { alert('❌ فشل إلغاء الأرشفة: ' + e.message); }
+    } catch (e) { alert(t('inbox:actionErrors.unarchiveFailed', { message: e.message })); }
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('حذف هذه الرسالة نهائيًا؟')) return;
+    if (!confirm(t('inbox:confirm.delete'))) return;
     try {
       const r = await fetch(`${BASE}/communications/${id}`, { method: 'DELETE', headers: hdrs() });
-      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ فشل الحذف: ' + (d.error || 'خطأ غير معروف')); return; }
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert(t('inbox:actionErrors.deleteFailed', { message: d.error || t('inbox:actionErrors.reviewFailedGeneric') })); return; }
       fetchInbox();
       fetchUnread();
-    } catch (e) { alert('❌ فشل الحذف: ' + e.message); }
+    } catch (e) { alert(t('inbox:actionErrors.deleteFailed', { message: e.message })); }
   };
 
   const statusCounts = [
-    { key: 'all', label: `الكل (${allCount})`, color: 'var(--ds-text-primary)' },
-    { key: 'unread', label: `غير مقروء (${unread})`, color: '#3b82f6' },
-    { key: 'unlinked', label: 'غير مرتبط', color: '#eab308' },
-    { key: 'linked', label: 'مرتبط', color: '#22c55e' },
-    { key: 'archived', label: 'الأرشيف', color: '#8b5cf6' },
+    { key: 'all', label: t('inbox:status.all', { count: allCount }), color: 'var(--ds-text-primary)' },
+    { key: 'unread', label: t('inbox:status.unread', { count: unread }), color: '#3b82f6' },
+    { key: 'unlinked', label: t('inbox:status.unlinked'), color: '#eab308' },
+    { key: 'linked', label: t('inbox:status.linked'), color: '#22c55e' },
+    { key: 'archived', label: t('inbox:status.archived'), color: '#8b5cf6' },
   ];
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -381,19 +383,19 @@ export default function InboxPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Inbox className="w-5 h-5" style={{ color: 'var(--ds-accent)' }} />
-          <h1 className="text-lg font-semibold" style={{ color: 'var(--ds-text-primary)' }}>صندوق البريد</h1>
+          <h1 className="text-lg font-semibold" style={{ color: 'var(--ds-text-primary)' }}>{t('inbox:title')}</h1>
         </div>
         <div className="flex items-center gap-2">
           {canManageCriteria && (
             <AppButton size="sm" variant="secondary" icon={<Filter className="w-3.5 h-3.5" />} onClick={() => setShowCriteriaPanel(true)}>
-              معايير ربط الإيميلات
+              {t('inbox:criteriaButton')}
             </AppButton>
           )}
           <AppButton size="sm" variant="secondary" icon={<Send className="w-3.5 h-3.5" />} onClick={() => { setShowComposer(true); setComposeError(''); }}>
-            رسالة جديدة
+            {t('inbox:newMessage')}
           </AppButton>
           <AppButton size="sm" icon={polling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} onClick={handlePoll} disabled={polling}>
-            {polling ? 'جاري الجلب...' : 'جلب الإيميلات'}
+            {polling ? t('inbox:fetching') : t('inbox:fetchEmails')}
           </AppButton>
         </div>
       </div>
@@ -406,22 +408,22 @@ export default function InboxPage() {
           <div className="w-full max-w-lg rounded-2xl p-5 max-h-[85vh] overflow-y-auto"
             style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--ds-text-primary)' }}>رسالة جديدة</h3>
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--ds-text-primary)' }}>{t('inbox:composer.heading')}</h3>
               <button onClick={closeComposer} style={{ color: 'var(--ds-text-muted)' }}><X className="w-4 h-4" /></button>
             </div>
             <div className="space-y-2">
               <select value={composeForm.account_id} onChange={e => setComposeForm({ ...composeForm, account_id: e.target.value })}
                 className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
-                <option value="">اختر الحساب المرسل منه</option>
+                <option value="">{t('inbox:composer.selectAccount')}</option>
                 {accounts.filter(a => a.is_active).map(a => <option key={a.id} value={a.id}>{a.email} ({a.name})</option>)}
               </select>
-              <input value={composeForm.to} onChange={e => setComposeForm({ ...composeForm, to: e.target.value })} placeholder="إلى..."
+              <input value={composeForm.to} onChange={e => setComposeForm({ ...composeForm, to: e.target.value })} placeholder={t('inbox:composer.to')}
                 className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-              <input value={composeForm.cc} onChange={e => setComposeForm({ ...composeForm, cc: e.target.value })} placeholder="CC (اختياري)"
+              <input value={composeForm.cc} onChange={e => setComposeForm({ ...composeForm, cc: e.target.value })} placeholder={t('inbox:composer.cc')}
                 className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-              <input value={composeForm.subject} onChange={e => setComposeForm({ ...composeForm, subject: e.target.value })} placeholder="الموضوع"
+              <input value={composeForm.subject} onChange={e => setComposeForm({ ...composeForm, subject: e.target.value })} placeholder={t('inbox:composer.subject')}
                 className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-              <textarea value={composeForm.body} onChange={e => setComposeForm({ ...composeForm, body: e.target.value })} placeholder="نص الرسالة..." rows={6}
+              <textarea value={composeForm.body} onChange={e => setComposeForm({ ...composeForm, body: e.target.value })} placeholder={t('inbox:composer.body')} rows={6}
                 className="w-full px-2 py-1.5 rounded-lg text-xs resize-none" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
 
               {composeFiles.length > 0 && (
@@ -436,7 +438,7 @@ export default function InboxPage() {
               )}
               <div className="flex items-center justify-between">
                 <label className="flex items-center gap-1 text-[11px] cursor-pointer" style={{ color: 'var(--ds-accent)' }}>
-                  <Paperclip className="w-3.5 h-3.5" />مرفقات
+                  <Paperclip className="w-3.5 h-3.5" />{t('inbox:composer.attachments')}
                   <input type="file" multiple hidden onChange={e => {
                     setComposeFiles([...composeFiles, ...Array.from(e.target.files || [])]);
                     // Reset immediately (append pattern, never fully empties
@@ -451,9 +453,9 @@ export default function InboxPage() {
 
               {composeError && <div className="text-[11px] p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>{composeError}</div>}
               <div className="flex justify-end gap-2 pt-1">
-                <AppButton size="sm" variant="secondary" onClick={closeComposer} disabled={composing}>إلغاء</AppButton>
+                <AppButton size="sm" variant="secondary" onClick={closeComposer} disabled={composing}>{t('inbox:composer.cancel')}</AppButton>
                 <AppButton size="sm" onClick={sendCompose} disabled={composing || !composeForm.account_id || !composeForm.to || !composeForm.subject}>
-                  {composing ? 'جارٍ الإرسال...' : 'إرسال'}
+                  {composing ? t('inbox:composer.sending') : t('inbox:composer.send')}
                 </AppButton>
               </div>
             </div>
@@ -476,9 +478,9 @@ export default function InboxPage() {
       {/* Filters -- staged, only applied on the button below */}
       <div className="flex gap-2 flex-wrap items-center p-2.5 rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
         {[
-          { key: 'all', label: 'كل الاتجاهات' },
-          { key: 'inbound', label: 'وارد' },
-          { key: 'outbound', label: 'صادر' },
+          { key: 'all', label: t('inbox:filters.direction.all') },
+          { key: 'inbound', label: t('inbox:filters.direction.inbound') },
+          { key: 'outbound', label: t('inbox:filters.direction.outbound') },
         ].map(d => (
           <button key={d.key} onClick={() => setPending(p => ({ ...p, direction: d.key }))}
             className="px-2.5 py-1 text-[11px] rounded-lg ds-transition-colors"
@@ -490,30 +492,30 @@ export default function InboxPage() {
           <select value={pending.accountId} onChange={e => setPending(p => ({ ...p, accountId: e.target.value }))}
             className="text-[11px] px-2 py-1 rounded-lg"
             style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
-            <option value="all">كل الإيميلات المرتبطة</option>
+            <option value="all">{t('inbox:filters.allAccounts')}</option>
             {accounts.map(a => <option key={a.id} value={a.id}>{a.name || a.email}</option>)}
           </select>
         )}
         <div className="w-px h-5 mx-0.5" style={{ background: 'var(--ds-border)' }} />
         <div className="flex items-center gap-1.5 text-[11px] shrink-0" style={{ color: 'var(--ds-text-muted)' }}>
-          <span>من</span>
-          <CalendarPopup value={pending.dateFrom} onChange={d => setPending(p => ({ ...p, dateFrom: d }))} placeholder="اختر تاريخ" />
-          <span>إلى</span>
-          <CalendarPopup value={pending.dateTo} onChange={d => setPending(p => ({ ...p, dateTo: d }))} placeholder="اختر تاريخ" />
+          <span>{t('inbox:filters.from')}</span>
+          <CalendarPopup value={pending.dateFrom} onChange={d => setPending(p => ({ ...p, dateFrom: d }))} placeholder={t('inbox:filters.datePlaceholder')} />
+          <span>{t('inbox:filters.to')}</span>
+          <CalendarPopup value={pending.dateTo} onChange={d => setPending(p => ({ ...p, dateTo: d }))} placeholder={t('inbox:filters.datePlaceholder')} />
         </div>
         <div className="relative flex-1 min-w-[160px]">
           <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--ds-text-muted)' }} />
           <input value={pending.search} onChange={e => setPending(p => ({ ...p, search: e.target.value }))}
             onKeyDown={e => { if (e.key === 'Enter') applyFilters(); }}
-            placeholder="بحث بالموضوع، المرسل، أو رقم الإيميل..."
+            placeholder={t('inbox:filters.searchPlaceholder')}
             className="w-full text-xs p-2 pl-8 rounded-lg ds-transition-colors"
             style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
         </div>
         <AppButton size="sm" icon={<Filter className="w-3.5 h-3.5" />} onClick={applyFilters}>
-          تطبيق الفلترة
+          {t('inbox:filters.apply')}
         </AppButton>
         {(applied.direction !== 'all' || applied.accountId !== 'all' || applied.dateFrom || applied.dateTo || applied.search) && (
-          <button onClick={clearFilters} className="text-[11px] underline" style={{ color: 'var(--ds-accent)' }}>مسح الكل</button>
+          <button onClick={clearFilters} className="text-[11px] underline" style={{ color: 'var(--ds-accent)' }}>{t('inbox:filters.clearAll')}</button>
         )}
       </div>
 
@@ -522,16 +524,16 @@ export default function InboxPage() {
           className="w-full text-right flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
           style={{ background: 'rgba(139,92,246,0.1)', color: '#8b5cf6', border: '1px solid rgba(139,92,246,0.25)' }}>
           <Archive className="w-3.5 h-3.5" />
-          يوجد أيضًا {archivedMatches} نتيجة مطابقة داخل الأرشيف — اضغط للعرض
+          {t('inbox:archivedMatchesHint', { count: archivedMatches })}
         </button>
       )}
 
       {loading ? (
         <div className="flex items-center justify-center p-8"><Loader2 className="w-5 h-5 animate-spin" style={{ color: 'var(--ds-accent)' }} /></div>
       ) : fetchError ? (
-        <AppEmptyState icon={Mail} title="تعذر تحميل الرسائل" description={fetchError} />
+        <AppEmptyState icon={Mail} title={t('inbox:errors.loadFailed')} description={fetchError} />
       ) : messages.length === 0 ? (
-        <AppEmptyState icon={Mail} title="لا توجد رسائل" description="اضغط على 'جلب الإيميلات' لاستقبال الرسائل" />
+        <AppEmptyState icon={Mail} title={t('inbox:empty.title')} description={t('inbox:empty.description')} />
       ) : (
         <div className="space-y-1">
           {messages.map(msg => {
@@ -545,23 +547,23 @@ export default function InboxPage() {
                 <Mail className="w-4 h-4 shrink-0 mt-0.5" style={{ color: msg.is_read === false ? '#3b82f6' : 'var(--ds-text-muted)' }} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                    <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }} title="رقم الإيميل">#{msg.id}</span>
-                    <span className="text-xs font-semibold" style={{ color: 'var(--ds-text-primary)' }}>{msg.sender || 'مجهول'}</span>
-                    <AppBadge variant={msg.direction === 'inbound' ? 'info' : 'success'} size="xs">{msg.direction === 'inbound' ? 'وارد' : 'صادر'}</AppBadge>
-                    {msg.case_id && <AppBadge variant="success" size="xs">مرتبط (#{msg.case_id})</AppBadge>}
-                    {msg.is_archived && <AppBadge variant="neutral" size="xs">مؤرشف</AppBadge>}
+                    <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }} title={t('inbox:message.idTooltip')}>#{msg.id}</span>
+                    <span className="text-xs font-semibold" style={{ color: 'var(--ds-text-primary)' }}>{msg.sender || t('inbox:message.unknownSender')}</span>
+                    <AppBadge variant={msg.direction === 'inbound' ? 'info' : 'success'} size="xs">{msg.direction === 'inbound' ? t('inbox:message.inbound') : t('inbox:message.outbound')}</AppBadge>
+                    {msg.case_id && <AppBadge variant="success" size="xs">{t('inbox:message.linked', { id: msg.case_id })}</AppBadge>}
+                    {msg.is_archived && <AppBadge variant="neutral" size="xs">{t('inbox:message.archived')}</AppBadge>}
                     {!msg.case_id && possibleMatches.length > 0 && (
-                      <AppBadge variant="warning" size="xs"><AlertTriangle className="w-2.5 h-2.5 inline ml-0.5" />قد تشابه {possibleMatches.length} قضية</AppBadge>
+                      <AppBadge variant="warning" size="xs"><AlertTriangle className="w-2.5 h-2.5 inline ml-0.5" />{t('inbox:message.possibleMatch', { count: possibleMatches.length })}</AppBadge>
                     )}
                   </div>
                   <div className="text-xs font-medium mb-0.5" style={{ color: 'var(--ds-text-primary)' }}>{msg.subject}</div>
                   <div className="text-[10px] flex items-center gap-2 flex-wrap" style={{ color: 'var(--ds-text-muted)' }}>
-                    <span>إلى: {msg.recipient}</span>
-                    <span>{msg.created_at ? `${new Date(msg.created_at).toLocaleDateString('ar-SA')} ${new Date(msg.created_at).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+                    <span>{t('inbox:message.to', { recipient: msg.recipient })}</span>
+                    <span>{msg.created_at ? `${new Date(msg.created_at).toLocaleDateString(i18n.language === 'en' ? 'en-GB' : 'ar-SA')} ${new Date(msg.created_at).toLocaleTimeString(i18n.language === 'en' ? 'en-GB' : 'ar-SA', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
                     {attachments.length > 0 && <span>📎 {attachments.length}</span>}
                     {msg.reviewed_by_name && (
                       <span className="flex items-center gap-0.5" style={{ color: '#22c55e' }}>
-                        <CheckCircle2 className="w-3 h-3" />تم الفحص: {msg.reviewed_by_name}
+                        <CheckCircle2 className="w-3 h-3" />{t('inbox:message.reviewedBy', { name: msg.reviewed_by_name })}
                       </span>
                     )}
                   </div>
@@ -569,38 +571,38 @@ export default function InboxPage() {
                 <div className="flex gap-1 shrink-0">
                   {!msg.reviewed_by_name && (
                     <button onClick={e => { e.stopPropagation(); handleReview(msg.id); }}
-                      className="p-1 rounded" title="تم الفحص" style={{ color: 'var(--ds-text-muted)' }}>
+                      className="p-1 rounded" title={t('inbox:message.markReviewed')} style={{ color: 'var(--ds-text-muted)' }}>
                       <CheckCircle2 className="w-3.5 h-3.5" />
                     </button>
                   )}
                   <button onClick={e => { e.stopPropagation(); window.open(`/inbox/message/${msg.id}`, '_blank', 'noopener,noreferrer'); }}
-                    className="p-1 rounded" title="فتح في تاب جديد (للمراجعة/النسخ/الرد)" style={{ color: 'var(--ds-text-muted)' }}>
+                    className="p-1 rounded" title={t('inbox:message.openInNewTab')} style={{ color: 'var(--ds-text-muted)' }}>
                     <ExternalLink className="w-3.5 h-3.5" />
                   </button>
                   {!msg.case_id ? (
-                    <button onClick={e => { e.stopPropagation(); const cid = prompt('رقم التحقيق:'); if(cid) handleLink(msg.id, parseInt(cid), null); }}
-                      className="p-1 rounded" title="ربط بتحقيق" style={{ color: 'var(--ds-text-muted)' }}>
+                    <button onClick={e => { e.stopPropagation(); const cid = prompt(t('inbox:message.linkPrompt')); if(cid) handleLink(msg.id, parseInt(cid), null); }}
+                      className="p-1 rounded" title={t('inbox:message.linkToCase')} style={{ color: 'var(--ds-text-muted)' }}>
                       <Link2 className="w-3.5 h-3.5" />
                     </button>
                   ) : (
                     <button onClick={e => { e.stopPropagation(); handleUnlink(msg.id); }}
-                      className="p-1 rounded" title="فك الارتباط" style={{ color: 'var(--ds-text-muted)' }}>
+                      className="p-1 rounded" title={t('inbox:message.unlink')} style={{ color: 'var(--ds-text-muted)' }}>
                       <Unlink className="w-3.5 h-3.5" />
                     </button>
                   )}
                   {msg.is_archived ? (
                     <button onClick={e => { e.stopPropagation(); handleUnarchive(msg.id); }}
-                      className="p-1 rounded" title="إلغاء الأرشفة" style={{ color: 'var(--ds-text-muted)' }}>
+                      className="p-1 rounded" title={t('inbox:message.unarchive')} style={{ color: 'var(--ds-text-muted)' }}>
                       <ArchiveRestore className="w-3.5 h-3.5" />
                     </button>
                   ) : (
                     <button onClick={e => { e.stopPropagation(); handleArchive(msg.id); }}
-                      className="p-1 rounded" title="أرشفة" style={{ color: 'var(--ds-text-muted)' }}>
+                      className="p-1 rounded" title={t('inbox:message.archive')} style={{ color: 'var(--ds-text-muted)' }}>
                       <Archive className="w-3.5 h-3.5" />
                     </button>
                   )}
                   <button onClick={e => { e.stopPropagation(); handleDelete(msg.id); }}
-                    className="p-1 rounded" title="حذف" style={{ color: '#ef4444' }}>
+                    className="p-1 rounded" title={t('inbox:message.delete')} style={{ color: '#ef4444' }}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -611,10 +613,10 @@ export default function InboxPage() {
                   indistinguishable from a correct one. */}
               {msg.case_id && msg.match_reason && (
                 <div className="mt-2 p-2 rounded text-[11px] flex items-center justify-between gap-2" style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }} onClick={e => e.stopPropagation()}>
-                  <span style={{ color: 'var(--ds-text-secondary)' }}>بسبب: {msg.match_reason.label_ar}</span>
+                  <span style={{ color: 'var(--ds-text-secondary)' }}>{t('inbox:message.matchReasonPrefix', { reason: msg.match_reason.label_ar })}</span>
                   {msg.match_reason.tier_key !== 'manual' && (
                     <button onClick={() => handleRejectMatch(msg.id)} className="px-2 py-0.5 rounded shrink-0 text-[10px]" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
-                      ❌ هذا الربط غير صحيح
+                      {t('inbox:message.rejectMatch')}
                     </button>
                   )}
                 </div>
@@ -625,16 +627,16 @@ export default function InboxPage() {
                   user picks instead of risking a silent wrong link. */}
               {!msg.case_id && possibleMatches.length > 0 && (
                 <div className="mt-2 p-2 rounded text-[11px]" style={{ background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.25)' }} onClick={e => e.stopPropagation()}>
-                  <p className="font-medium mb-1" style={{ color: '#eab308' }}>قد تنتمي هذه الرسالة لأكثر من قضية:</p>
+                  <p className="font-medium mb-1" style={{ color: '#eab308' }}>{t('inbox:message.ambiguousHint')}</p>
                   {possibleMatches.map((pm, i) => (
                     <div key={i} className="flex items-center justify-between gap-2 py-0.5">
                       <span style={{ color: 'var(--ds-text-secondary)' }}>
-                        {pm.source === 'ai' && <span style={{ color: 'var(--ds-accent)' }}>🤖 اقتراح من المساعد الذكي — </span>}
-                        قضية #{pm.caseId} — {(pm.reasons || []).join('، ')}
+                        {pm.source === 'ai' && <span style={{ color: 'var(--ds-accent)' }}>{t('inbox:message.aiSuggestion')}</span>}
+                        {t('inbox:message.caseRef', { id: pm.caseId, reasons: (pm.reasons || []).join('، ') })}
                       </span>
                       <button onClick={() => handleLink(msg.id, pm.caseId, null)}
                         className="px-2 py-0.5 rounded shrink-0" style={{ background: 'var(--ds-accent)', color: 'white' }}>
-                        ربط بهذه
+                        {t('inbox:message.linkThis')}
                       </button>
                     </div>
                   ))}
@@ -652,11 +654,11 @@ export default function InboxPage() {
                           <Paperclip className="w-3 h-3" />
                           {att.filename}{att.size != null && ` (${formatSize(att.size)})`}
                           {(att.driveFileId || att.storageKey) ? (
-                            <button onClick={() => downloadAttachment(msg.id, i)} title="تحميل" style={{ color: 'var(--ds-accent)' }}>
+                            <button onClick={() => downloadAttachment(msg.id, i)} title={t('inbox:message.download')} style={{ color: 'var(--ds-accent)' }}>
                               <Download className="w-3.5 h-3.5" />
                             </button>
                           ) : (
-                            <span style={{ color: 'var(--ds-text-muted)' }}>(غير متاح للتحميل)</span>
+                            <span style={{ color: 'var(--ds-text-muted)' }}>{t('inbox:message.downloadUnavailable')}</span>
                           )}
                         </span>
                       ))}
@@ -676,20 +678,20 @@ export default function InboxPage() {
             className="p-1.5 rounded-lg disabled:opacity-40" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-secondary)' }}>
             <ChevronRight className="w-4 h-4" />
           </button>
-          <span className="text-xs" style={{ color: 'var(--ds-text-muted)' }}>صفحة {page + 1} من {totalPages} ({total} رسالة)</span>
+          <span className="text-xs" style={{ color: 'var(--ds-text-muted)' }}>{t('inbox:pagination.pageOf', { page: page + 1, total: totalPages, count: total })}</span>
           <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
             className="p-1.5 rounded-lg disabled:opacity-40" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-secondary)' }}>
             <ChevronLeft className="w-4 h-4" />
           </button>
           <div className="flex items-center gap-1.5 mr-1">
-            <span className="text-[11px]" style={{ color: 'var(--ds-text-muted)' }}>الذهاب لصفحة:</span>
+            <span className="text-[11px]" style={{ color: 'var(--ds-text-muted)' }}>{t('inbox:pagination.goToPage')}</span>
             <input value={pageInput} onChange={e => setPageInput(e.target.value.replace(/[^0-9]/g, ''))}
               onKeyDown={e => { if (e.key === 'Enter') goToPage(); }}
               className="w-12 px-1.5 py-1 rounded-lg text-xs text-center"
               style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
             <button onClick={goToPage}
               className="px-2.5 py-1 rounded-lg text-xs font-medium" style={{ background: 'var(--ds-accent)', color: 'white' }}>
-              انتقال
+              {t('inbox:pagination.go')}
             </button>
           </div>
         </div>
@@ -704,6 +706,7 @@ export default function InboxPage() {
 // keyword rules, since built-in tiers can only be toggled/relabeled (they
 // map to real code paths) while custom rules are fully admin-managed.
 function MatchingCriteriaPanel({ open, onClose }) {
+  const { t } = useTranslation('inbox');
   const [criteria, setCriteria] = useState([]);
   const [keywords, setKeywords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -717,7 +720,7 @@ function MatchingCriteriaPanel({ open, onClose }) {
     setLoading(true);
     Promise.all([api.get('/inbox/matching-criteria'), api.get('/inbox/matching-keywords')])
       .then(([c, k]) => { setCriteria(c.data || []); setKeywords(k.data || []); })
-      .catch(e => alert('❌ ' + e.message))
+      .catch(e => alert(t('inbox:criteriaPanel.loadFailed', { message: e.message })))
       .finally(() => setLoading(false));
   };
   useEffect(() => { if (open) fetchAll(); }, [open]);
@@ -730,7 +733,7 @@ function MatchingCriteriaPanel({ open, onClose }) {
     if (pendingTiers.has(item.tier_key)) return;
     setPendingTiers(prev => new Set(prev).add(item.tier_key));
     try { await api.put(`/inbox/matching-criteria/${item.tier_key}`, { is_active: !item.is_active }); fetchAll(); }
-    catch (e) { alert('❌ ' + e.message); }
+    catch (e) { alert(t('inbox:criteriaPanel.loadFailed', { message: e.message })); }
     finally { setPendingTiers(prev => { const next = new Set(prev); next.delete(item.tier_key); return next; }); }
   };
 
@@ -740,29 +743,33 @@ function MatchingCriteriaPanel({ open, onClose }) {
     try {
       await api.post('/inbox/matching-keywords', { keyword_phrase: newKeyword.trim(), case_id: parseInt(newCaseId) });
       setNewKeyword(''); setNewCaseId(''); fetchAll();
-    } catch (e) { alert('❌ ' + e.message); }
+    } catch (e) { alert(t('inbox:criteriaPanel.loadFailed', { message: e.message })); }
     finally { setAdding(false); }
   };
 
   const deleteKeyword = async (id) => {
-    if (pendingDeletes.has(id) || !confirm('حذف هذه الكلمة المفتاحية؟')) return;
+    if (pendingDeletes.has(id) || !confirm(t('inbox:criteriaPanel.deleteConfirm'))) return;
     setPendingDeletes(prev => new Set(prev).add(id));
     try { await api.delete(`/inbox/matching-keywords/${id}`); fetchAll(); }
-    catch (e) { alert('❌ ' + e.message); }
+    catch (e) { alert(t('inbox:criteriaPanel.loadFailed', { message: e.message })); }
     finally { setPendingDeletes(prev => { const next = new Set(prev); next.delete(id); return next; }); }
   };
 
   return (
-    <AppDialog open={open} onClose={onClose} title="معايير ربط الإيميلات" width="640px">
+    <AppDialog open={open} onClose={onClose} title={t('inbox:criteriaPanel.title')} width="640px">
       {loading ? (
         <div className="flex items-center justify-center p-8"><Loader2 className="w-5 h-5 animate-spin" style={{ color: 'var(--ds-accent)' }} /></div>
       ) : (
         <div className="space-y-5">
           <div>
             <p className="text-xs mb-2" style={{ color: 'var(--ds-text-muted)' }}>
-              كل معيار هو أسلوب يستخدمه النظام لربط إيميل وارد بقضية تلقائيًا. تعطيل معيار يوقف استخدامه في أي ربط جديد فورًا. الأرقام أسفل كل معيار توضح كم مرة نجح (✅) وكم مرة رفضه أحد الموظفين لاحقًا (❌) عبر زر "هذا الربط غير صحيح".
+              {t('inbox:criteriaPanel.explanation')}
             </p>
             <div className="space-y-1.5 max-h-72 overflow-y-auto">
+              {/* c.label_ar/c.description are admin-authored backend content
+                  (email_matching_criteria table) -- not UI chrome, so they
+                  stay whatever language the admin wrote them in, same as
+                  every other backend-sourced string in this phase. */}
               {criteria.map(c => (
                 <div key={c.tier_key} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)', opacity: c.is_active ? 1 : 0.5 }}>
                   <div className="min-w-0">
@@ -772,7 +779,7 @@ function MatchingCriteriaPanel({ open, onClose }) {
                     </div>
                   </div>
                   <button onClick={() => toggleCriterion(c)} disabled={pendingTiers.has(c.tier_key)} className="text-[11px] px-2 py-1 rounded-lg shrink-0 disabled:opacity-50" style={{ background: 'var(--ds-bg-secondary)', color: c.is_active ? '#22c55e' : 'var(--ds-text-muted)' }}>
-                    {c.is_active ? 'مفعّل' : 'معطّل'}
+                    {c.is_active ? t('inbox:criteriaPanel.active') : t('inbox:criteriaPanel.inactive')}
                   </button>
                 </div>
               ))}
@@ -780,26 +787,26 @@ function MatchingCriteriaPanel({ open, onClose }) {
           </div>
 
           <div>
-            <p className="text-xs mb-2 font-medium" style={{ color: 'var(--ds-text-primary)' }}>كلمات مفتاحية مخصصة</p>
-            <p className="text-[11px] mb-2" style={{ color: 'var(--ds-text-muted)' }}>أي إيميل وارد يحتوي هذه الكلمة/العبارة يُربط تلقائيًا بالقضية المحددة.</p>
+            <p className="text-xs mb-2 font-medium" style={{ color: 'var(--ds-text-primary)' }}>{t('inbox:criteriaPanel.customKeywords')}</p>
+            <p className="text-[11px] mb-2" style={{ color: 'var(--ds-text-muted)' }}>{t('inbox:criteriaPanel.customKeywordsHint')}</p>
             <div className="flex gap-2 mb-2">
-              <input value={newKeyword} onChange={e => setNewKeyword(e.target.value)} placeholder="كلمة أو عبارة"
+              <input value={newKeyword} onChange={e => setNewKeyword(e.target.value)} placeholder={t('inbox:criteriaPanel.keywordPlaceholder')}
                 className="flex-1 px-2.5 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-              <input value={newCaseId} onChange={e => setNewCaseId(e.target.value)} placeholder="رقم القضية" type="number"
+              <input value={newCaseId} onChange={e => setNewCaseId(e.target.value)} placeholder={t('inbox:criteriaPanel.caseIdPlaceholder')} type="number"
                 className="w-28 px-2.5 py-1.5 rounded-lg text-xs" style={{ background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
-              <AppButton size="sm" onClick={addKeyword} disabled={adding} loading={adding}>إضافة</AppButton>
+              <AppButton size="sm" onClick={addKeyword} disabled={adding} loading={adding}>{t('inbox:criteriaPanel.add')}</AppButton>
             </div>
             <div className="space-y-1.5 max-h-56 overflow-y-auto">
               {keywords.map(k => (
                 <div key={k.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: 'var(--ds-bg-tertiary)' }}>
-                  <span className="text-xs" style={{ color: 'var(--ds-text-primary)' }}>"{k.keyword_phrase}" ← قضية #{k.case_id}{k.case_title ? ` (${k.case_title})` : ''}</span>
+                  <span className="text-xs" style={{ color: 'var(--ds-text-primary)' }}>"{k.keyword_phrase}" ← {t('inbox:message.caseLabel', { id: k.case_id })}{k.case_title ? ` (${k.case_title})` : ''}</span>
                   <button onClick={() => deleteKeyword(k.id)} disabled={pendingDeletes.has(k.id)} className="p-1 rounded-lg shrink-0 disabled:opacity-50" style={{ color: 'var(--ds-text-muted)' }}
                     onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = 'var(--ds-text-muted)'}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ))}
-              {keywords.length === 0 && <p className="text-[11px] text-center py-2" style={{ color: 'var(--ds-text-muted)' }}>لا توجد كلمات مفتاحية مخصصة بعد</p>}
+              {keywords.length === 0 && <p className="text-[11px] text-center py-2" style={{ color: 'var(--ds-text-muted)' }}>{t('inbox:criteriaPanel.noKeywords')}</p>}
             </div>
           </div>
         </div>

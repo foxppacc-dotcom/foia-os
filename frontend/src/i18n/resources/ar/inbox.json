@@ -1,1 +1,100 @@
-{}
+{
+  "title": "صندوق البريد",
+  "criteriaButton": "معايير ربط الإيميلات",
+  "newMessage": "رسالة جديدة",
+  "fetchEmails": "جلب الإيميلات",
+  "fetching": "جاري الجلب...",
+  "composer": {
+    "heading": "رسالة جديدة",
+    "selectAccount": "اختر الحساب المرسل منه",
+    "to": "إلى...",
+    "cc": "CC (اختياري)",
+    "subject": "الموضوع",
+    "body": "نص الرسالة...",
+    "attachments": "مرفقات",
+    "cancel": "إلغاء",
+    "send": "إرسال",
+    "sending": "جارٍ الإرسال...",
+    "sendSuccess": "تم إرسال الرسالة بنجاح ✓",
+    "sendFailed": "فشل الإرسال",
+    "sendError": "خطأ: {{message}}"
+  },
+  "status": { "all": "الكل ({{count}})", "unread": "غير مقروء ({{count}})", "unlinked": "غير مرتبط", "linked": "مرتبط", "archived": "الأرشيف" },
+  "filters": {
+    "direction": { "all": "كل الاتجاهات", "inbound": "وارد", "outbound": "صادر" },
+    "allAccounts": "كل الإيميلات المرتبطة",
+    "from": "من", "to": "إلى", "datePlaceholder": "اختر تاريخ",
+    "searchPlaceholder": "بحث بالموضوع، المرسل، أو رقم الإيميل...",
+    "apply": "تطبيق الفلترة", "clearAll": "مسح الكل"
+  },
+  "archivedMatchesHint": "يوجد أيضًا {{count}} نتيجة مطابقة داخل الأرشيف — اضغط للعرض",
+  "errors": {
+    "loadFailed": "تعذر تحميل الرسائل",
+    "loadFailedGeneric": "فشل تحميل الرسائل",
+    "connectionError": "خطأ في الاتصال"
+  },
+  "empty": { "title": "لا توجد رسائل", "description": "اضغط على 'جلب الإيميلات' لاستقبال الرسائل" },
+  "message": {
+    "idTooltip": "رقم الإيميل",
+    "unknownSender": "مجهول",
+    "inbound": "وارد", "outbound": "صادر",
+    "linked": "مرتبط (#{{id}})",
+    "archived": "مؤرشف",
+    "possibleMatch": "قد تشابه {{count}} قضية",
+    "to": "إلى: {{recipient}}",
+    "reviewedBy": "تم الفحص: {{name}}",
+    "markReviewed": "تم الفحص",
+    "openInNewTab": "فتح في تاب جديد (للمراجعة/النسخ/الرد)",
+    "linkToCase": "ربط بتحقيق",
+    "linkPrompt": "رقم التحقيق:",
+    "unlink": "فك الارتباط",
+    "unarchive": "إلغاء الأرشفة",
+    "archive": "أرشفة",
+    "delete": "حذف",
+    "matchReasonPrefix": "بسبب: {{reason}}",
+    "rejectMatch": "❌ هذا الربط غير صحيح",
+    "ambiguousHint": "قد تنتمي هذه الرسالة لأكثر من قضية:",
+    "aiSuggestion": "🤖 اقتراح من المساعد الذكي — ",
+    "caseRef": "قضية #{{id}} — {{reasons}}",
+    "caseLabel": "قضية #{{id}}",
+    "linkThis": "ربط بهذه",
+    "download": "تحميل",
+    "downloadUnavailable": "(غير متاح للتحميل)",
+    "downloadFailed": "تعذر تحميل المرفق"
+  },
+  "confirm": {
+    "unlink": "فك ارتباط هذه الرسالة بالقضية؟",
+    "rejectMatch": "هذا الربط غير صحيح -- فك الارتباط وتسجيل الملاحظة؟",
+    "delete": "حذف هذه الرسالة نهائيًا؟"
+  },
+  "actionErrors": {
+    "linkFailed": "❌ {{message}}",
+    "linkFailedGeneric": "تعذر ربط الرسالة",
+    "unlinkFailed": "❌ {{message}}",
+    "unlinkFailedGeneric": "تعذر فك الارتباط",
+    "rejectFailed": "❌ {{message}}",
+    "rejectFailedGeneric": "تعذر تسجيل الملاحظة",
+    "reviewFailed": "❌ فشل تسجيل الفحص: {{message}}",
+    "reviewFailedGeneric": "خطأ غير معروف",
+    "archiveFailed": "❌ فشلت الأرشفة: {{message}}",
+    "unarchiveFailed": "❌ فشل إلغاء الأرشفة: {{message}}",
+    "deleteFailed": "❌ فشل الحذف: {{message}}"
+  },
+  "pagination": {
+    "pageOf": "صفحة {{page}} من {{total}} ({{count}} رسالة)",
+    "goToPage": "الذهاب لصفحة:", "go": "انتقال"
+  },
+  "criteriaPanel": {
+    "title": "معايير ربط الإيميلات",
+    "explanation": "كل معيار هو أسلوب يستخدمه النظام لربط إيميل وارد بقضية تلقائيًا. تعطيل معيار يوقف استخدامه في أي ربط جديد فورًا. الأرقام أسفل كل معيار توضح كم مرة نجح (✅) وكم مرة رفضه أحد الموظفين لاحقًا (❌) عبر زر \"هذا الربط غير صحيح\".",
+    "active": "مفعّل", "inactive": "معطّل",
+    "customKeywords": "كلمات مفتاحية مخصصة",
+    "customKeywordsHint": "أي إيميل وارد يحتوي هذه الكلمة/العبارة يُربط تلقائيًا بالقضية المحددة.",
+    "keywordPlaceholder": "كلمة أو عبارة",
+    "caseIdPlaceholder": "رقم القضية",
+    "add": "إضافة",
+    "deleteConfirm": "حذف هذه الكلمة المفتاحية؟",
+    "noKeywords": "لا توجد كلمات مفتاحية مخصصة بعد",
+    "loadFailed": "❌ {{message}}"
+  }
+}

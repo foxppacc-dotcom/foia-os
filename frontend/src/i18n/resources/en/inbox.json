@@ -1,1 +1,100 @@
-{}
+{
+  "title": "Inbox",
+  "criteriaButton": "Matching Criteria",
+  "newMessage": "New Message",
+  "fetchEmails": "Fetch Emails",
+  "fetching": "Fetching...",
+  "composer": {
+    "heading": "New Message",
+    "selectAccount": "Select sending account",
+    "to": "To...",
+    "cc": "CC (optional)",
+    "subject": "Subject",
+    "body": "Message body...",
+    "attachments": "Attachments",
+    "cancel": "Cancel",
+    "send": "Send",
+    "sending": "Sending...",
+    "sendSuccess": "Message sent successfully ✓",
+    "sendFailed": "Failed to send",
+    "sendError": "Error: {{message}}"
+  },
+  "status": { "all": "All ({{count}})", "unread": "Unread ({{count}})", "unlinked": "Unlinked", "linked": "Linked", "archived": "Archive" },
+  "filters": {
+    "direction": { "all": "All directions", "inbound": "Inbound", "outbound": "Outbound" },
+    "allAccounts": "All linked accounts",
+    "from": "From", "to": "To", "datePlaceholder": "Pick date",
+    "searchPlaceholder": "Search by subject, sender, or email number...",
+    "apply": "Apply filters", "clearAll": "Clear all"
+  },
+  "archivedMatchesHint": "{{count}} matching result also found in archive — click to view",
+  "errors": {
+    "loadFailed": "Couldn't load messages",
+    "loadFailedGeneric": "Failed to load messages",
+    "connectionError": "Connection error"
+  },
+  "empty": { "title": "No messages", "description": "Click 'Fetch Emails' to receive messages" },
+  "message": {
+    "idTooltip": "Email number",
+    "unknownSender": "Unknown",
+    "inbound": "Inbound", "outbound": "Outbound",
+    "linked": "Linked (#{{id}})",
+    "archived": "Archived",
+    "possibleMatch": "May match {{count}} case(s)",
+    "to": "To: {{recipient}}",
+    "reviewedBy": "Reviewed: {{name}}",
+    "markReviewed": "Mark reviewed",
+    "openInNewTab": "Open in new tab (to review/copy/reply)",
+    "linkToCase": "Link to case",
+    "linkPrompt": "Case number:",
+    "unlink": "Unlink",
+    "unarchive": "Unarchive",
+    "archive": "Archive",
+    "delete": "Delete",
+    "matchReasonPrefix": "Reason: {{reason}}",
+    "rejectMatch": "❌ This link is wrong",
+    "ambiguousHint": "This message may belong to more than one case:",
+    "aiSuggestion": "🤖 AI assistant suggestion — ",
+    "caseRef": "Case #{{id}} — {{reasons}}",
+    "caseLabel": "Case #{{id}}",
+    "linkThis": "Link to this",
+    "download": "Download",
+    "downloadUnavailable": "(not available for download)",
+    "downloadFailed": "Couldn't download attachment"
+  },
+  "confirm": {
+    "unlink": "Unlink this message from the case?",
+    "rejectMatch": "This link is wrong -- unlink and record the note?",
+    "delete": "Permanently delete this message?"
+  },
+  "actionErrors": {
+    "linkFailed": "❌ {{message}}",
+    "linkFailedGeneric": "Couldn't link the message",
+    "unlinkFailed": "❌ {{message}}",
+    "unlinkFailedGeneric": "Couldn't unlink",
+    "rejectFailed": "❌ {{message}}",
+    "rejectFailedGeneric": "Couldn't record the note",
+    "reviewFailed": "❌ Failed to mark as reviewed: {{message}}",
+    "reviewFailedGeneric": "Unknown error",
+    "archiveFailed": "❌ Archiving failed: {{message}}",
+    "unarchiveFailed": "❌ Unarchiving failed: {{message}}",
+    "deleteFailed": "❌ Delete failed: {{message}}"
+  },
+  "pagination": {
+    "pageOf": "Page {{page}} of {{total}} ({{count}} messages)",
+    "goToPage": "Go to page:", "go": "Go"
+  },
+  "criteriaPanel": {
+    "title": "Email Matching Criteria",
+    "explanation": "Each criterion is a method the system uses to automatically link an inbound email to a case. Disabling a criterion stops it from being used in any new link immediately. The numbers under each criterion show how many times it succeeded (✅) and how many times a teammate later rejected it (❌) via the \"This link is wrong\" button.",
+    "active": "Active", "inactive": "Inactive",
+    "customKeywords": "Custom Keywords",
+    "customKeywordsHint": "Any inbound email containing this word/phrase is automatically linked to the specified case.",
+    "keywordPlaceholder": "Word or phrase",
+    "caseIdPlaceholder": "Case number",
+    "add": "Add",
+    "deleteConfirm": "Delete this keyword?",
+    "noKeywords": "No custom keywords yet",
+    "loadFailed": "❌ {{message}}"
+  }
+}
