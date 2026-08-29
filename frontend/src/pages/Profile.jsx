@@ -133,10 +133,11 @@ export default function Profile() {
           </div>
           <div className="grid grid-cols-2 gap-2 text-center shrink-0">
             {[
-              { v: kpi.tasks_completed || 0, l: 'مهام منجزة', c: 'var(--success)' },
+              { v: kpi.completed_tasks || 0, l: 'مهام منجزة', c: 'var(--success)' },
               { v: kpi.overdue_tasks || 0, l: 'متأخرة', c: 'var(--warning)' },
               { v: `${kpi.completion_rate || 0}%`, l: 'إنجاز', c: 'var(--info)' },
               { v: kpi.present_days || 0, l: 'حضور', c: '#8B5CF6' },
+              { v: `${kpi.active_hours_today || 0} س`, l: 'استخدام اليوم', c: '#8B5CF6' },
             ].map((s, i) => (
               <div key={i} className="px-3 py-2.5 rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                 <p className="text-lg font-bold" style={{ color: s.c }}>{s.v}</p>
@@ -165,9 +166,20 @@ export default function Profile() {
                     <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{c.title}</p>
                     {c.role && <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{c.role}</p>}
                   </div>
-                  <Badge variant={c.status === 'closed' ? 'neutral' : c.status === 'in_progress' ? 'warning' : 'info'}>
-                    {CASE_STATUS_LABEL[c.status] || c.status || '—'}
-                  </Badge>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Badge variant={c.status === 'closed' ? 'neutral' : c.status === 'in_progress' ? 'warning' : 'info'}>
+                      {CASE_STATUS_LABEL[c.status] || c.status || '—'}
+                    </Badge>
+                    {/* Whether this employee ever actually did anything on this
+                        case (a comment, an upload, a status change...) -- not
+                        just whether they're attached to it. This is the whole
+                        point of this profile being a real performance reference. */}
+                    {c.has_activity ? (
+                      <Badge variant="success">تم العمل عليها</Badge>
+                    ) : (
+                      <Badge variant="warning">معيّن — بدون نشاط</Badge>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -275,6 +287,10 @@ export default function Profile() {
               { label: 'أيام الحضور', value: kpi.present_days || 0, color: 'var(--success)' },
               { label: 'أيام الغياب', value: kpi.absent_days || 0, color: 'var(--danger)' },
               { label: 'المهام العاجلة', value: kpi.urgent_tasks || 0, color: 'var(--warning)' },
+              { label: 'قضايا تم العمل عليها', value: kpi.cases_worked_on ?? 0, color: 'var(--success)' },
+              { label: 'قضايا معيّنة بدون نشاط', value: kpi.cases_idle_assigned ?? 0, color: 'var(--warning)' },
+              { label: 'وقت الاستخدام اليوم', value: `${kpi.active_hours_today || 0} س`, color: '#8B5CF6' },
+              { label: 'متوسط الاستخدام اليومي (٣٠ يوم)', value: `${kpi.active_hours_30d_avg || 0} س`, color: '#8B5CF6' },
             ].map((k, i) => (
               <div key={i} className="p-4 rounded-xl border text-center" style={{ borderColor: 'var(--border)' }}>
                 <p className="text-2xl font-bold" style={{ color: k.color }}>{k.value}</p>

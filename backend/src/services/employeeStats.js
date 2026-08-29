@@ -1,5 +1,68 @@
 const DONE_STATUSES = ['closed', 'production_done'];
 
+// Extracted out of getEmployeeCaseStats so /profile/:id's own separate
+// (and previously duplicated) case_assignees/created_by union can call
+// this instead of re-deriving it -- the two call sites drifting apart is
+// exactly the bug class the comment below already documents.
+async function getEmployeeCaseIds(sup, userId) {
+  const [{ data: assigned }, { data: created }] = await Promise.all([
+    sup.from('case_assignees').select('case_id').eq('user_id', userId),
+    sup.from('cases').select('id').eq('created_by', userId),
+  ]);
+  return [...new Set([...(assigned || []).map(a => a.case_id), ...(created || []).map(c => c.id)])];
+}
+
+// Whether this user ever did anything real on each of these cases --
+// "real" means an activity_logs row THEY authored (documents, requests,
+// status changes, production, etc.) or a case_comments row THEY posted.
+// Deliberately does NOT count being assigned itself: assign/unassign
+// activity_logs rows carry the ASSIGNER's user_id, not the assignee's
+// (confirmed in assignees.js / case_detail.routes.js), so simply being
+// added to a case's team never counts as that assignee's own activity --
+// that distinction is the entire point of this function. Wrapped so a
+// missing index/table (migration not run yet) degrades to "no activity
+// data" rather than 500ing the whole profile page.
+async function getEmployeeCaseActivity(sup, userId, caseIds) {
+  const activity = new Map(caseIds.map(id => [id, { hasActivity: false, lastActivityAt: null }]));
+  if (!caseIds.length) return activity;
+  const bump = (caseId, at) => {
+    const row = activity.get(caseId);
+    if (!row) return;
+    row.hasActivity = true;
+    if (!row.lastActivityAt || new Date(at) > new Date(row.lastActivityAt)) row.lastActivityAt = at;
+  };
+  try {
+    const { data: logs } = await sup.from('activity_logs')
+      .select('target_id, created_at').eq('user_id', userId).eq('target_type', 'case').in('target_id', caseIds);
+    for (const row of logs || []) bump(row.target_id, row.created_at);
+  } catch (e) { /* index/table may not be migrated in yet */ }
+  try {
+    const { data: comments } = await sup.from('case_comments')
+      .select('case_id, created_at').eq('user_id', userId).in('case_id', caseIds);
+    for (const row of comments || []) bump(row.case_id, row.created_at);
+  } catch (e) { /* case_comments.user_id may not be indexed yet */ }
+  return activity;
+}
+
+// Last 30 days of real active-usage time (user_activity_time, populated by
+// the /api/activity/heartbeat route) -- separate from attendance_logs
+// (physical check-in/out) since the user explicitly wants actual in-app
+// usage, not just presence. Degrades to all-zero if the table doesn't
+// exist yet rather than failing the whole profile load.
+async function getEmployeeActiveTime(sup, userId) {
+  try {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+    const { data } = await sup.from('user_activity_time').select('date, active_seconds').eq('user_id', userId).gte('date', since);
+    const rows = data || [];
+    const last30DaysSeconds = rows.reduce((sum, r) => sum + (r.active_seconds || 0), 0);
+    const todaySeconds = rows.find(r => r.date === today)?.active_seconds || 0;
+    return { todaySeconds, last30DaysSeconds, activeDaysLast30: rows.filter(r => r.active_seconds > 0).length };
+  } catch (e) {
+    return { todaySeconds: 0, last30DaysSeconds: 0, activeDaysLast30: 0 };
+  }
+}
+
 // Shared by team.routes.js's /kpi/:userId (human-facing Profile page) and
 // aiTools.js's generate_employee_report -- both used to independently query
 // case_tasks, a sub-task feature that's essentially disconnected from how
@@ -10,12 +73,8 @@ const DONE_STATUSES = ['closed', 'production_done'];
 // file) specifically so the two call sites can't drift back out of sync
 // again, the same reason useActiveProviderStatus was extracted earlier.
 async function getEmployeeCaseStats(sup, userId) {
-  const [{ data: assigned }, { data: created }] = await Promise.all([
-    sup.from('case_assignees').select('case_id').eq('user_id', userId),
-    sup.from('cases').select('id').eq('created_by', userId),
-  ]);
-  const caseIds = [...new Set([...(assigned || []).map(a => a.case_id), ...(created || []).map(c => c.id)])];
-  if (!caseIds.length) return { total: 0, completed: 0, overdue: 0, onTime: 0, urgent: 0 };
+  const caseIds = await getEmployeeCaseIds(sup, userId);
+  if (!caseIds.length) return { total: 0, completed: 0, overdue: 0, onTime: 0, urgent: 0, workedOnCases: 0, idleAssignedCases: 0 };
 
   const { data: cases } = await sup.from('cases').select('id, status, priority, deadline, updated_at').in('id', caseIds);
   const rows = cases || [];
@@ -42,7 +101,11 @@ async function getEmployeeCaseStats(sup, userId) {
     return new Date(finishedAt) <= new Date(c.deadline);
   }).length;
 
-  return { total, completed, overdue, onTime, urgent };
+  const activity = await getEmployeeCaseActivity(sup, userId, caseIds);
+  const workedOnCases = [...activity.values()].filter(a => a.hasActivity).length;
+  const idleAssignedCases = caseIds.length - workedOnCases;
+
+  return { total, completed, overdue, onTime, urgent, workedOnCases, idleAssignedCases };
 }
 
-module.exports = { getEmployeeCaseStats };
+module.exports = { getEmployeeCaseStats, getEmployeeCaseIds, getEmployeeCaseActivity, getEmployeeActiveTime };

@@ -35,7 +35,7 @@ const routes = [
   'automation', 'gdrive', 'phoneAndMail', 'portals', 'production',
   'settings', 'activity', 'classifier',
   'case_detail.routes', 'checklist', 'assignees', 'teamManagement', 'team.routes',
-  'teams', 'permissions', 'pipelineLists', 'forum', 'fileFetch',
+  'teams', 'permissions', 'pipelineLists', 'forum', 'fileFetch', 'activityTracking',
 ];
 
 // Diagnostics and truly-public callbacks (no user Bearer token possible) must be

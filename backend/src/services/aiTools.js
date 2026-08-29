@@ -16,7 +16,7 @@
 const { hasPermission } = require('../middleware/auth');
 const { getCaseActivityRecipients, notifyUsers } = require('./notificationService');
 const { canAccessCase, scopeCasesQuery } = require('./caseAccess');
-const { getEmployeeCaseStats } = require('./employeeStats');
+const { getEmployeeCaseStats, getEmployeeActiveTime } = require('./employeeStats');
 const { classifyIntakeText, blankAnswers } = require('./aiClassifier');
 
 async function getActiveCriteriaDefs(sup) {
@@ -181,7 +181,8 @@ async function generateEmployeeReport(sup, { user_id, name } = {}, ctx) {
   // 177 created cases) got reported as "0 total tasks" because case_tasks
   // had zero rows for her. Shared with team.routes.js's /kpi/:userId so the
   // two can't drift back out of sync.
-  const { total, completed, overdue, onTime } = await getEmployeeCaseStats(sup, userId);
+  const { total, completed, overdue, onTime, workedOnCases, idleAssignedCases } = await getEmployeeCaseStats(sup, userId);
+  const activeTime = await getEmployeeActiveTime(sup, userId);
   let attendance = [];
   try { const r = await sup.from('attendance_logs').select('id, status').eq('user_id', userId); attendance = r.data || []; } catch { attendance = []; }
 
@@ -193,6 +194,12 @@ async function generateEmployeeReport(sup, { user_id, name } = {}, ctx) {
     attendance_days: attendance.length,
     present_days: attendance.filter(a => a.status === 'present').length,
     absent_days: attendance.filter(a => a.status === 'absent').length,
+    // Same fields team.routes.js's /profile/:id and /kpi/:userId return --
+    // kept identical so the AI's own report never contradicts what a human
+    // sees on the Profile page for the same employee.
+    cases_worked_on: workedOnCases, cases_idle_assigned: idleAssignedCases,
+    active_hours_today: Math.round((activeTime.todaySeconds / 3600) * 10) / 10,
+    active_hours_30d_avg: Math.round((activeTime.last30DaysSeconds / 30 / 3600) * 10) / 10,
   };
 }
 

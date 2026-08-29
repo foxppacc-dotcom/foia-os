@@ -4,7 +4,7 @@ const { requireAuth, requireRole, hasPermission } = require('../middleware/auth'
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { notifyUsers, getCaseActivityRecipients } = require('../services/notificationService');
-const { getEmployeeCaseStats } = require('../services/employeeStats');
+const { getEmployeeCaseStats, getEmployeeCaseActivity, getEmployeeActiveTime } = require('../services/employeeStats');
 
 // /profile/:id and /kpi/:userId return someone else's private data --
 // notifications, tasks, attendance -- readable before this by ANY logged-in
@@ -65,6 +65,13 @@ router.get('/profile/:id', async (req, res) => {
       for (const c of viaLegacy || []) if (!byId[c.id]) byId[c.id] = { id: c.id, title: c.title, status: c.status, role: null };
       for (const c of viaCreated || []) if (!byId[c.id]) byId[c.id] = { id: c.id, title: c.title, status: c.status, role: null };
       cases = Object.values(byId);
+      // Whether this person ever actually DID something on each case, not
+      // just whether they're attached to it -- an assignment with zero real
+      // activity is exactly the "معيّن -- بدون نشاط" signal this profile is
+      // meant to surface, not something the case-collection queries above
+      // (which only prove attachment) can answer on their own.
+      const activity = await getEmployeeCaseActivity(sup, id, cases.map(c => c.id));
+      cases = cases.map(c => ({ ...c, has_activity: activity.get(c.id)?.hasActivity || false, last_activity_at: activity.get(c.id)?.lastActivityAt || null }));
     } catch (e) { cases = []; }
 
     // attendance_logs and notifications may not exist — wrap each independently
@@ -84,7 +91,8 @@ router.get('/profile/:id', async (req, res) => {
     // Profile.jsx actually reads (total_tasks, on_time_rate, completion_rate,
     // present_days, absent_days, urgent_tasks) -- meaning most of the KPI
     // tab's fields were never populated by anything, pre-existing this fix.
-    const { total, completed, overdue, onTime, urgent } = await getEmployeeCaseStats(sup, id);
+    const { total, completed, overdue, onTime, urgent, workedOnCases, idleAssignedCases } = await getEmployeeCaseStats(sup, id);
+    const activeTime = await getEmployeeActiveTime(sup, id);
     const present = (attendance || []).filter(a => a.status === 'present').length;
     const absent = (attendance || []).filter(a => a.status === 'absent').length;
 
@@ -95,11 +103,19 @@ router.get('/profile/:id', async (req, res) => {
       attendance: attendance || [],
       notifications: notifications || [],
       unreadCount: unreadCount.count || 0,
+      activity_time: {
+        today_seconds: activeTime.todaySeconds,
+        last_30_days_seconds: activeTime.last30DaysSeconds,
+        active_days_last_30: activeTime.activeDaysLast30,
+      },
       kpi: {
         total_tasks: total, completed_tasks: completed, overdue_tasks: overdue, urgent_tasks: urgent,
         completion_rate: total > 0 ? Math.round((completed / total) * 100) : 0,
         on_time_rate: total > 0 ? Math.round((onTime / total) * 100) : 0,
         present_days: present, absent_days: absent,
+        cases_worked_on: workedOnCases, cases_idle_assigned: idleAssignedCases,
+        active_hours_today: Math.round((activeTime.todaySeconds / 3600) * 10) / 10,
+        active_hours_30d_avg: Math.round((activeTime.last30DaysSeconds / 30 / 3600) * 10) / 10,
       },
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -258,7 +274,8 @@ router.get('/kpi/:userId', async (req, res) => {
     // work actually gets assigned (case_assignees/cases.created_by), so this
     // showed "0 tasks" for employees with a full real caseload. See
     // employeeStats.js for the full explanation.
-    const { total, completed, overdue, onTime, urgent } = await getEmployeeCaseStats(sup, userId);
+    const { total, completed, overdue, onTime, urgent, workedOnCases, idleAssignedCases } = await getEmployeeCaseStats(sup, userId);
+    const activeTime = await getEmployeeActiveTime(sup, userId);
     let { data: attendance, error: attErr } = await sup.from('attendance_logs').select('id, date, status').eq('user_id', userId);
     if (attErr) attendance = [];
     const present = attendance?.filter(a => a.status === 'present').length || 0;
@@ -269,6 +286,13 @@ router.get('/kpi/:userId', async (req, res) => {
       urgent_tasks: urgent, on_time_rate: total > 0 ? Math.round((onTime / total) * 100) : 0,
       completion_rate: total > 0 ? Math.round((completed / total) * 100) : 0,
       attendance_days: attendance?.length || 0, present_days: present, absent_days: absent,
+      // Same new fields as /profile/:id's own kpi object -- kept identical
+      // on purpose so the two endpoints can never disagree about the same
+      // employee (the exact drift this file's own comments already warn
+      // against for the pre-existing fields).
+      cases_worked_on: workedOnCases, cases_idle_assigned: idleAssignedCases,
+      active_hours_today: Math.round((activeTime.todaySeconds / 3600) * 10) / 10,
+      active_hours_30d_avg: Math.round((activeTime.last30DaysSeconds / 30 / 3600) * 10) / 10,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

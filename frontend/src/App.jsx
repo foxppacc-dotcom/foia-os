@@ -14,6 +14,7 @@ import AIIntake from './pages/AIIntake';
 import AIAssistantSettings from './pages/AIAssistantSettings';
 import AIAssistantChat from './pages/AIAssistantChat';
 import AIAssistantWidget from './components/AIAssistantWidget';
+import useActivityHeartbeat from './hooks/useActivityHeartbeat';
 import Cases from './pages/Cases';
 import CaseDetail from './pages/CaseDetail';
 
@@ -56,6 +57,9 @@ function App() {
   const [theme, setTheme] = useState(() => { try { return localStorage.getItem('foia_theme') || 'light'; } catch { return 'light'; } });
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const location = useLocation();
+  // Mounted once for the whole authenticated session (not per-page), so
+  // navigating between routes never resets the accumulated active time.
+  useActivityHeartbeat(!!user);
 
   useEffect(() => {
     const token = localStorage.getItem('foia_token');
