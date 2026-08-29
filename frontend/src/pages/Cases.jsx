@@ -1,40 +1,26 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { api } from '../api';
 import { Plus, Search, Upload, Building2, Trash2, Filter, Users, ChevronLeft, ChevronRight, ChevronDown, Bell } from 'lucide-react';
 
-const ACTIVITY_TYPE_LABEL = {
-  case_comment: '💬 تعليق جديد في نقاش الفريق',
-  case_comment_mention: '📣 تم توجيه ملاحظة إليك',
-  email_received: '📩 بريد جديد وصل للقضية',
-  document_uploaded: '📎 تم رفع ملف على القضية',
-};
-
-const STATUS_STYLES = {
-  open: { bg: '#3B82F6', label: '🟦 مفتوحة' },
-  in_progress: { bg: '#F59E0B', label: '🟡 قيد التنفيذ' },
-  in_production: { bg: '#8B5CF6', label: '🎬 في الإنتاج' },
-  closed: { bg: '#10B981', label: '🟢 مغلقة' },
-};
-
-const PRIORITY_OPTIONS = [
-  { key: 'high', label: '🔴 عاجل' },
-  { key: 'medium', label: '🟡 متوسط' },
-  { key: 'low', label: '🟢 منخفض' },
-];
-
-const STATUS_OPTIONS = Object.entries(STATUS_STYLES).map(([key, st]) => ({ key, label: st.label }));
-
-const AGENCY_TYPE_LABELS = { federal: 'فيدرالي', state: 'ولاية', municipal: 'بلدية', sheriff: 'شريف' };
+// Colors/backgrounds stay in JS (not translatable content); the labels
+// themselves now come from cases.json via t() at render/use time, so this
+// file no longer holds a second, drifted copy of them alongside
+// features/case/constants/index.js.
+const STATUS_COLORS = { open: '#3B82F6', in_progress: '#F59E0B', in_production: '#8B5CF6', closed: '#10B981' };
+const PRIORITY_KEYS = ['high', 'medium', 'low'];
+const STATUS_KEYS = ['open', 'in_progress', 'in_production', 'closed'];
 
 const PAGE_SIZE = 100;
-const MONTH_NAMES = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
 
 // Clickable popup calendar -- native <input type="date"> renders its
 // numerals/segment order from the BROWSER'S OWN locale regardless of
 // dir/lang on the element (Chrome keeps showing Arabic-Indic digits /
 // reversed order), same issue already worked around in Inbox.jsx.
 function CalendarPopup({ value, onChange, placeholder }) {
+  const { t } = useTranslation('common');
+  const monthNames = t('common:months', { returnObjects: true });
   const [open, setOpen] = useState(false);
   const [viewDate, setViewDate] = useState(() => {
     const d = value ? new Date(value + 'T00:00:00') : new Date();
@@ -79,7 +65,7 @@ function CalendarPopup({ value, onChange, placeholder }) {
         <div className="absolute z-30 mt-1 p-2 rounded-xl shadow-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', width: '210px' }} dir="ltr">
           <div className="flex items-center justify-between mb-2 px-0.5">
             <button type="button" onClick={prevMonth} className="p-0.5 rounded" style={{ color: 'var(--text-secondary)' }}><ChevronLeft className="w-3.5 h-3.5" /></button>
-            <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>{MONTH_NAMES[viewDate.month]} {viewDate.year}</span>
+            <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>{monthNames[viewDate.month]} {viewDate.year}</span>
             <button type="button" onClick={nextMonth} className="p-0.5 rounded" style={{ color: 'var(--text-secondary)' }}><ChevronRight className="w-3.5 h-3.5" /></button>
           </div>
           <div className="grid grid-cols-7 gap-0.5 text-center">
@@ -108,6 +94,7 @@ function CalendarPopup({ value, onChange, placeholder }) {
 // showing how many are picked, opening a searchable, scrollable checkbox
 // list -- reused for both filters instead of two near-identical components.
 function MultiSelectPopover({ label, icon, options, selectedIds, onChange, getId, getLabel, showSearch = true }) {
+  const { t } = useTranslation('cases');
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const ref = useRef(null);
@@ -122,7 +109,7 @@ function MultiSelectPopover({ label, icon, options, selectedIds, onChange, getId
   const toggle = (id) => onChange(selectedIds.includes(id) ? selectedIds.filter(x => x !== id) : [...selectedIds, id]);
   const summary = selectedIds.length === 0 ? null
     : selectedIds.length === 1 ? (getLabel(options.find(o => getId(o) === selectedIds[0])) || '1')
-    : `${selectedIds.length} مختارة`;
+    : t('cases:filterPanel.selectedCount', { count: selectedIds.length });
 
   return (
     <div className="relative shrink-0" ref={ref}>
@@ -140,18 +127,18 @@ function MultiSelectPopover({ label, icon, options, selectedIds, onChange, getId
           <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
             <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{label}</span>
             {selectedIds.length > 0 && (
-              <button onClick={() => onChange([])} className="text-[11px]" style={{ color: 'var(--accent)' }}>مسح</button>
+              <button onClick={() => onChange([])} className="text-[11px]" style={{ color: 'var(--accent)' }}>{t('cases:filterPanel.clear')}</button>
             )}
           </div>
           {showSearch && (
             <div className="p-2 pb-0">
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث..."
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder={t('cases:filterPanel.search')}
                 className="w-full px-2.5 py-1.5 rounded-lg text-xs" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
             </div>
           )}
           <div className="max-h-56 overflow-y-auto p-1.5 space-y-0.5">
             {filtered.length === 0 ? (
-              <p className="text-xs text-center py-3" style={{ color: 'var(--text-muted)' }}>لا نتائج</p>
+              <p className="text-xs text-center py-3" style={{ color: 'var(--text-muted)' }}>{t('cases:filterPanel.noResults')}</p>
             ) : filtered.map(o => {
               const checked = selectedIds.includes(getId(o));
               return (
@@ -172,6 +159,15 @@ function MultiSelectPopover({ label, icon, options, selectedIds, onChange, getId
 }
 
 export default function Cases() {
+  const { t, i18n } = useTranslation(['cases', 'common']);
+  const STATUS_OPTIONS = STATUS_KEYS.map(key => ({ key, label: `${t(`cases:statusEmoji.${key}`)} ${t(`cases:status.${key}`)}` }));
+  const PRIORITY_OPTIONS = PRIORITY_KEYS.map(key => ({ key, label: `${t(`cases:priorityEmoji.${key}`)} ${t(`cases:priority.${key}`)}` }));
+  const ACTIVITY_TYPE_LABEL = {
+    case_comment: t('cases:activityType.case_comment'),
+    case_comment_mention: t('cases:activityType.case_comment_mention'),
+    email_received: t('cases:activityType.email_received'),
+    document_uploaded: t('cases:activityType.document_uploaded'),
+  };
   const [cases, setCases] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0); // 0-indexed internally, shown as page+1
@@ -268,7 +264,7 @@ export default function Cases() {
     // (res.json({error: err.message})) -- surfacing it here instead of a
     // fixed generic string, since a search that intermittently 500s needs
     // the ACTUAL reason visible to diagnose, not just "try refreshing".
-    }).catch((e) => { setFetchError(`تعذر تحميل القضايا — ${e.message || 'حاول تحديث الصفحة'}`); setLoading(false); setInitialLoading(false); });
+    }).catch((e) => { setFetchError(`${t('cases:errors.loadFailed')} — ${e.message || t('cases:errors.loadFailedFallback')}`); setLoading(false); setInitialLoading(false); });
   };
 
   const fetchAgencies = () => {
@@ -331,7 +327,7 @@ export default function Cases() {
     // API (same case the backend's classification_ids filter special-cases).
     api.get('/pipeline-lists').then(d => {
       const lists = (Array.isArray(d) ? d : d.data || []).filter(l => l.name_en !== 'Not Started');
-      setClassifications([{ id: 'not_started', name_ar: 'لم يبدأ بعد' }, ...lists]);
+      setClassifications([{ id: 'not_started', name_ar: t('cases:notStarted') }, ...lists]);
     }).catch(() => {});
   }, []);
 
@@ -394,17 +390,17 @@ export default function Cases() {
       setForm({ priority: 'medium', defendant_name: '', source_agency_name: '', story_hook: '', article_url: '', case_summary: '', selectedAgencies: [] });
       fetchCases();
     } catch (e) {
-      alert('❌ فشل إنشاء القضية: ' + e.message);
+      alert(t('cases:errors.createFailed', { message: e.message }));
     }
   };
 
   const handleDelete = async (caseId) => {
-    if (!confirm('🗑️ هل أنت متأكد من حذف القضية #' + caseId + '؟')) return;
+    if (!confirm(t('cases:deleteConfirm', { id: caseId }))) return;
     try {
       await api.delete(`/cases/${caseId}`);
       fetchCases();
     } catch (e) {
-      alert('❌ فشل الحذف: ' + e.message);
+      alert(t('cases:errors.deleteFailed', { message: e.message }));
     }
   };
 
@@ -420,11 +416,11 @@ export default function Cases() {
         body: formData
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { alert('❌ ' + (data.error || 'فشل رفع الملف')); return; }
-      alert(data.message || `✅ تم استيراد ${data.imported} قضية`);
+      if (!res.ok) { alert(t('cases:errors.uploadFailed', { message: data.error || t('cases:errors.uploadFailedGeneric') })); return; }
+      alert(data.message || t('cases:uploadSuccess', { count: data.imported }));
       fetchCases();
     } catch (err) {
-      alert('❌ فشل الرفع: ' + err.message);
+      alert(t('cases:errors.uploadThrew', { message: err.message }));
     } finally {
       e.target.value = '';
     }
@@ -446,10 +442,10 @@ export default function Cases() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>🗂️ القضايا</h1>
+          <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{t('cases:title')}</h1>
           <p style={{ color: 'var(--text-muted)' }}>
-            {cases.length} قضية
-            {!canViewAllCases && <span className="mr-2 text-xs px-2 py-0.5 rounded-lg" style={{ background: 'var(--accent-subtle, rgba(212,168,67,0.12))', color: 'var(--accent)' }}>القضايا المسندة إليك فقط</span>}
+            {t('cases:count', { count: cases.length })}
+            {!canViewAllCases && <span className="mr-2 text-xs px-2 py-0.5 rounded-lg" style={{ background: 'var(--accent-subtle, rgba(212,168,67,0.12))', color: 'var(--accent)' }}>{t('cases:assignedOnlyBadge')}</span>}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -457,14 +453,14 @@ export default function Cases() {
           <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium cursor-pointer transition-all border"
             style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
             <Upload className="w-4 h-4" />
-            رفع Excel
+            {t('cases:uploadExcel')}
             <input type="file" accept=".xlsx,.xls,.csv" onChange={handleCasesUpload} className="hidden" />
           </label>
           <button onClick={() => { setShowForm(true); fetchAgencies(); }}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold transition-all"
             style={{ background: 'var(--accent)', color: '#1A1A2E' }}>
             <Plus className="w-4 h-4" />
-            قضية جديدة
+            {t('cases:newCase')}
           </button>
         </div>
       </div>
@@ -474,7 +470,7 @@ export default function Cases() {
         <div className="relative flex-1">
           <Search className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5" style={{ color: 'var(--text-muted)' }} />
           <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-            placeholder="🔍 ابحث برقم القضية أو العنوان..."
+            placeholder={t('cases:searchPlaceholder')}
             className="w-full px-12 py-3 rounded-xl border focus:outline-none"
             style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
         </div>
@@ -482,7 +478,7 @@ export default function Cases() {
           className="flex items-center gap-2 px-4 py-3 rounded-xl border font-medium shrink-0"
           style={{ background: showFilterPanel || activeCaseFilterCount > 0 ? 'var(--accent)' : 'var(--bg-secondary)', borderColor: 'var(--border)', color: showFilterPanel || activeCaseFilterCount > 0 ? 'var(--text-inverse, #1A1A2E)' : 'var(--text-primary)' }}>
           <Filter className="w-4 h-4" />
-          فلترة
+          {t('cases:filter')}
           {activeCaseFilterCount > 0 && (
             <span className="px-1.5 rounded-full text-[10px] font-bold" style={{ background: 'var(--text-inverse, #1A1A2E)', color: 'var(--accent)' }}>{activeCaseFilterCount}</span>
           )}
@@ -505,27 +501,27 @@ export default function Cases() {
               off "visible"), which was cutting every open dropdown off
               instead of letting it float freely like before. */}
           <div className="flex items-center gap-1.5">
-            <MultiSelectPopover label="الحالة" icon="📊"
+            <MultiSelectPopover label={t('cases:filterPanel.status')} icon="📊"
               options={STATUS_OPTIONS} selectedIds={pendingFilters.status}
               onChange={ids => setPendingFilters(p => ({ ...p, status: ids }))}
               getId={s => s.key} getLabel={s => s.label} showSearch={false} />
 
-            <MultiSelectPopover label="الأولوية" icon="⭐"
+            <MultiSelectPopover label={t('cases:filterPanel.priority')} icon="⭐"
               options={PRIORITY_OPTIONS} selectedIds={pendingFilters.priority}
               onChange={ids => setPendingFilters(p => ({ ...p, priority: ids }))}
               getId={p => p.key} getLabel={p => p.label} showSearch={false} />
 
-            <MultiSelectPopover label="الجهات" icon={<Building2 className="w-3.5 h-3.5" />}
+            <MultiSelectPopover label={t('cases:filterPanel.agencies')} icon={<Building2 className="w-3.5 h-3.5" />}
               options={agencies} selectedIds={pendingFilters.agencyIds}
               onChange={ids => setPendingFilters(p => ({ ...p, agencyIds: ids }))}
               getId={a => a.id} getLabel={a => a.name_ar || a.name_en || `#${a.id}`} />
 
-            <MultiSelectPopover label="الموظفون" icon={<Users className="w-3.5 h-3.5" />}
+            <MultiSelectPopover label={t('cases:filterPanel.employees')} icon={<Users className="w-3.5 h-3.5" />}
               options={employees} selectedIds={pendingFilters.employeeIds}
               onChange={ids => setPendingFilters(p => ({ ...p, employeeIds: ids }))}
               getId={u => u.id} getLabel={u => u.name || u.email} />
 
-            <MultiSelectPopover label="التصنيف" icon="🏷️"
+            <MultiSelectPopover label={t('cases:filterPanel.classification')} icon="🏷️"
               options={classifications} selectedIds={pendingFilters.classificationIds}
               onChange={ids => setPendingFilters(p => ({ ...p, classificationIds: ids }))}
               getId={c => c.id} getLabel={c => c.name_ar || c.name_en || `#${c.id}`} />
@@ -533,10 +529,10 @@ export default function Cases() {
             <div className="w-px h-6 shrink-0" style={{ background: 'var(--border)' }} />
 
             <div className="flex items-center gap-1 shrink-0">
-              <span className="text-[11px] shrink-0" style={{ color: 'var(--text-muted)' }}>من</span>
-              <CalendarPopup value={pendingFilters.dateFrom} onChange={d => setPendingFilters(p => ({ ...p, dateFrom: d }))} placeholder="تاريخ" />
-              <span className="text-[11px] shrink-0" style={{ color: 'var(--text-muted)' }}>إلى</span>
-              <CalendarPopup value={pendingFilters.dateTo} onChange={d => setPendingFilters(p => ({ ...p, dateTo: d }))} placeholder="تاريخ" />
+              <span className="text-[11px] shrink-0" style={{ color: 'var(--text-muted)' }}>{t('cases:filterPanel.from')}</span>
+              <CalendarPopup value={pendingFilters.dateFrom} onChange={d => setPendingFilters(p => ({ ...p, dateFrom: d }))} placeholder={t('cases:filterPanel.datePlaceholder')} />
+              <span className="text-[11px] shrink-0" style={{ color: 'var(--text-muted)' }}>{t('cases:filterPanel.to')}</span>
+              <CalendarPopup value={pendingFilters.dateTo} onChange={d => setPendingFilters(p => ({ ...p, dateTo: d }))} placeholder={t('cases:filterPanel.datePlaceholder')} />
             </div>
 
             <div className="w-px h-6 shrink-0" style={{ background: 'var(--border)' }} />
@@ -546,16 +542,16 @@ export default function Cases() {
                 at least one filter is actually active. */}
             {activeCaseFilterCount > 0 && !caseFiltersDirty && (
               <span className="text-[11px] font-medium shrink-0 whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>
-                🔎 {total}
+                {t('cases:filterPanel.resultCount', { count: total })}
               </span>
             )}
             {(activeCaseFilterCount > 0 || caseFiltersDirty) && (
-              <button onClick={clearCaseFilters} className="text-[11px] underline shrink-0 whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>مسح</button>
+              <button onClick={clearCaseFilters} className="text-[11px] underline shrink-0 whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>{t('cases:filterPanel.clear')}</button>
             )}
             <button onClick={applyCaseFilters}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 whitespace-nowrap"
               style={{ background: 'var(--accent)', color: 'var(--text-inverse, #1A1A2E)' }}>
-              <Filter className="w-3 h-3" /> تطبيق الفلترة
+              <Filter className="w-3 h-3" /> {t('cases:filterPanel.apply')}
             </button>
           </div>
         </div>
@@ -565,7 +561,7 @@ export default function Cases() {
       {showForm && (
         <div className="p-6 rounded-2xl border animate-slideUp"
           style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', boxShadow: 'var(--shadow-md)' }}>
-          <h2 className="font-semibold mb-4" style={{ color: 'var(--accent)' }}>📝 قضية جديدة</h2>
+          <h2 className="font-semibold mb-4" style={{ color: 'var(--accent)' }}>{t('cases:form.heading')}</h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
             <div className="space-y-4">
@@ -573,31 +569,31 @@ export default function Cases() {
                   اسم المتهم is now the case's effective title. Each field has
                   a persistent label (not just a placeholder) with its own row. */}
               <div className="flex items-center gap-3">
-                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>اسم المتهم *</label>
+                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{t('cases:form.defendantName')}</label>
                 <input value={form.defendant_name} onChange={e => setForm({...form, defendant_name: e.target.value})}
                   className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
                   style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
               </div>
               <div className="flex items-center gap-3">
-                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>اسم الوكالة</label>
+                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{t('cases:form.agencyName')}</label>
                 <input value={form.source_agency_name} onChange={e => setForm({...form, source_agency_name: e.target.value})}
                   className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
                   style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
               </div>
               <div className="flex items-center gap-3">
-                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>الهوك</label>
+                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{t('cases:form.hook')}</label>
                 <input value={form.story_hook} onChange={e => setForm({...form, story_hook: e.target.value})}
                   className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
                   style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
               </div>
               <div className="flex items-center gap-3">
-                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>رابط المقال</label>
+                <label className="w-28 shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{t('cases:form.articleUrl')}</label>
                 <input value={form.article_url} onChange={e => setForm({...form, article_url: e.target.value})}
                   className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
                   style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
               </div>
               <div className="flex items-start gap-3">
-                <label className="w-28 shrink-0 text-sm font-medium pt-3" style={{ color: 'var(--text-primary)' }}>ملخص القضية</label>
+                <label className="w-28 shrink-0 text-sm font-medium pt-3" style={{ color: 'var(--text-primary)' }}>{t('cases:form.summary')}</label>
                 <textarea value={form.case_summary} onChange={e => setForm({...form, case_summary: e.target.value})}
                   rows={4}
                   className="flex-1 px-4 py-3 rounded-xl border resize-y focus:outline-none"
@@ -607,16 +603,16 @@ export default function Cases() {
             {/* Agencies Selection + Priority */}
             <div>
               <p className="font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-                اختر الجهات المستهدفه ({form.selectedAgencies.length})
+                {t('cases:form.selectAgencies', { count: form.selectedAgencies.length })}
               </p>
               <div className="rounded-xl border max-h-60 overflow-y-auto"
                 style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)' }}>
                 {agencies.length === 0 ? (
                   <div className="p-4 text-center">
-                    <p style={{ color: 'var(--text-muted)' }}>لا توجد جهات بعد</p>
+                    <p style={{ color: 'var(--text-muted)' }}>{t('cases:form.noAgenciesYet')}</p>
                     <button onClick={() => navigate('/agencies')}
                       style={{ color: 'var(--accent)' }}>
-                      اذهب لصفحة الجهات ←
+                      {t('cases:form.goToAgencies')}
                     </button>
                   </div>
                 ) : agencies.map(a => (
@@ -635,7 +631,7 @@ export default function Cases() {
                         </p>
                         {a.type && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>
-                            {AGENCY_TYPE_LABELS[a.type] || a.type}
+                            {t(`cases:agencyType.${a.type}`, a.type)}
                           </span>
                         )}
                       </div>
@@ -646,12 +642,12 @@ export default function Cases() {
                         {(a.city || a.state) && <span>📍 {[a.city, a.state].filter(Boolean).join('، ')}</span>}
                         {a.email && <span className="truncate">✉️ {a.email}</span>}
                         {a.phone && <span>☎️ {a.phone}</span>}
-                        {a.average_response_days != null && <span>⏱ متوسط الرد: {a.average_response_days} يوم</span>}
+                        {a.average_response_days != null && <span>{t('cases:form.avgResponseDays', { count: a.average_response_days })}</span>}
                       </div>
                     </div>
                     {form.selectedAgencies.includes(a.id) && (
                       <span className="px-2 py-1 rounded shrink-0" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>
-                        ✅ مختار
+                        {t('cases:form.selected')}
                       </span>
                     )}
                   </label>
@@ -660,13 +656,13 @@ export default function Cases() {
 
               {/* الأهمية -- placed below الجهات per request */}
               <div className="flex items-center gap-3 mt-4">
-                <label className="shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>الأهمية</label>
+                <label className="shrink-0 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{t('cases:form.priorityLabel')}</label>
                 <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})}
                   className="flex-1 px-4 py-3 rounded-xl border"
                   style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
-                  <option value="low">🟢 منخفض</option>
-                  <option value="medium">🟡 متوسط</option>
-                  <option value="high">🔴 عاجل</option>
+                  <option value="low">{t('cases:priorityEmoji.low')} {t('cases:priority.low')}</option>
+                  <option value="medium">{t('cases:priorityEmoji.medium')} {t('cases:priority.medium')}</option>
+                  <option value="high">{t('cases:priorityEmoji.high')} {t('cases:priority.high')}</option>
                 </select>
               </div>
             </div>
@@ -676,12 +672,12 @@ export default function Cases() {
             <button onClick={() => setShowForm(false)}
               className="px-4 py-2.5 rounded-xl font-medium border"
               style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
-              إلغاء
+              {t('cases:form.cancel')}
             </button>
             <button onClick={createCase}
               className="px-5 py-2.5 rounded-xl font-semibold"
               style={{ background: 'var(--accent)', color: '#1A1A2E' }}>
-              ✨ إنشاء القضية
+              {t('cases:form.create')}
             </button>
           </div>
         </div>
@@ -697,18 +693,18 @@ export default function Cases() {
           <p className="text-lg" style={{ color: '#ef4444' }}>⚠️ {fetchError}</p>
           <button onClick={() => { setLoading(true); fetchCases(); }} className="mt-4 px-5 py-2.5 rounded-xl font-semibold"
             style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
-            إعادة المحاولة
+            {t('cases:errors.retry')}
           </button>
         </div>
       ) : filteredCases.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">
-          <p className="text-lg" style={{ color: 'var(--text-secondary)' }}>📂 لا توجد قضايا</p>
-          <p className="mt-2" style={{ color: 'var(--text-muted)' }}>أضف قضية جديدة أو ارفع ملف Excel</p>
+          <p className="text-lg" style={{ color: 'var(--text-secondary)' }}>{t('cases:empty.title')}</p>
+          <p className="mt-2" style={{ color: 'var(--text-muted)' }}>{t('cases:empty.subtitle')}</p>
           <div className="flex gap-3 mt-4">
             <button onClick={() => { setShowForm(true); fetchAgencies(); }}
               className="px-5 py-3 rounded-xl font-semibold"
               style={{ background: 'var(--accent)', color: '#1A1A2E' }}>
-              ➕ إضافة قضية
+              {t('cases:empty.addCase')}
             </button>
           </div>
         </div>
@@ -717,18 +713,19 @@ export default function Cases() {
           <table className="w-full">
             <thead>
               <tr style={{ background: 'var(--bg-tertiary)' }}>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>#</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📌 العنوان / التصنيف</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>🏛️ الجهات</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📊 الحالة</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>⭐ الأولوية</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>📅 التاريخ</th>
-                <th className="px-4 py-3.5 text-center font-medium" style={{ color: 'var(--text-muted)' }}>⚙️</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.id')}</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.titleClassification')}</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.agencies')}</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.status')}</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.priority')}</th>
+                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.date')}</th>
+                <th className="px-4 py-3.5 text-center font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y" style={{ borderColor: 'var(--border)' }}>
               {filteredCases.map(c => {
-                const st = STATUS_STYLES[c.status] || { bg: '#6B7280', label: c.status };
+                const stColor = STATUS_COLORS[c.status] || '#6B7280';
+                const stLabel = STATUS_KEYS.includes(c.status) ? t(`cases:status.${c.status}`) : c.status;
                 return (
                   <tr key={c.id}
                     className="cursor-pointer"
@@ -748,7 +745,7 @@ export default function Cases() {
                             crisp, unambiguous status label at a glance. */}
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
                           style={{ background: '#FFFFFF', color: '#111111', border: '1px solid #E5E7EB', boxShadow: '0 1px 2px rgba(0,0,0,0.06)' }}>
-                          🏷️ {c.classification_name || 'لم يبدأ بعد'}
+                          🏷️ {c.classification_name || t('cases:notStarted')}
                         </span>
                         {/* Only things that actually need attention -- a
                             teammate's note/mention, a new email, or a
@@ -771,13 +768,13 @@ export default function Cases() {
                                 onClick={() => openActivityPopover(c.id, c.unread_notifications)}
                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ds-transition-colors"
                                 style={{ background: 'rgba(239,68,68,0.12)', color: '#EF4444' }}
-                                title="اضغط لمعرفة سبب هذا الإشعار">
+                                title={t('cases:table.notificationTooltip')}>
                                 <Bell className="w-2.5 h-2.5" />
                                 {c.unread_notification_count > 9 ? '9+' : c.unread_notification_count}
                               </button>
                             )}
                             {activityPopoverCaseId === c.id && (
-                              <div className="absolute z-30 top-full mt-1 w-64 rounded-xl p-2 text-right" dir="rtl"
+                              <div className="absolute z-30 top-full mt-1 w-64 rounded-xl p-2 text-right" dir={i18n.dir()}
                                 style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}>
                                 <div className="space-y-1 max-h-56 overflow-y-auto">
                                   {activityPopoverNotifications.map((n, i) => (
@@ -811,15 +808,15 @@ export default function Cases() {
                     <td className="px-4 py-3.5" onClick={() => navigate(`/cases/${c.id}`)}>
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium"
                         style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>
-                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: st.bg }} />
-                        {st.label.replace(/^\S+\s/, '')}
+                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: stColor }} />
+                        {stLabel}
                       </span>
                     </td>
 
                     <td className="px-4 py-3.5" onClick={() => navigate(`/cases/${c.id}`)}>
                       {(() => {
                         const pColor = c.priority === 'high' ? '#EF4444' : c.priority === 'medium' ? '#F59E0B' : '#3B82F6';
-                        const pLabel = c.priority === 'high' ? 'عاجل' : c.priority === 'medium' ? 'متوسط' : 'منخفض';
+                        const pLabel = t(`cases:priority.${c.priority === 'high' ? 'high' : c.priority === 'medium' ? 'medium' : 'low'}`);
                         return (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium"
                             style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>
@@ -832,12 +829,12 @@ export default function Cases() {
 
                     <td className="px-4 py-3.5 text-[12px]" style={{ color: 'var(--text-muted)' }}
                       onClick={() => navigate(`/cases/${c.id}`)}>
-                      {c.created_at ? new Date(c.created_at).toLocaleDateString('ar-EG') : '—'}
+                      {c.created_at ? new Date(c.created_at).toLocaleDateString(i18n.language === 'en' ? 'en-GB' : 'ar-EG') : '—'}
                     </td>
 
                     <td className="px-4 py-3.5 text-center">
                       <button onClick={e => { e.stopPropagation(); handleDelete(c.id); }}
-                        title="حذف"
+                        title={t('cases:table.delete')}
                         className="inline-flex items-center justify-center w-8 h-8 rounded-lg transition-colors"
                         style={{ color: 'var(--text-muted)', background: 'transparent' }}
                         onMouseOver={e => { e.currentTarget.style.background = '#EF444415'; e.currentTarget.style.color = '#EF4444'; }}
@@ -858,18 +855,18 @@ export default function Cases() {
           <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
             className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
             style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-            السابق
+            {t('cases:pagination.prev')}
           </button>
           <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            صفحة {page + 1} من {totalPages} ({total} قضية)
+            {t('cases:pagination.pageOf', { page: page + 1, total: totalPages, count: total })}
           </span>
           <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
             className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
             style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-            التالي
+            {t('cases:pagination.next')}
           </button>
           <div className="flex items-center gap-1.5 mr-2">
-            <span className="text-sm" style={{ color: 'var(--text-muted)' }}>الذهاب لصفحة:</span>
+            <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{t('cases:pagination.goToPage')}</span>
             <input value={pageInput} onChange={e => setPageInput(e.target.value.replace(/[^0-9]/g, ''))}
               onKeyDown={e => { if (e.key === 'Enter') goToPage(); }}
               className="w-14 px-2 py-1.5 rounded-lg text-sm text-center"
@@ -877,7 +874,7 @@ export default function Cases() {
             <button onClick={goToPage}
               className="px-3 py-1.5 rounded-lg text-sm font-medium"
               style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}>
-              انتقال
+              {t('cases:pagination.go')}
             </button>
           </div>
         </div>

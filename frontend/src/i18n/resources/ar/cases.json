@@ -1,1 +1,67 @@
-{}
+{
+  "title": "🗂️ القضايا",
+  "count": "{{count}} قضية",
+  "assignedOnlyBadge": "القضايا المسندة إليك فقط",
+  "uploadExcel": "رفع Excel",
+  "newCase": "قضية جديدة",
+  "searchPlaceholder": "🔍 ابحث برقم القضية أو العنوان...",
+  "filter": "فلترة",
+  "status": { "open": "مفتوحة", "in_progress": "قيد التنفيذ", "in_production": "في الإنتاج", "closed": "مغلقة" },
+  "statusEmoji": { "open": "🟦", "in_progress": "🟡", "in_production": "🎬", "closed": "🟢" },
+  "priority": { "high": "عاجل", "medium": "متوسط", "low": "منخفض" },
+  "priorityEmoji": { "high": "🔴", "medium": "🟡", "low": "🟢" },
+  "agencyType": { "federal": "فيدرالي", "state": "ولاية", "municipal": "بلدية", "sheriff": "شريف" },
+  "activityType": {
+    "case_comment": "💬 تعليق جديد في نقاش الفريق",
+    "case_comment_mention": "📣 تم توجيه ملاحظة إليك",
+    "email_received": "📩 بريد جديد وصل للقضية",
+    "document_uploaded": "📎 تم رفع ملف على القضية"
+  },
+  "notStarted": "لم يبدأ بعد",
+  "filterPanel": {
+    "status": "الحالة", "priority": "الأولوية", "agencies": "الجهات", "employees": "الموظفون", "classification": "التصنيف",
+    "from": "من", "to": "إلى", "datePlaceholder": "تاريخ",
+    "resultCount": "🔎 {{count}}",
+    "clear": "مسح", "apply": "تطبيق الفلترة",
+    "search": "بحث...", "noResults": "لا نتائج", "selectedCount": "{{count}} مختارة"
+  },
+  "form": {
+    "heading": "📝 قضية جديدة",
+    "defendantName": "اسم المتهم *",
+    "agencyName": "اسم الوكالة",
+    "hook": "الهوك",
+    "articleUrl": "رابط المقال",
+    "summary": "ملخص القضية",
+    "selectAgencies": "اختر الجهات المستهدفه ({{count}})",
+    "noAgenciesYet": "لا توجد جهات بعد",
+    "goToAgencies": "اذهب لصفحة الجهات ←",
+    "avgResponseDays": "⏱ متوسط الرد: {{count}} يوم",
+    "selected": "✅ مختار",
+    "priorityLabel": "الأهمية",
+    "cancel": "إلغاء",
+    "create": "✨ إنشاء القضية"
+  },
+  "table": {
+    "id": "#", "titleClassification": "📌 العنوان / التصنيف", "agencies": "🏛️ الجهات",
+    "status": "📊 الحالة", "priority": "⭐ الأولوية", "date": "📅 التاريخ", "actions": "⚙️",
+    "notificationTooltip": "اضغط لمعرفة سبب هذا الإشعار", "delete": "حذف"
+  },
+  "empty": { "title": "📂 لا توجد قضايا", "subtitle": "أضف قضية جديدة أو ارفع ملف Excel", "addCase": "➕ إضافة قضية" },
+  "errors": {
+    "loadFailed": "تعذر تحميل القضايا",
+    "loadFailedFallback": "حاول تحديث الصفحة",
+    "retry": "إعادة المحاولة",
+    "createFailed": "❌ فشل إنشاء القضية: {{message}}",
+    "deleteFailed": "❌ فشل الحذف: {{message}}",
+    "uploadFailed": "❌ {{message}}",
+    "uploadFailedGeneric": "فشل رفع الملف",
+    "uploadThrew": "❌ فشل الرفع: {{message}}"
+  },
+  "deleteConfirm": "🗑️ هل أنت متأكد من حذف القضية #{{id}}؟",
+  "uploadSuccess": "✅ تم استيراد {{count}} قضية",
+  "pagination": {
+    "prev": "السابق", "next": "التالي",
+    "pageOf": "صفحة {{page}} من {{total}} ({{count}} قضية)",
+    "goToPage": "الذهاب لصفحة:", "go": "انتقال"
+  }
+}

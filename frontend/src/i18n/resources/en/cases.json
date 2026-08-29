@@ -1,1 +1,67 @@
-{}
+{
+  "title": "🗂️ Cases",
+  "count": "{{count}} cases",
+  "assignedOnlyBadge": "Only cases assigned to you",
+  "uploadExcel": "Upload Excel",
+  "newCase": "New Case",
+  "searchPlaceholder": "🔍 Search by case number or title...",
+  "filter": "Filter",
+  "status": { "open": "Open", "in_progress": "In Progress", "in_production": "In Production", "closed": "Closed" },
+  "statusEmoji": { "open": "🟦", "in_progress": "🟡", "in_production": "🎬", "closed": "🟢" },
+  "priority": { "high": "Urgent", "medium": "Medium", "low": "Low" },
+  "priorityEmoji": { "high": "🔴", "medium": "🟡", "low": "🟢" },
+  "agencyType": { "federal": "Federal", "state": "State", "municipal": "Municipal", "sheriff": "Sheriff" },
+  "activityType": {
+    "case_comment": "💬 New comment in team discussion",
+    "case_comment_mention": "📣 You were mentioned in a note",
+    "email_received": "📩 New mail arrived on the case",
+    "document_uploaded": "📎 A file was uploaded to the case"
+  },
+  "notStarted": "Not started",
+  "filterPanel": {
+    "status": "Status", "priority": "Priority", "agencies": "Agencies", "employees": "Employees", "classification": "Classification",
+    "from": "From", "to": "To", "datePlaceholder": "Date",
+    "resultCount": "🔎 {{count}}",
+    "clear": "Clear", "apply": "Apply filters",
+    "search": "Search...", "noResults": "No results", "selectedCount": "{{count}} selected"
+  },
+  "form": {
+    "heading": "📝 New Case",
+    "defendantName": "Defendant name *",
+    "agencyName": "Agency name",
+    "hook": "Hook",
+    "articleUrl": "Article link",
+    "summary": "Case summary",
+    "selectAgencies": "Select target agencies ({{count}})",
+    "noAgenciesYet": "No agencies yet",
+    "goToAgencies": "Go to Agencies page ←",
+    "avgResponseDays": "⏱ Avg. response: {{count}} days",
+    "selected": "✅ Selected",
+    "priorityLabel": "Priority",
+    "cancel": "Cancel",
+    "create": "✨ Create Case"
+  },
+  "table": {
+    "id": "#", "titleClassification": "📌 Title / Classification", "agencies": "🏛️ Agencies",
+    "status": "📊 Status", "priority": "⭐ Priority", "date": "📅 Date", "actions": "⚙️",
+    "notificationTooltip": "Click to see why", "delete": "Delete"
+  },
+  "empty": { "title": "📂 No cases", "subtitle": "Add a new case or upload an Excel file", "addCase": "➕ Add Case" },
+  "errors": {
+    "loadFailed": "Couldn't load cases",
+    "loadFailedFallback": "Try refreshing the page",
+    "retry": "Retry",
+    "createFailed": "❌ Failed to create case: {{message}}",
+    "deleteFailed": "❌ Failed to delete: {{message}}",
+    "uploadFailed": "❌ {{message}}",
+    "uploadFailedGeneric": "Failed to upload file",
+    "uploadThrew": "❌ Upload failed: {{message}}"
+  },
+  "deleteConfirm": "🗑️ Are you sure you want to delete case #{{id}}?",
+  "uploadSuccess": "✅ Imported {{count}} cases",
+  "pagination": {
+    "prev": "Previous", "next": "Next",
+    "pageOf": "Page {{page}} of {{total}} ({{count}} cases)",
+    "goToPage": "Go to page:", "go": "Go"
+  }
+}
