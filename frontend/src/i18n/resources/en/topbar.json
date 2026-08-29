@@ -1,0 +1,38 @@
+{
+  "menuTooltip": "Menu",
+  "theme": { "light": "Light mode", "dark": "Dark mode" },
+  "notifications": {
+    "tooltip": "Notifications",
+    "title": "Notifications",
+    "markAllRead": "Mark all as read",
+    "empty": "No notifications"
+  },
+  "timeAgo": {
+    "now": "Just now",
+    "minutes": "{{count}}m ago",
+    "hours": "{{count}}h ago",
+    "days": "{{count}}d ago"
+  },
+  "menu": {
+    "profile": "My profile",
+    "logout": "Log out",
+    "member": "Member"
+  },
+  "pageMeta": {
+    "dashboard": { "eyebrow": "Overview", "title": "Dashboard" },
+    "intake": { "eyebrow": "Smart tools", "title": "Smart Intake" },
+    "caseDetail": { "eyebrow": "Cases", "title": "Case Details" },
+    "cases": { "eyebrow": "Management", "title": "Cases" },
+    "pipeline": { "eyebrow": "Workflow", "title": "Pipeline" },
+    "productionLists": { "eyebrow": "System", "title": "Production Lists" },
+    "production": { "eyebrow": "Workflow", "title": "Production" },
+    "agencies": { "eyebrow": "Management", "title": "Agencies" },
+    "portals": { "eyebrow": "Management", "title": "Portals" },
+    "emailAccounts": { "eyebrow": "Management", "title": "Email Accounts" },
+    "teams": { "eyebrow": "Management", "title": "Teams" },
+    "themeSettings": { "eyebrow": "System", "title": "Colors & Theme" },
+    "settings": { "eyebrow": "System", "title": "Sidebar Order" },
+    "profile": { "eyebrow": "My account", "title": "Profile" },
+    "fallback": { "eyebrow": "FOIA OS", "title": "" }
+  }
+}

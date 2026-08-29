@@ -1,0 +1,28 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "intake": "Smart Intake",
+    "ai_assistant_chat": "AI Assistant",
+    "ai_assistant": "AI Connections",
+    "cases": "Cases",
+    "pipeline": "Pipeline",
+    "production": "Production",
+    "agencies": "Agencies",
+    "portals": "Portals",
+    "inbox": "Inbox",
+    "forum": "Forum",
+    "email_accounts": "Email Accounts",
+    "teams": "Teams",
+    "permissions": "Team & Permissions",
+    "gdrive": "Google Drive",
+    "phone_logs": "Call Log",
+    "mail_logs": "Physical Mail",
+    "production_lists": "Production Lists",
+    "theme_settings": "Colors & Theme",
+    "settings": "Settings"
+  },
+  "collapse": {
+    "expand": "Expand sidebar",
+    "collapse": "Collapse sidebar"
+  }
+}

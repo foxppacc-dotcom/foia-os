@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckCircle2, XCircle, Info, X } from 'lucide-react';
 
 const ToastContext = createContext(null);
@@ -11,6 +12,7 @@ const COLORS = {
 };
 
 export function ToastProvider({ children }) {
+  const { i18n } = useTranslation();
   const [toasts, setToasts] = useState([]);
   const idRef = useRef(0);
 
@@ -33,7 +35,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={toast}>
       {children}
-      <div className="fixed bottom-5 left-5 z-[100] flex flex-col gap-2 max-w-sm" dir="rtl">
+      <div className="fixed bottom-5 left-5 z-[100] flex flex-col gap-2 max-w-sm" dir={i18n.dir()}>
         {toasts.map(t => {
           const Icon = ICONS[t.type];
           const c = COLORS[t.type];

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { getApiBase } from '../api';
 import { Mail, Reply, Forward, Download, Paperclip, ExternalLink, Loader2, X, Send } from 'lucide-react';
 import EmailBodyView from '../components/EmailBodyView';
@@ -29,6 +30,10 @@ function formatSize(bytes) {
 // their place in the main list. Reply/forward are available right here so
 // opening the tab is a complete workflow, not just a read-only dead end.
 export default function MessageView() {
+  // Rendered standalone via window.open, outside the normal app shell --
+  // can't rely on inheriting <html>'s dir from App.jsx's own effect, so it
+  // binds directly to i18n's own current direction instead.
+  const { i18n } = useTranslation();
   const { id } = useParams();
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -128,7 +133,7 @@ export default function MessageView() {
   const attachments = msg.metadata?.attachments || [];
 
   return (
-    <div className="min-h-screen p-4 md:p-8" style={{ background: 'var(--ds-bg-primary)' }} dir="rtl">
+    <div className="min-h-screen p-4 md:p-8" style={{ background: 'var(--ds-bg-primary)' }} dir={i18n.dir()}>
       <div className="max-w-3xl mx-auto space-y-4">
         {sendSuccess && (
           <div className="px-3 py-2 rounded-lg text-xs font-medium" style={{ background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>

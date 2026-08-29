@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { FileText, ChevronRight, ChevronLeft, Settings as SettingsIcon } from 'lucide-react';
 import { api } from '../api';
 import { NAV_CATALOG } from '../navCatalog';
@@ -9,6 +10,8 @@ const COLLAPSED_WIDTH = 60;
 const STORAGE_KEY = 'foia_sidebar_collapsed';
 
 export default function Sidebar({ user, mobileOpen, onCloseMobile }) {
+  const { t, i18n } = useTranslation('sidebar');
+  const isRtl = i18n.dir() === 'rtl';
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem(STORAGE_KEY) === 'true'; }
     catch { return false; }
@@ -82,17 +85,19 @@ export default function Sidebar({ user, mobileOpen, onCloseMobile }) {
         <div className="fixed inset-0 z-30 md:hidden" style={{ background: 'rgba(0,0,0,0.4)' }} onClick={onCloseMobile} />
       )}
 
+      {/* Sits at the inline-START edge (right in RTL, left in LTR) --
+          App.jsx's content-area margin reserves space at the same logical
+          edge, so the two must always agree on which physical side that is. */}
       <aside
-        className={`fixed right-0 top-0 h-full flex flex-col z-40 transition-transform duration-200
-          ${mobileOpen ? 'translate-x-0' : 'translate-x-full'} md:translate-x-0`}
+        className={`fixed ${isRtl ? 'right-0' : 'left-0'} top-0 h-full flex flex-col z-40 transition-transform duration-200
+          ${mobileOpen ? 'translate-x-0' : isRtl ? 'translate-x-full' : '-translate-x-full'} md:translate-x-0`}
         style={{
           width: `${width}px`,
           background: 'var(--bg-secondary)',
-          borderLeft: '1px solid var(--border)',
+          [isRtl ? 'borderLeft' : 'borderRight']: '1px solid var(--border)',
           transition: 'width 0.2s ease',
           overflow: 'hidden',
         }}
-        dir="rtl"
         onMouseEnter={collapsed ? (e) => { e.currentTarget.style.width = `${EXPANDED_WIDTH}px`; } : undefined}
         onMouseLeave={collapsed ? (e) => { e.currentTarget.style.width = `${COLLAPSED_WIDTH}px`; } : undefined}>
 
@@ -115,7 +120,7 @@ export default function Sidebar({ user, mobileOpen, onCloseMobile }) {
             onClick={() => setCollapsed(c => !c)}
             className="hidden md:block p-1 rounded-md shrink-0 ds-transition-colors"
             style={{ color: 'var(--text-muted)' }}
-            title={collapsed ? 'توسيع الشريط الجانبي' : 'طي الشريط الجانبي'}>
+            title={collapsed ? t('sidebar:collapse.expand') : t('sidebar:collapse.collapse')}>
             {collapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </button>
         </div>
@@ -136,7 +141,7 @@ export default function Sidebar({ user, mobileOpen, onCloseMobile }) {
             permission (see RESOURCE_VIEW_NAV_KEYS on the backend). */}
         {isNavVisible({ key: 'settings' }) && (
           <div className="shrink-0 px-2.5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
-            <NavItemLink item={{ path: '/settings', label: 'الإعدادات', icon: SettingsIcon }} collapsed={collapsed} onNavigate={onCloseMobile} />
+            <NavItemLink item={{ path: '/settings', key: 'settings', icon: SettingsIcon }} collapsed={collapsed} onNavigate={onCloseMobile} />
           </div>
         )}
       </aside>
@@ -145,6 +150,8 @@ export default function Sidebar({ user, mobileOpen, onCloseMobile }) {
 }
 
 function NavItemLink({ item, collapsed, onNavigate }) {
+  const { t } = useTranslation('sidebar');
+  const label = t(`sidebar:nav.${item.key}`);
   return (
     <NavLink
       to={item.path}
@@ -174,9 +181,9 @@ function NavItemLink({ item, collapsed, onNavigate }) {
           e.currentTarget.style.color = 'var(--text-secondary)';
         }
       }}
-      title={collapsed ? item.label : undefined}>
+      title={collapsed ? label : undefined}>
       <item.icon className="w-[18px] h-[18px] shrink-0" />
-      {!collapsed && <span className="text-xs">{item.label}</span>}
+      {!collapsed && <span className="text-xs">{label}</span>}
     </NavLink>
   );
 }

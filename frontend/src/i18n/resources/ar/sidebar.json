@@ -1,0 +1,28 @@
+{
+  "nav": {
+    "dashboard": "لوحة التحكم",
+    "intake": "استقبال ذكي",
+    "ai_assistant_chat": "المساعد الذكي",
+    "ai_assistant": "الربط الذكي",
+    "cases": "القضايا",
+    "pipeline": "خط الإنتاج",
+    "production": "مونتاج",
+    "agencies": "الجهات",
+    "portals": "بوابات",
+    "inbox": "صندوق البريد",
+    "forum": "المنتدى العام",
+    "email_accounts": "إيميلات",
+    "teams": "الفرق",
+    "permissions": "فريق العمل",
+    "gdrive": "Google Drive",
+    "phone_logs": "سجل المكالمات",
+    "mail_logs": "البريد الفعلي",
+    "production_lists": "إدارة قوائم الإنتاج",
+    "theme_settings": "الألوان والثيم",
+    "settings": "الإعدادات"
+  },
+  "collapse": {
+    "expand": "توسيع الشريط الجانبي",
+    "collapse": "طي الشريط الجانبي"
+  }
+}

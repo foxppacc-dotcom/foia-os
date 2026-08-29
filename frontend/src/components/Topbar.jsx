@@ -1,40 +1,42 @@
 import { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { Sun, Moon, Bell, UserCircle, LogOut, ChevronDown, Menu } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Sun, Moon, Bell, UserCircle, LogOut, ChevronDown, Menu, Languages } from 'lucide-react';
 import { api } from '../api';
-
-function timeAgo(dateStr) {
-  const diffMs = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return 'الآن';
-  if (mins < 60) return `منذ ${mins} د`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `منذ ${hrs} س`;
-  return `منذ ${Math.floor(hrs / 24)} يوم`;
-}
+import { LANG_KEY } from '../i18n';
 
 const PAGE_META = [
-  { test: p => p === '/', eyebrow: 'نظرة عامة', title: 'لوحة التحكم' },
-  { test: p => p.startsWith('/intake'), eyebrow: 'أدوات ذكية', title: 'استقبال ذكي' },
-  { test: p => /^\/cases\/\d+/.test(p), eyebrow: 'القضايا', title: 'تفاصيل القضية' },
-  { test: p => p.startsWith('/cases'), eyebrow: 'إدارة', title: 'القضايا' },
-  { test: p => p.startsWith('/pipeline'), eyebrow: 'سير العمل', title: 'خط الإنتاج' },
-  { test: p => p.startsWith('/production-lists'), eyebrow: 'النظام', title: 'إدارة قوائم الإنتاج' },
-  { test: p => p.startsWith('/production'), eyebrow: 'سير العمل', title: 'مونتاج' },
-  { test: p => p.startsWith('/agencies'), eyebrow: 'إدارة', title: 'الجهات' },
-  { test: p => p.startsWith('/portals'), eyebrow: 'إدارة', title: 'البوابات الإلكترونية' },
-  { test: p => p.startsWith('/email-accounts'), eyebrow: 'إدارة', title: 'حسابات البريد' },
-  { test: p => p.startsWith('/teams'), eyebrow: 'إدارة', title: 'الفرق' },
-  { test: p => p.startsWith('/theme-settings'), eyebrow: 'النظام', title: 'الألوان والثيم' },
-  { test: p => p.startsWith('/settings'), eyebrow: 'النظام', title: 'ترتيب القائمة الجانبية' },
-  { test: p => p.startsWith('/profile'), eyebrow: 'حسابي', title: 'الملف الشخصي' },
+  { test: p => p === '/', key: 'dashboard' },
+  { test: p => p.startsWith('/intake'), key: 'intake' },
+  { test: p => /^\/cases\/\d+/.test(p), key: 'caseDetail' },
+  { test: p => p.startsWith('/cases'), key: 'cases' },
+  { test: p => p.startsWith('/pipeline'), key: 'pipeline' },
+  { test: p => p.startsWith('/production-lists'), key: 'productionLists' },
+  { test: p => p.startsWith('/production'), key: 'production' },
+  { test: p => p.startsWith('/agencies'), key: 'agencies' },
+  { test: p => p.startsWith('/portals'), key: 'portals' },
+  { test: p => p.startsWith('/email-accounts'), key: 'emailAccounts' },
+  { test: p => p.startsWith('/teams'), key: 'teams' },
+  { test: p => p.startsWith('/theme-settings'), key: 'themeSettings' },
+  { test: p => p.startsWith('/settings'), key: 'settings' },
+  { test: p => p.startsWith('/profile'), key: 'profile' },
 ];
 
-function getPageMeta(pathname) {
-  return PAGE_META.find(m => m.test(pathname)) || { eyebrow: 'FOIA OS', title: '' };
+function getPageMetaKey(pathname) {
+  return PAGE_META.find(m => m.test(pathname))?.key || 'fallback';
 }
 
-export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick }) {
+export default function Topbar({ user, onLogout, theme, toggleTheme, lang, toggleLang, onMenuClick }) {
+  const { t } = useTranslation(['topbar', 'common']);
+  const timeAgo = (dateStr) => {
+    const diffMs = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return t('topbar:timeAgo.now');
+    if (mins < 60) return t('topbar:timeAgo.minutes', { count: mins });
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return t('topbar:timeAgo.hours', { count: hrs });
+    return t('topbar:timeAgo.days', { count: Math.floor(hrs / 24) });
+  };
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -44,7 +46,8 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
   const [roleLabel, setRoleLabel] = useState(null);
   const menuRef = useRef(null);
   const notifRef = useRef(null);
-  const meta = getPageMeta(pathname);
+  const metaKey = getPageMetaKey(pathname);
+  const meta = { eyebrow: t(`topbar:pageMeta.${metaKey}.eyebrow`), title: t(`topbar:pageMeta.${metaKey}.title`) };
 
   // Guards against a slow poll's response landing AFTER a later, faster
   // poll's response -- without this, the stale one would silently overwrite
@@ -125,7 +128,7 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
         <button onClick={onMenuClick} className="md:hidden p-2 rounded-xl shrink-0 transition-colors" style={{ color: 'var(--text-secondary)' }}
           onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
           onMouseOut={e => e.currentTarget.style.background = 'transparent'}
-          title="القائمة">
+          title={t('topbar:menuTooltip')}>
           <Menu className="w-5 h-5" />
         </button>
         <div className="min-w-0">
@@ -138,15 +141,26 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
         <button onClick={toggleTheme} className="p-2.5 rounded-xl transition-colors" style={{ color: 'var(--text-secondary)' }}
           onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
           onMouseOut={e => e.currentTarget.style.background = 'transparent'}
-          title={theme === 'dark' ? 'الوضع الفاتح' : 'الوضع الداكن'}>
+          title={theme === 'dark' ? t('topbar:theme.light') : t('topbar:theme.dark')}>
           {theme === 'dark' ? <Sun className="w-4.5 h-4.5" /> : <Moon className="w-4.5 h-4.5" />}
+        </button>
+
+        <button onClick={toggleLang} className="p-2.5 rounded-xl transition-colors flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}
+          onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
+          onMouseOut={e => e.currentTarget.style.background = 'transparent'}
+          title={lang === 'ar' ? 'Switch to English' : 'التبديل إلى العربية'}>
+          <Languages className="w-4.5 h-4.5" />
+          {/* Shows the OTHER language's own name (what you'd switch TO) --
+              deliberately never run through t(), since this label IS a
+              language's name for itself, not app content. */}
+          <span className="text-xs font-medium hidden sm:inline">{lang === 'ar' ? 'English' : 'العربية'}</span>
         </button>
 
         <div className="relative" ref={notifRef}>
           <button onClick={() => setNotifOpen(o => !o)} className="p-2.5 rounded-xl transition-colors relative" style={{ color: 'var(--text-secondary)' }}
             onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
             onMouseOut={e => e.currentTarget.style.background = 'transparent'}
-            title="الإشعارات">
+            title={t('topbar:notifications.tooltip')}>
             <Bell className="w-4.5 h-4.5" />
             {unreadCount > 0 && (
               <span className="absolute top-1 left-1 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold flex items-center justify-center"
@@ -158,14 +172,14 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
             <div className="absolute left-0 top-full mt-2 w-80 rounded-2xl border py-1.5 animate-scaleIn z-30 max-h-[420px] overflow-y-auto"
               style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', boxShadow: 'var(--shadow-lg)' }}>
               <div className="flex items-center justify-between px-3.5 py-2">
-                <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>الإشعارات</span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{t('topbar:notifications.title')}</span>
                 {unreadCount > 0 && (
-                  <button onClick={markAllRead} className="text-[10px]" style={{ color: 'var(--accent)' }}>تعليم الكل كمقروء</button>
+                  <button onClick={markAllRead} className="text-[10px]" style={{ color: 'var(--accent)' }}>{t('topbar:notifications.markAllRead')}</button>
                 )}
               </div>
               <div style={{ borderTop: '1px solid var(--border)' }} />
               {notifications.length === 0 ? (
-                <div className="px-3.5 py-6 text-center text-xs" style={{ color: 'var(--text-muted)' }}>لا توجد إشعارات</div>
+                <div className="px-3.5 py-6 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{t('topbar:notifications.empty')}</div>
               ) : notifications.map(n => (
                 <button key={n.id} onClick={() => openNotification(n)}
                   className="w-full text-right px-3.5 py-2.5 transition-colors block"
@@ -192,7 +206,7 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
             <div className="text-right hidden sm:block">
               <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{user?.name}</p>
               <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                {roleLabel || (user?.role === 'admin' ? 'مدير النظام' : user?.role === 'manager' ? 'مدير' : 'عضو')}
+                {roleLabel || (user?.role === 'admin' ? t('common:roles.admin') : user?.role === 'manager' ? t('common:roles.manager') : t('topbar:menu.member'))}
               </p>
             </div>
             <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>
@@ -207,14 +221,14 @@ export default function Topbar({ user, onLogout, theme, toggleTheme, onMenuClick
                 className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm transition-colors" style={{ color: 'var(--text-secondary)' }}
                 onMouseOver={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
                 onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
-                <UserCircle className="w-4 h-4" /> ملفي الشخصي
+                <UserCircle className="w-4 h-4" /> {t('topbar:menu.profile')}
               </Link>
               <div className="my-1.5" style={{ borderTop: '1px solid var(--border)' }} />
               <button onClick={onLogout}
                 className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm w-full transition-colors" style={{ color: 'var(--danger)' }}
                 onMouseOver={e => e.currentTarget.style.background = 'var(--danger-subtle)'}
                 onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
-                <LogOut className="w-4 h-4" /> تسجيل خروج
+                <LogOut className="w-4 h-4" /> {t('topbar:menu.logout')}
               </button>
             </div>
           )}

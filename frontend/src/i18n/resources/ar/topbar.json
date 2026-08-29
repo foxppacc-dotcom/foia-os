@@ -1,0 +1,38 @@
+{
+  "menuTooltip": "القائمة",
+  "theme": { "light": "الوضع الفاتح", "dark": "الوضع الداكن" },
+  "notifications": {
+    "tooltip": "الإشعارات",
+    "title": "الإشعارات",
+    "markAllRead": "تعليم الكل كمقروء",
+    "empty": "لا توجد إشعارات"
+  },
+  "timeAgo": {
+    "now": "الآن",
+    "minutes": "منذ {{count}} د",
+    "hours": "منذ {{count}} س",
+    "days": "منذ {{count}} يوم"
+  },
+  "menu": {
+    "profile": "ملفي الشخصي",
+    "logout": "تسجيل خروج",
+    "member": "عضو"
+  },
+  "pageMeta": {
+    "dashboard": { "eyebrow": "نظرة عامة", "title": "لوحة التحكم" },
+    "intake": { "eyebrow": "أدوات ذكية", "title": "استقبال ذكي" },
+    "caseDetail": { "eyebrow": "القضايا", "title": "تفاصيل القضية" },
+    "cases": { "eyebrow": "إدارة", "title": "القضايا" },
+    "pipeline": { "eyebrow": "سير العمل", "title": "خط الإنتاج" },
+    "productionLists": { "eyebrow": "النظام", "title": "إدارة قوائم الإنتاج" },
+    "production": { "eyebrow": "سير العمل", "title": "مونتاج" },
+    "agencies": { "eyebrow": "إدارة", "title": "الجهات" },
+    "portals": { "eyebrow": "إدارة", "title": "البوابات الإلكترونية" },
+    "emailAccounts": { "eyebrow": "إدارة", "title": "حسابات البريد" },
+    "teams": { "eyebrow": "إدارة", "title": "الفرق" },
+    "themeSettings": { "eyebrow": "النظام", "title": "الألوان والثيم" },
+    "settings": { "eyebrow": "النظام", "title": "ترتيب القائمة الجانبية" },
+    "profile": { "eyebrow": "حسابي", "title": "الملف الشخصي" },
+    "fallback": { "eyebrow": "FOIA OS", "title": "" }
+  }
+}
