@@ -3,6 +3,14 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Plus, Trash2, User, RefreshCw, FolderOpen, Calendar, ChevronDown, AlertTriangle } from 'lucide-react';
 
+// The backend now rejects a non-http(s) drive_folder_link at write time,
+// but this still guards render-time too -- against any row written before
+// that fix -- since rendering it as a real <a href> would execute it in
+// this origin the moment anyone clicks.
+function isSafeHref(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+}
+
 const statusConfig = {
   pending:      { label: 'معلق',       emoji: '🟡', color: 'var(--warning)' },
   in_progress:  { label: 'قيد التنفيذ', emoji: '🔵', color: '#3B82F6' },
@@ -301,7 +309,7 @@ export default function Production() {
                 </div>
 
                 {/* Drive link */}
-                {item.drive_folder_link && (
+                {item.drive_folder_link && isSafeHref(item.drive_folder_link) && (
                   <a
                     href={item.drive_folder_link}
                     target="_blank"

@@ -2,6 +2,14 @@ import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { Plus, Search, Globe, Trash2, Eye, EyeOff, KeyRound } from 'lucide-react';
 
+// The backend now rejects a non-http(s) portal_url at write time, but this
+// still guards render-time too -- against any row written before that fix
+// -- since rendering it as a real <a href> would execute it in this origin
+// the moment anyone clicks.
+function isSafeHref(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+}
+
 export default function Portals() {
   const [portals, setPortals] = useState([]);
   const [agencies, setAgencies] = useState([]);
@@ -159,9 +167,11 @@ export default function Portals() {
                   </div>
                   <div className="min-w-0">
                     <h3 className="text-sm font-semibold text-white truncate">{p.portal_name}</h3>
-                    <a href={p.portal_url} target="_blank" rel="noopener noreferrer" className="text-[11px] var(--accent) hover:underline truncate block">
-                      {p.portal_url}
-                    </a>
+                    {isSafeHref(p.portal_url) && (
+                      <a href={p.portal_url} target="_blank" rel="noopener noreferrer" className="text-[11px] var(--accent) hover:underline truncate block">
+                        {p.portal_url}
+                      </a>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">

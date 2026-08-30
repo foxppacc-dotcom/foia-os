@@ -31,14 +31,27 @@ async function getEmployeeCaseActivity(sup, userId, caseIds) {
     row.hasActivity = true;
     if (!row.lastActivityAt || new Date(at) > new Date(row.lastActivityAt)) row.lastActivityAt = at;
   };
+  // activity_logs is the largest, continuously-growing table in this system
+  // (see migration 016's own note) -- a veteran employee with hundreds of
+  // cases and years of history would otherwise pull their ENTIRE activity
+  // trail on every single profile view, with no bound at all. Ordering by
+  // most-recent-first and capping means a case only misses its hasActivity
+  // flag if literally none of a user's last 5000 logged actions across
+  // their WHOLE caseload touched it -- an acceptable edge for a soft
+  // performance signal, not a hard security check, matching the same
+  // bounded-lookback tradeoff mailPoller.js's sender_continuity tier
+  // already accepts against this same table.
+  const ACTIVITY_LOOKBACK_LIMIT = 5000;
   try {
     const { data: logs } = await sup.from('activity_logs')
-      .select('target_id, created_at').eq('user_id', userId).eq('target_type', 'case').in('target_id', caseIds);
+      .select('target_id, created_at').eq('user_id', userId).eq('target_type', 'case').in('target_id', caseIds)
+      .order('created_at', { ascending: false }).limit(ACTIVITY_LOOKBACK_LIMIT);
     for (const row of logs || []) bump(row.target_id, row.created_at);
   } catch (e) { /* index/table may not be migrated in yet */ }
   try {
     const { data: comments } = await sup.from('case_comments')
-      .select('case_id, created_at').eq('user_id', userId).in('case_id', caseIds);
+      .select('case_id, created_at').eq('user_id', userId).in('case_id', caseIds)
+      .order('created_at', { ascending: false }).limit(ACTIVITY_LOOKBACK_LIMIT);
     for (const row of comments || []) bump(row.case_id, row.created_at);
   } catch (e) { /* case_comments.user_id may not be indexed yet */ }
   return activity;

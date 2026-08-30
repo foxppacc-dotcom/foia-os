@@ -5,6 +5,16 @@ import { Plus, Search, Upload, Trash2, Edit3, Save, X, Users, ChevronDown } from
 const BLANK_FORM = { name_en: '', name_ar: '', state: '', city: '', type: '', email: '', phone: '', portal_url: '', website: '', tracking_portal_url: '', notes: '' };
 const BLANK_CONTACT = { name: '', title: '', email: '', phone: '', extension: '', department: '', preferred_contact: 'email' };
 
+// The backend now rejects a non-http(s) URL for these fields at write time,
+// but this still guards render-time too -- against any row written before
+// that fix -- since rendering it as a real <a href> would execute it in
+// this origin the moment anyone clicks, and target="_blank" alone (no
+// rel="noopener noreferrer") also let the opened page reach back via
+// window.opener.
+function isSafeHref(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+}
+
 function ContactsSection({ agency, onChanged }) {
   const [expanded, setExpanded] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -284,9 +294,9 @@ export default function Agencies() {
                     {(a.city || a.state) && <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>📍 {[a.city, a.state].filter(Boolean).join(', ')}</p>}
                     {a.email && <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>📧 {a.email}</p>}
                     {a.phone && <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>📞 {a.phone}</p>}
-                    {a.portal_url && <a href={a.portal_url} target="_blank" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>🔗 بوابة الطلبات: {a.portal_url}</a>}
-                    {a.website && <a href={a.website} target="_blank" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>🌐 الموقع الرسمي: {a.website}</a>}
-                    {a.tracking_portal_url && <a href={a.tracking_portal_url} target="_blank" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>📍 متابعة الطلب: {a.tracking_portal_url}</a>}
+                    {a.portal_url && isSafeHref(a.portal_url) && <a href={a.portal_url} target="_blank" rel="noopener noreferrer" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>🔗 بوابة الطلبات: {a.portal_url}</a>}
+                    {a.website && isSafeHref(a.website) && <a href={a.website} target="_blank" rel="noopener noreferrer" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>🌐 الموقع الرسمي: {a.website}</a>}
+                    {a.tracking_portal_url && isSafeHref(a.tracking_portal_url) && <a href={a.tracking_portal_url} target="_blank" rel="noopener noreferrer" className="text-[11px] inline-block truncate max-w-full" style={{ color: 'var(--accent)' }}>📍 متابعة الطلب: {a.tracking_portal_url}</a>}
                   </div>
                   <ContactsSection agency={a} onChanged={fetchAgencies} />
                 </>

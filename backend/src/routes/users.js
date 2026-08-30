@@ -86,8 +86,18 @@ router.put('/users/:id', requirePermission('users', 'edit'), async (req, res) =>
   const { name, email, password, role, team_id, is_active } = req.body;
   const sup = getSupabase();
 
-  const { data: user } = await sup.from('users').select('id').eq('id', parseInt(req.params.id)).single();
+  const { data: user } = await sup.from('users').select('id, role').eq('id', parseInt(req.params.id)).single();
   if (!user) return res.status(404).json({ error: 'User not found' });
+
+  // Same reasoning as the role-change gate below: a non-admin role granted
+  // `users:edit` for ordinary team-management (name/email/team/status)
+  // could otherwise set a NEW PASSWORD on an admin account and log in as
+  // them -- a full privilege escalation this permission was never meant to
+  // grant. Resetting an ordinary (non-admin) user's password stays allowed
+  // for `users:edit` -- that's the legitimate day-to-day use case.
+  if (password && user.role === 'admin' && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden — تغيير كلمة مرور حساب مسؤول متاح فقط للمسؤول (admin)' });
+  }
 
   if (role) {
     // `users:edit` is grantable to any custom role for ordinary
@@ -128,8 +138,14 @@ router.post('/users/:id/reset-password', requirePermission('users', 'edit'), asy
   const { password } = req.body;
   if (!password || password.length < 6) return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 6 أحرف' });
   const sup = getSupabase();
-  const { data: user } = await sup.from('users').select('id').eq('id', parseInt(req.params.id)).maybeSingle();
+  const { data: user } = await sup.from('users').select('id, role').eq('id', parseInt(req.params.id)).maybeSingle();
   if (!user) return res.status(404).json({ error: 'User not found' });
+  // Same admin-account carve-out as PUT /users/:id above -- a non-admin
+  // role granted `users:edit` could otherwise reset an admin's password
+  // and log in as them.
+  if (user.role === 'admin' && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden — تغيير كلمة مرور حساب مسؤول متاح فقط للمسؤول (admin)' });
+  }
   const hash = bcrypt.hashSync(password, 10);
   const { error } = await sup.from('users').update({ password_hash: hash }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });

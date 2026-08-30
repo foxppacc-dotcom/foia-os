@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { encrypt, decrypt } = require('../services/crypto');
+const { isSafeLinkUrl } = require('../services/urlSafety');
 
 // ============ PORTAL CREDENTIALS MANAGEMENT ============
 
@@ -44,6 +45,10 @@ router.post('/portals', requireAuth, requireRole('admin', 'manager'), async (req
   if (!portal_name || !username || !password) {
     return res.status(400).json({ error: 'portal_name, username, password مطلوبون' });
   }
+  // portal_url is rendered as a real <a href> on the Portals page with no
+  // sanitization at render time -- a stored javascript:/data: URI would
+  // execute in the app's own origin the moment anyone clicks it.
+  if (portal_url && !isSafeLinkUrl(portal_url)) return res.status(400).json({ error: 'رابط البوابة غير صالح -- يجب أن يبدأ بـ http:// أو https://' });
 
   const { data, error } = await sup.from('portal_credentials').insert({
     agency_id: agency_id ? parseInt(agency_id) : null,
@@ -84,6 +89,7 @@ router.put('/portals/:id', requireAuth, requireRole('admin'), async (req, res) =
   const sup = getSupabase();
   const id = parseInt(req.params.id);
   const { agency_id, portal_name, portal_url, username, password, registered_email, notes, is_active } = req.body;
+  if (portal_url && !isSafeLinkUrl(portal_url)) return res.status(400).json({ error: 'رابط البوابة غير صالح -- يجب أن يبدأ بـ http:// أو https://' });
 
   const updates = { updated_at: new Date().toISOString() };
   if (agency_id !== undefined) updates.agency_id = agency_id || null;

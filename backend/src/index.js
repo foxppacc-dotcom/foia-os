@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const { getSupabase } = require('./supabase');
 const CONFIG = require('./config');
 const storage = require('./services/storage');
+const { requireAuth, requireRole } = require('./middleware/auth');
 
 const app = express();
 app.use(cors());
@@ -59,7 +60,16 @@ const routes = [
 // it resolves before any blanket-requireAuth router can shadow it.
 const working = [];
 const failed = [];
-app.get('/api/debug/routes', (req, res) => {
+// Was reachable by anyone on the public internet with no gate at all --
+// `failed` includes each broken router's raw error.message (missing env
+// vars, module load failures), which is internal service/config health
+// nobody outside the team should see. Unlike the OAuth callback / cron
+// routes above, this one is only ever meant to be opened by an admin
+// actually using the app -- they always have a real Bearer JWT, so it can
+// use the normal requireAuth/requireRole gate directly (registering it
+// here, ahead of the other routers, is only so it can see the `working`/
+// `failed` closure variables populated below -- unrelated to auth).
+app.get('/api/debug/routes', requireAuth, requireRole('admin'), (req, res) => {
   res.json({ working, failed, totalRoutes: routes.length + 2 });
 });
 try {

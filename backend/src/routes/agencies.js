@@ -6,6 +6,19 @@ const path = require('path');
 const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const gdrive = require('../services/googleDriveService');
+const { isSafeLinkUrl } = require('../services/urlSafety');
+// Same class of bug already fixed in forum.js/cases.js's link_url fields --
+// these columns are rendered verbatim as a real <a href> on the Agencies/
+// Portals pages with no sanitization at render time, so a stored
+// javascript:/data: URI would execute in the app's own origin the moment
+// any teammate clicks it. Blank/undefined stays allowed (all optional);
+// only a NON-EMPTY value must be a real http(s) link.
+function firstUnsafeUrl(fields) {
+  for (const [name, value] of Object.entries(fields)) {
+    if (value && !isSafeLinkUrl(value)) return name;
+  }
+  return null;
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -68,7 +81,11 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
         type: row[colMap.type] ? String(row[colMap.type]).trim() : null,
         email: row[colMap.email] ? String(row[colMap.email]).trim() : null,
         phone: row[colMap.phone] ? String(row[colMap.phone]).trim() : null,
-        portal_url: row[colMap.portal_url] ? String(row[colMap.portal_url]).trim() : null,
+        // Drop rather than fail the whole row -- a bulk import shouldn't
+        // let one bad spreadsheet cell block dozens of legitimate agencies,
+        // but a javascript:/data: URI in an uploaded column must not reach
+        // storage silently either.
+        portal_url: (row[colMap.portal_url] && isSafeLinkUrl(String(row[colMap.portal_url]).trim())) ? String(row[colMap.portal_url]).trim() : null,
         notes: row[colMap.notes] ? String(row[colMap.notes]).trim() : null
       });
       // Was never checked -- imported++ ran regardless, so "تم استيراد X
@@ -169,6 +186,8 @@ router.post('/agencies', requireAuth, requirePermission('agencies', 'create'), a
   const sup = getSupabase();
   const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, reply_to, default_email_account_id, website, tracking_portal_url } = req.body;
   if (!name_en) return res.status(400).json({ error: 'name_en (English name) مطلوب' });
+  const badUrlField = firstUnsafeUrl({ portal_url, website, tracking_portal_url });
+  if (badUrlField) return res.status(400).json({ error: `رابط غير صالح في ${badUrlField} -- يجب أن يبدأ بـ http:// أو https://` });
 
   const { data: existing } = await sup.from('agencies').select('id').eq('name_en', name_en).maybeSingle();
   if (existing) return res.status(409).json({ error: 'هذه الجهة موجودة مسبقاً' });
@@ -208,6 +227,8 @@ router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), 
 
   const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, is_active, reply_to, default_email_account_id, website, tracking_portal_url,
     primary_email, secondary_emails, preferred_contact, assigned_email_account_id, average_response_days, last_communication } = req.body;
+  const badUrlField = firstUnsafeUrl({ portal_url, website, tracking_portal_url });
+  if (badUrlField) return res.status(400).json({ error: `رابط غير صالح في ${badUrlField} -- يجب أن يبدأ بـ http:// أو https://` });
 
   const updates = {};
   if (name_ar !== undefined) updates.name_ar = name_ar;

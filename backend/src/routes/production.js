@@ -4,6 +4,7 @@ const { requireAuth, requireRole, requirePermission } = require('../middleware/a
 const { getSupabase } = require('../supabase');
 const { notifyUsers, getCaseRecipients } = require('../services/notificationService');
 const { canViewAllCases, getVisibleCaseIds, canAccessCase } = require('../services/caseAccess');
+const { isSafeLinkUrl } = require('../services/urlSafety');
 
 // ============ PRODUCTION / MONTAGE QUEUE ============
 
@@ -147,7 +148,14 @@ router.put('/production/:id', requireAuth, requirePermission('production', 'edit
     if (assigned_to !== undefined) updates.assigned_to = assigned_to ? parseInt(assigned_to) : null;
     if (priority) updates.priority = priority;
     if (notes !== undefined) updates.notes = notes;
-    if (drive_folder_link !== undefined) updates.drive_folder_link = drive_folder_link;
+    // Client-supplied here (unlike the server-derived link on creation) --
+    // rendered as a real <a href> on the Production page with no
+    // sanitization, so a stored javascript:/data: URI would execute in
+    // this origin the moment anyone clicks it.
+    if (drive_folder_link !== undefined) {
+      if (drive_folder_link && !isSafeLinkUrl(drive_folder_link)) return res.status(400).json({ error: 'رابط غير صالح -- يجب أن يبدأ بـ http:// أو https://' });
+      updates.drive_folder_link = drive_folder_link || null;
+    }
 
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields to update' });
 
