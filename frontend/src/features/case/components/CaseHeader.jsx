@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, Calendar, MapPin, Shield, Users, FileText, Building2, Activity, CheckCircle, UserPlus, Package, XCircle, ArrowUpCircle, Send, Upload, Eye, Trash2, AlertTriangle } from 'lucide-react';
+import { ArrowRight, Calendar, MapPin, Shield, Users, FileText, Building2, Activity, CheckCircle, UserPlus, Package, XCircle, ArrowUpCircle, Send, Upload, Eye, Trash2, AlertTriangle, RotateCcw } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import AppBadge from '../../../components/ds/AppBadge';
 import { EvidenceStageBadge } from './EvidenceStageBadge';
@@ -85,6 +85,16 @@ export default memo(function CaseHeader() {
     refetch?.();
   };
 
+  // Reopening returns the case to active work (in_progress), not back to
+  // "open" -- "open" reads as brand-new/untouched, while a case that was
+  // already worked on and closed is more accurately "back in progress"
+  // when reopened.
+  const handleReopen = async () => {
+    if (!window.confirm(`هل تريد استعادة القضية "${c.title}" وإرجاعها للعمل؟`)) return;
+    await fetch(`${API}/cases/${caseId}`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ status: 'in_progress' }) });
+    refetch?.();
+  };
+
   const handleDelete = async () => {
     if (!window.confirm(`⚠️ حذف نهائي — هل أنت متأكد من حذف القضية "${c.title}" بكل بياناتها (المستندات، المراسلات، الفريق)؟ لا يمكن التراجع عن هذا الإجراء.`)) return;
     setDeleting(true);
@@ -115,7 +125,11 @@ export default memo(function CaseHeader() {
           <Button variant="ghost" size="sm" title="توثيق" onClick={() => setActiveTab?.('checklist')}><Eye className="w-3.5 h-3.5" /></Button>
           <Button variant="ghost" size="sm" title="تجهيز الحزمة (مونتاج)" onClick={() => navigate(`/production?case_id=${caseId}`)}><Package className="w-3.5 h-3.5" /></Button>
           <Button variant="ghost" size="sm" title="نقل الملكية" onClick={() => setShowTransfer(!showTransfer)}><ArrowUpCircle className="w-3.5 h-3.5" /></Button>
-          <Button variant="ghost" size="sm" title="إغلاق القضية" onClick={handleClose} disabled={c.status === 'closed'}><XCircle className="w-3.5 h-3.5" style={{ color: 'var(--ds-danger)' }} /></Button>
+          {c.status === 'closed' ? (
+            <Button variant="ghost" size="sm" title="استعادة القضية وإرجاعها للعمل" onClick={handleReopen}><RotateCcw className="w-3.5 h-3.5" style={{ color: 'var(--ds-success)' }} /></Button>
+          ) : (
+            <Button variant="ghost" size="sm" title="إغلاق القضية" onClick={handleClose}><XCircle className="w-3.5 h-3.5" style={{ color: 'var(--ds-danger)' }} /></Button>
+          )}
           {canDelete && (
             <Button variant="ghost" size="sm" title="حذف القضية نهائيًا" onClick={handleDelete} disabled={deleting}><Trash2 className="w-3.5 h-3.5" style={{ color: 'var(--ds-danger)' }} /></Button>
           )}
