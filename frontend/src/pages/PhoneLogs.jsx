@@ -58,7 +58,10 @@ export default function PhoneLogs() {
   const deleteLog = async (id) => {
     if (!confirm('هل أنت متأكد من حذف هذه المكالمة؟')) return;
     try {
-      await api.delete(`/cases/${selectedCaseId}/phone-logs/${id}`);
+      // Backend only ever registered this as DELETE /phone-logs/:id (no case
+      // prefix -- it looks up the row's own case_id to check access), never
+      // /cases/:caseId/phone-logs/:id -- this button 404'd every single time.
+      await api.delete(`/phone-logs/${id}`);
       fetchLogs(selectedCaseId);
     } catch (err) { alert('فشل حذف المكالمة: ' + err.message); }
   };
@@ -165,7 +168,7 @@ export default function PhoneLogs() {
                               color: log.direction === 'inbound' ? '#3B82F6' : '#10B981',
                               borderColor: log.direction === 'inbound' ? 'rgba(59,130,246,0.2)' : 'rgba(16,185,129,0.2)',
                             }}>
-                            📥 {log.direction === 'inbound' ? 'وارد' : '📤 صادر'}
+                            {log.direction === 'inbound' ? '📥 وارد' : '📤 صادر'}
                           </span>
                         </div>
                         <p className="text-xs mt-0.5 font-mono" style={{ color: 'var(--text-secondary)' }}>{log.caller_number}</p>

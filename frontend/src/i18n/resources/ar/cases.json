@@ -39,7 +39,8 @@
     "selected": "✅ مختار",
     "priorityLabel": "الأهمية",
     "cancel": "إلغاء",
-    "create": "✨ إنشاء القضية"
+    "create": "✨ إنشاء القضية",
+    "creating": "جارٍ الحفظ..."
   },
   "table": {
     "id": "#", "titleClassification": "📌 العنوان / التصنيف", "agencies": "🏛️ الجهات",
@@ -57,7 +58,7 @@
     "uploadFailedGeneric": "فشل رفع الملف",
     "uploadThrew": "❌ فشل الرفع: {{message}}"
   },
-  "deleteConfirm": "🗑️ هل أنت متأكد من حذف القضية #{{id}}؟",
+  "deleteConfirm": "🗑️ سيتم نقل القضية #{{id}} إلى سلة المحذوفات -- يمكن استعادتها لاحقًا من هناك. هل تريد المتابعة؟",
   "uploadSuccess": "✅ تم استيراد {{count}} قضية",
   "pagination": {
     "prev": "السابق", "next": "التالي",

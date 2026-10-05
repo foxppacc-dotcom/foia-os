@@ -2,6 +2,8 @@
 // Captures investigative knowledge within existing architecture.
 // No new engines. Uses InformationRequirementEngine + existing fields.
 
+import { formatArabicDate } from '../../utils/formatDate';
+
 export const KNOWLEDGE_TYPES = {
   finding: { ar: 'اكتشاف', en: 'Finding', icon: '💡' },
   observation: { ar: 'ملاحظة', en: 'Observation', icon: '👁️' },
@@ -92,7 +94,7 @@ export function buildKnowledgeTimeline(activities = []) {
       date: a.timestamp || a.created_at,
       type: a.type === 'evidence_stage_changed' ? 'knowledge' : 'activity',
       title: a.title || a.target_title,
-      description: `${a.user_name || 'System'} · ${new Date(a.timestamp || a.created_at).toLocaleDateString('ar-SA')}`,
+      description: `${a.user_name || 'System'} · ${formatArabicDate(a.timestamp || a.created_at)}`,
       source: a,
     }))
     .sort((a, b) => new Date(b.date) - new Date(a.date));

@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
+const trash = require('../services/trash');
 
 // All automation routes require auth
 router.use(requireAuth);
@@ -11,7 +12,7 @@ router.use(requireAuth);
 router.get('/automations', requireRole('admin'), async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data, error } = await sup.from('automations').select('*').order('created_at', { ascending: false });
+    const { data, error } = await sup.from('automations').select('*').is('deleted_at', null).order('created_at', { ascending: false });
     if (error) throw error;
     res.json({ success: true, data: data || [] });
   } catch (err) {
@@ -44,7 +45,7 @@ router.put('/automations/:id', requireRole('admin'), async (req, res) => {
     const { name, trigger_type, trigger_config, action_type, action_config, is_active } = req.body;
     const sup = getSupabase();
     const id = parseInt(req.params.id);
-    const { data: a } = await sup.from('automations').select('id').eq('id', id).maybeSingle();
+    const { data: a } = await sup.from('automations').select('id').eq('id', id).is('deleted_at', null).maybeSingle();
     if (!a) return res.status(404).json({ error: 'Not found' });
 
     const { error } = await sup.from('automations').update({
@@ -64,7 +65,7 @@ router.put('/automations/:id', requireRole('admin'), async (req, res) => {
 router.delete('/automations/:id', requireRole('admin'), async (req, res) => {
   try {
     const sup = getSupabase();
-    const { error } = await sup.from('automations').delete().eq('id', parseInt(req.params.id));
+    const { error } = await trash.softDelete(sup, { table: 'automations', id: parseInt(req.params.id), userId: req.user.id });
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -76,7 +77,7 @@ router.delete('/automations/:id', requireRole('admin'), async (req, res) => {
 router.post('/automations/:id/run', requireRole('admin'), async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data: a } = await sup.from('automations').select('*').eq('id', parseInt(req.params.id)).maybeSingle();
+    const { data: a } = await sup.from('automations').select('*').eq('id', parseInt(req.params.id)).is('deleted_at', null).maybeSingle();
     if (!a) return res.status(404).json({ error: 'Not found' });
 
     const result = await executeAutomation(a, sup);
@@ -90,7 +91,7 @@ router.post('/automations/:id/run', requireRole('admin'), async (req, res) => {
 router.post('/automations/run-all', requireRole('admin'), async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data: list } = await sup.from('automations').select('*').eq('is_active', true);
+    const { data: list } = await sup.from('automations').select('*').eq('is_active', true).is('deleted_at', null);
     const results = [];
     for (const a of list || []) {
       try {
@@ -158,6 +159,7 @@ async function executeAutomation(a, sup) {
   if (a.action_type === 'follow_up_overdue') {
     const { data: overdue } = await sup.from('cases')
       .select('id, title, deadline, status')
+      .is('deleted_at', null)
       .not('deadline', 'is', null).lt('deadline', today).neq('status', 'closed').limit(20);
 
     for (const c of overdue || []) {
@@ -177,6 +179,7 @@ async function executeAutomation(a, sup) {
     const threeDaysAgo = new Date(Date.now() - 3 * 86400000).toISOString();
     const { data: stale } = await sup.from('cases')
       .select('id, title, status, updated_at')
+      .is('deleted_at', null)
       .eq('priority', 'high').eq('status', 'open').lt('updated_at', threeDaysAgo).limit(10);
 
     for (const c of stale || []) {
@@ -189,7 +192,7 @@ async function executeAutomation(a, sup) {
 
   // CASE 3: Auto-classify newly created cases without classification
   else if (a.action_type === 'auto_classify') {
-    const { data: openCases } = await sup.from('cases').select('id, title, description').eq('status', 'open').limit(20);
+    const { data: openCases } = await sup.from('cases').select('id, title, description').is('deleted_at', null).eq('status', 'open').limit(20);
     const openIds = (openCases || []).map(c => c.id);
     const caseMap = {}; (openCases || []).forEach(c => caseMap[c.id] = c);
 
@@ -233,6 +236,7 @@ async function executeAutomation(a, sup) {
     const threeDaysOut = new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0];
     const { data: upcoming } = await sup.from('cases')
       .select('id, title, deadline')
+      .is('deleted_at', null)
       .not('deadline', 'is', null).gte('deadline', today).lte('deadline', threeDaysOut).neq('status', 'closed').limit(20);
 
     for (const c of upcoming || []) {
@@ -244,7 +248,7 @@ async function executeAutomation(a, sup) {
 
   // CASE 5: Auto-close cases where all requests are responded
   else if (a.action_type === 'auto_close_completed') {
-    const { data: openCases } = await sup.from('cases').select('id, title').neq('status', 'closed').limit(20);
+    const { data: openCases } = await sup.from('cases').select('id, title').is('deleted_at', null).neq('status', 'closed').limit(20);
     const openCaseIds = (openCases || []).map(c => c.id);
     // Batched instead of one requests query per case (the auto_classify
     // branch above already does this correctly) -- at real scale this was

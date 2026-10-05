@@ -5,6 +5,7 @@ const { getSupabase } = require('../supabase');
 const { notifyUsers, getCaseRecipients } = require('../services/notificationService');
 const { canViewAllCases, getVisibleCaseIds, canAccessCase } = require('../services/caseAccess');
 const { isSafeLinkUrl } = require('../services/urlSafety');
+const trash = require('../services/trash');
 
 // ============ PRODUCTION / MONTAGE QUEUE ============
 
@@ -24,7 +25,8 @@ router.get('/production', requireAuth, requirePermission('production', 'view'), 
     if (restricted && !visibleCaseIds.length) return res.json({ success: true, data: [] });
 
     let query = sup.from('production_queue')
-      .select('*, cases!inner(title, uuid, status), users!left(name)')
+      .select('*, cases!inner(title, uuid, status), users!assigned_to!left(name)')
+      .is('deleted_at', null)
       .order('created_at', { ascending: false });
     if (status) query = query.eq('status', status);
     if (restricted) query = query.in('case_id', visibleCaseIds);
@@ -39,7 +41,8 @@ router.get('/production', requireAuth, requirePermission('production', 'view'), 
       const { data: docs } = await sup.from('case_documents')
         .select('case_id')
         .in('case_id', caseIds)
-        .eq('mime_type', 'application/vnd.google-apps.drive-link');
+        .eq('mime_type', 'application/vnd.google-apps.drive-link')
+        .is('deleted_at', null);
       (docs || []).forEach(d => { driveCounts[d.case_id] = (driveCounts[d.case_id] || 0) + 1; });
     }
 
@@ -75,19 +78,33 @@ router.post('/production/add', requireAuth, requirePermission('production', 'edi
     // this route (and PUT/DELETE below) didn't.
     if (!(await canAccessCase(sup, req.user, caseId))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
 
-    const { data: existing } = await sup.from('production_queue').select('id, status').eq('case_id', caseId).maybeSingle();
+    const { data: existing } = await sup.from('production_queue').select('id, status').eq('case_id', caseId).is('deleted_at', null).maybeSingle();
     if (existing) return res.status(409).json({ error: 'القضية موجودة مسبقاً في قائمة الإنتاج', id: existing.id });
 
     await sup.from('cases').update({ status: 'in_production', updated_at: new Date().toISOString() }).eq('id', caseId);
 
     const driveLink = caseRow.drive_folder_id ? `https://drive.google.com/drive/folders/${caseRow.drive_folder_id}` : null;
 
-    const { data: created, error } = await sup.from('production_queue').insert({
+    const queuePayload = {
       case_id: caseId, assigned_to: assigned_to ? parseInt(assigned_to) : null,
       priority: priority || 'medium', notes: notes || null,
       drive_folder_link: driveLink,
-    }).select().single();
-    if (error) throw error;
+    };
+    // production_queue.case_id is UNIQUE and removal is a soft delete: re-adding a case
+    // that was removed earlier must revive its trashed row instead of inserting a duplicate.
+    const { data: trashedRow } = await sup.from('production_queue').select('id').eq('case_id', caseId).not('deleted_at', 'is', null).maybeSingle();
+    const { data: created, error } = trashedRow
+      ? await sup.from('production_queue').update({ ...queuePayload, status: 'pending', deleted_at: null, deleted_by: null }).eq('id', trashedRow.id).select().single()
+      : await sup.from('production_queue').insert(queuePayload).select().single();
+    // The `existing` check above is a check-then-insert race -- two
+    // near-simultaneous "add to production" clicks for the same case can
+    // both pass it, and the second then hits production_queue's own unique
+    // constraint on case_id. Same friendly 409 the pre-check normally
+    // produces, not a raw constraint-violation message.
+    if (error) {
+      if (/duplicate key|already exists/i.test(error.message)) return res.status(409).json({ error: 'القضية موجودة مسبقاً في قائمة الإنتاج' });
+      throw error;
+    }
 
     try {
       await sup.from('activity_logs').insert({
@@ -186,7 +203,7 @@ router.delete('/production/:id', requireAuth, requirePermission('production', 'e
       if (!(await canAccessCase(sup, req.user, item.case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
       await sup.from('cases').update({ status: 'open', updated_at: new Date().toISOString() }).eq('id', item.case_id);
     }
-    const { error } = await sup.from('production_queue').delete().eq('id', parseInt(req.params.id));
+    const { error } = await trash.softDelete(sup, { table: 'production_queue', id: parseInt(req.params.id), userId: req.user.id });
     if (error) throw error;
     res.json({ success: true, message: '✅ تم إزالة القضية من قائمة الإنتاج' });
   } catch (err) {
@@ -205,19 +222,27 @@ router.post('/production/auto-check', requireAuth, requireRole('admin'), async (
     // different real id), so this check silently never matched anything.
     const { data: receivedList } = await sup.from('pipeline_lists').select('id').eq('name_en', 'Records Received').maybeSingle();
     if (!receivedList) return res.json({ success: true, added_count: 0, candidates: [] });
-    const { data: openCases } = await sup.from('cases').select('id, title, uuid').in('status', ['open', 'in_progress']);
-    const { data: queued } = await sup.from('production_queue').select('case_id');
+    const { data: openCases } = await sup.from('cases').select('id, title, uuid').in('status', ['open', 'in_progress']).is('deleted_at', null);
+    const { data: queued } = await sup.from('production_queue').select('case_id').is('deleted_at', null);
     const queuedIds = new Set((queued || []).map(q => q.case_id));
 
     const added = [];
     for (const c of (openCases || []).filter(c => !queuedIds.has(c.id))) {
-      const { data: reqs } = await sup.from('requests').select('classification_id').eq('case_id', c.id);
+      const { data: reqs } = await sup.from('requests').select('classification_id').eq('case_id', c.id).is('deleted_at', null);
       if (!reqs || reqs.length === 0) continue;
       const allReceived = reqs.every(r => r.classification_id === receivedList.id);
       if (!allReceived) continue;
 
+      // Queue row FIRST (reviving a trashed one if the case was removed earlier) and only
+      // flip the case to in_production if that actually worked -- it used to flip the case
+      // first and ignore a failed insert, leaving it in_production but missing from the queue.
+      const autoPayload = { case_id: c.id, priority: 'medium', notes: 'تمت الإضافة تلقائياً — جميع السجلات متوفرة' };
+      const { data: trashedQ } = await sup.from('production_queue').select('id').eq('case_id', c.id).not('deleted_at', 'is', null).maybeSingle();
+      const { error: queueErr } = trashedQ
+        ? await sup.from('production_queue').update({ ...autoPayload, status: 'pending', deleted_at: null, deleted_by: null }).eq('id', trashedQ.id)
+        : await sup.from('production_queue').insert(autoPayload);
+      if (queueErr) { console.error('[production] auto-check queue insert failed:', queueErr.message); continue; }
       await sup.from('cases').update({ status: 'in_production', updated_at: new Date().toISOString() }).eq('id', c.id);
-      await sup.from('production_queue').insert({ case_id: c.id, priority: 'medium', notes: 'تمت الإضافة تلقائياً — جميع السجلات متوفرة' });
       try {
         await sup.from('activity_logs').insert({
           action_type: 'production_auto_added', target_type: 'case', target_id: c.id,

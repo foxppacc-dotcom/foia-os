@@ -20,6 +20,8 @@ const ACTION_LABEL = {
   delete_any: 'حذف أي تعليق/موضوع (بغض النظر عن الكاتب)', create_topic: 'إنشاء موضوع جديد',
   comment: 'التعليق', pin: 'تثبيت الإعلانات المهمة',
   promote: 'اعتماد ونقل القضية للقضايا الجاهزة', manage_criteria: 'إدارة معايير الفرز',
+  run: 'تشغيل مهام المساعد يدويًا', review: 'مراجعة نتائج المساعد والموافقة على إجراءاته',
+  manage_labels: 'إدارة Labels وMilestones داخل القوائم (إنشاء/تعديل/ترتيب/حذف)', reorder_lists: 'ترتيب القوائم بالسحب',
   override_lock: 'فك قيد استخدام حساب بريد لجهة مقفلة على قضية أخرى',
   // ai_assistant's only per-role action -- gates WHO may open the chat.
   // What the assistant is itself allowed to DO is a separate, global toggle
@@ -80,6 +82,31 @@ function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
   const [resetTarget, setResetTarget] = useState(null);
   const [resetPassword, setResetPassword] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [editTarget, setEditTarget] = useState(null);
+  const [editForm, setEditForm] = useState({ name: '', email: '', role: '', is_active: true, password: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const openEdit = (u) => { setEditTarget(u); setEditForm({ name: u.name || '', email: u.email || '', role: u.role || '', is_active: u.is_active !== false, password: '' }); };
+  const saveEdit = async () => {
+    const u = editTarget;
+    if (!editForm.name.trim() || !editForm.email.trim()) { toast.error('الاسم والبريد مطلوبان'); return; }
+    if (editForm.password && editForm.password.length < 6) { toast.error('كلمة المرور يجب ألا تقل عن 6 أحرف'); return; }
+    const payload = {};
+    if (editForm.name.trim() !== u.name) payload.name = editForm.name.trim();
+    if (editForm.email.trim() !== u.email) payload.email = editForm.email.trim();
+    if (isAdmin && editForm.role && editForm.role !== u.role) payload.role = editForm.role;
+    if (editForm.is_active !== (u.is_active !== false)) payload.is_active = editForm.is_active;
+    if (editForm.password) payload.password = editForm.password;
+    if (!Object.keys(payload).length) { setEditTarget(null); return; }
+    setSavingEdit(true);
+    try {
+      await api.put(`/users/${u.id}`, payload);
+      toast.success('تم حفظ بيانات الحساب');
+      setEditTarget(null);
+      fetchUsers();
+    } catch (e) { toast.error(e.message); }
+    setSavingEdit(false);
+  };
 
   const fetchUsers = () => {
     setLoading(true);
@@ -190,6 +217,10 @@ function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
                     </button>
                     {isAdmin && (
                       <>
+                        <button onClick={() => openEdit(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                          onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'} title="تعديل بيانات الحساب">
+                          <Pencil className="w-4 h-4" />
+                        </button>
                         <button onClick={() => setResetTarget(u)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
                           onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'} title="إعادة تعيين كلمة المرور">
                           <KeyRound className="w-4 h-4" />
@@ -223,6 +254,28 @@ function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
         </div>
       </Modal>
 
+      <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title={`تعديل حساب: ${editTarget?.name || ''}`}>
+        <div className="space-y-3">
+          <Input label="الاسم" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
+          <Input label="البريد الإلكتروني (يُستخدم لتسجيل الدخول)" type="email" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} />
+          {isAdmin && (
+            <Select label="الدور" value={editForm.role} onChange={e => setEditForm({ ...editForm, role: e.target.value })}>
+              {!roles.find(r => r.name === editForm.role) && <option value={editForm.role}>{roleLabel(editForm.role)}</option>}
+              {roles.map(r => <option key={r.name} value={r.name}>{r.label}</option>)}
+            </Select>
+          )}
+          <Input label="كلمة مرور جديدة (اتركها فارغة لعدم التغيير)" type="password" value={editForm.password} onChange={e => setEditForm({ ...editForm, password: e.target.value })} placeholder="6 أحرف على الأقل" autoComplete="new-password" />
+          <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
+            <input type="checkbox" checked={editForm.is_active} onChange={e => setEditForm({ ...editForm, is_active: e.target.checked })} className="w-4 h-4" />
+            الحساب نشط (يستطيع تسجيل الدخول)
+          </label>
+          <div className="flex gap-2 pt-1">
+            <Button className="flex-1" loading={savingEdit} onClick={saveEdit}>حفظ</Button>
+            <Button variant="secondary" className="flex-1" onClick={() => setEditTarget(null)}>إلغاء</Button>
+          </div>
+        </div>
+      </Modal>
+
       <Modal open={!!resetTarget} onClose={() => { setResetTarget(null); setResetPassword(''); }} title={`إعادة تعيين كلمة مرور: ${resetTarget?.name || ''}`}>
         <div className="space-y-3">
           <Input label="كلمة المرور الجديدة" type="password" value={resetPassword} onChange={e => setResetPassword(e.target.value)} placeholder="6 أحرف على الأقل" />
@@ -234,7 +287,7 @@ function MembersPanel({ toast, roles, roleLabel, isAdmin }) {
       </Modal>
 
       <ConfirmDialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} onConfirm={doDelete}
-        title="حذف العضو" confirmLabel="حذف" message={`هل أنت متأكد من حذف "${confirmDelete?.name}"؟ لا يمكن التراجع عن هذا الإجراء.`} />
+        title="حذف العضو" confirmLabel="حذف" message={`سيتم نقل العضو "${confirmDelete?.name}" إلى سلة المحذوفات -- يمكن استعادته لاحقًا من هناك. هل تريد المتابعة؟`} />
     </div>
   );
 }
@@ -245,9 +298,11 @@ function RolesPanel({ toast, roles, onRolesChanged }) {
   const [editingId, setEditingId] = useState(null);
   const [editLabel, setEditLabel] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [creating, setCreating] = useState(false);
 
   const createRole = async () => {
-    if (!form.name.trim()) return;
+    if (!form.name.trim() || creating) return;
+    setCreating(true);
     try {
       await api.post('/roles', { name: form.name.trim(), label: form.label.trim() || form.name.trim() });
       toast.success('تم إنشاء الدور');
@@ -255,6 +310,7 @@ function RolesPanel({ toast, roles, onRolesChanged }) {
       setShowAdd(false);
       onRolesChanged();
     } catch (e) { toast.error(e.message); }
+    setCreating(false);
   };
 
   const saveLabel = async (id) => {
@@ -314,7 +370,7 @@ function RolesPanel({ toast, roles, onRolesChanged }) {
           <Input label="الاسم البرمجي (بالإنجليزية، بدون مسافات)" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="coordinator" />
           <Input label="الاسم المعروض" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder="منسّق" />
           <div className="flex gap-2 pt-1">
-            <Button className="flex-1" onClick={createRole}>إنشاء</Button>
+            <Button className="flex-1" onClick={createRole} disabled={creating}>{creating ? 'جارٍ الإنشاء...' : 'إنشاء'}</Button>
             <Button variant="secondary" className="flex-1" onClick={() => setShowAdd(false)}>إلغاء</Button>
           </div>
         </div>
@@ -334,6 +390,7 @@ function TeamTitlesPanel({ toast }) {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ label: '', color: '#636366' });
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [creating, setCreating] = useState(false);
 
   const fetchItems = () => {
     setLoading(true);
@@ -342,7 +399,8 @@ function TeamTitlesPanel({ toast }) {
   useEffect(() => { fetchItems(); }, []);
 
   const create = async () => {
-    if (!form.value.trim() || !form.label.trim()) return;
+    if (!form.value.trim() || !form.label.trim() || creating) return;
+    setCreating(true);
     try {
       await api.post('/case-team-roles', form);
       toast.success('تمت إضافة المسمى الوظيفي');
@@ -350,6 +408,7 @@ function TeamTitlesPanel({ toast }) {
       setShowAdd(false);
       fetchItems();
     } catch (e) { toast.error(e.message); }
+    setCreating(false);
   };
 
   const saveEdit = async (id) => {
@@ -424,7 +483,7 @@ function TeamTitlesPanel({ toast }) {
             <input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} className="w-8 h-8 rounded cursor-pointer border-0 bg-transparent" />
           </div>
           <div className="flex gap-2 pt-1">
-            <Button className="flex-1" onClick={create}>إنشاء</Button>
+            <Button className="flex-1" onClick={create} disabled={creating}>{creating ? 'جارٍ الإنشاء...' : 'إنشاء'}</Button>
             <Button variant="secondary" className="flex-1" onClick={() => setShowAdd(false)}>إلغاء</Button>
           </div>
         </div>

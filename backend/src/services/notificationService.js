@@ -34,7 +34,7 @@ async function notifyUsers(sup, userIds, { type, title, body, target_type = null
 // resolved for one case and returning user ids instead of case ids.
 async function getCaseRecipients(sup, caseId, { excludeUserId = null } = {}) {
   const [{ data: assignees }, { data: caseRow }] = await Promise.all([
-    sup.from('case_assignees').select('user_id').eq('case_id', caseId),
+    sup.from('case_assignees').select('user_id').eq('case_id', caseId).is('deleted_at', null),
     sup.from('cases').select('created_by, assigned_to').eq('id', caseId).maybeSingle(),
   ]);
   const ids = new Set((assignees || []).map(a => a.user_id));

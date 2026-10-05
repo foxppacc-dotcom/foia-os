@@ -6,10 +6,21 @@ const DONE_STATUSES = ['closed', 'production_done'];
 // exactly the bug class the comment below already documents.
 async function getEmployeeCaseIds(sup, userId) {
   const [{ data: assigned }, { data: created }] = await Promise.all([
-    sup.from('case_assignees').select('case_id').eq('user_id', userId),
+    // Same fix already applied in caseAccess.js's getVisibleCaseIds (with the
+    // same reasoning): an assignee row surviving as soft-deleted still kept
+    // that case counted in this user's stats forever after they were
+    // removed from its team.
+    sup.from('case_assignees').select('case_id').eq('user_id', userId).is('deleted_at', null),
     sup.from('cases').select('id').eq('created_by', userId),
   ]);
-  return [...new Set([...(assigned || []).map(a => a.case_id), ...(created || []).map(c => c.id)])];
+  const ids = [...new Set([...(assigned || []).map(a => a.case_id), ...(created || []).map(c => c.id)])];
+  if (!ids.length) return [];
+  // Neither source above checks the CASE's own deleted_at -- a still-active
+  // case_assignees row, or a created_by match, kept a TRASHED case counted
+  // in this employee's live KPI/report stats forever. Mirrors the identical
+  // final re-filter in caseAccess.js's getVisibleCaseIds.
+  const { data: active } = await sup.from('cases').select('id').in('id', ids).is('deleted_at', null);
+  return (active || []).map(r => r.id);
 }
 
 // Whether this user ever did anything real on each of these cases --
@@ -43,14 +54,22 @@ async function getEmployeeCaseActivity(sup, userId, caseIds) {
   // already accepts against this same table.
   const ACTIVITY_LOOKBACK_LIMIT = 5000;
   try {
+    // 'case' alone missed most real work -- uploading a document, updating
+    // the investigation checklist, or assigning a team member all log under
+    // their OWN target_type ('document'/'checklist'/'team'), not 'case',
+    // but all three use target_id = the case id (unlike 'request'/
+    // 'request_classification', which log the REQUEST's own id and can't be
+    // matched against caseIds this way). Missing this meant an employee who
+    // genuinely worked a case -- just never posted a team-discussion comment
+    // -- still showed up badged "معيّن — بدون نشاط" on their own profile.
     const { data: logs } = await sup.from('activity_logs')
-      .select('target_id, created_at').eq('user_id', userId).eq('target_type', 'case').in('target_id', caseIds)
+      .select('target_id, created_at').eq('user_id', userId).in('target_type', ['case', 'document', 'checklist', 'team']).in('target_id', caseIds)
       .order('created_at', { ascending: false }).limit(ACTIVITY_LOOKBACK_LIMIT);
     for (const row of logs || []) bump(row.target_id, row.created_at);
   } catch (e) { /* index/table may not be migrated in yet */ }
   try {
     const { data: comments } = await sup.from('case_comments')
-      .select('case_id, created_at').eq('user_id', userId).in('case_id', caseIds)
+      .select('case_id, created_at').eq('user_id', userId).in('case_id', caseIds).is('deleted_at', null)
       .order('created_at', { ascending: false }).limit(ACTIVITY_LOOKBACK_LIMIT);
     for (const row of comments || []) bump(row.case_id, row.created_at);
   } catch (e) { /* case_comments.user_id may not be indexed yet */ }

@@ -189,13 +189,13 @@ export default function Dashboard() {
             {data.byStatus?.map(s => (
               <div key={s.status} className="flex items-center gap-3">
                 <span className="text-xs w-24" style={{ color: 'var(--text-secondary)' }}>
-                  {s.status === 'open' ? '🟦 مفتوحة' : s.status === 'in_progress' ? '🟡 قيد التنفيذ' : s.status === 'closed' ? '🟢 مغلقة' : '⬜ ' + s.status}
+                  {s.status === 'open' ? '🟦 مفتوحة' : s.status === 'in_progress' ? '🟡 قيد التنفيذ' : s.status === 'in_production' ? '🟣 قيد المونتاج' : s.status === 'closed' ? '🟢 مغلقة' : '⬜ ' + s.status}
                 </span>
                 <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: 'var(--bg-tertiary)' }}>
                   <div className="h-full rounded-full transition-all duration-500" 
                     style={{ 
                       width: `${(s.count / (data.totalCases || 1)) * 100}%`,
-                      backgroundColor: s.status === 'open' ? '#3B82F6' : s.status === 'in_progress' ? '#F59E0B' : '#10B981'
+                      backgroundColor: s.status === 'open' ? '#3B82F6' : s.status === 'in_progress' ? '#F59E0B' : s.status === 'in_production' ? '#8B5CF6' : '#10B981'
                     }} />
                 </div>
                 <span className="text-xs w-8 text-left" style={{ color: 'var(--text-muted)' }}>{s.count}</span>

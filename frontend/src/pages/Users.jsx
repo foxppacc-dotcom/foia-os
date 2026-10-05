@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import PasswordInput from '../components/ui/PasswordInput';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Plus, Trash2, Shield, UserCircle } from 'lucide-react';
@@ -68,7 +69,7 @@ export default function Users() {
               className="px-4 py-2.5 rounded-xl border" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
             <input value={form.email} onChange={e => setForm({...form, email: e.target.value})} placeholder="البريد الإلكتروني"
               className="px-4 py-2.5 rounded-xl border" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
-            <input value={form.password} onChange={e => setForm({...form, password: e.target.value})} placeholder="كلمة المرور" type="password"
+            <PasswordInput value={form.password} onChange={e => setForm({...form, password: e.target.value})} placeholder="كلمة المرور"
               className="px-4 py-2.5 rounded-xl border" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
             <select value={form.role} onChange={e => setForm({...form, role: e.target.value})}
               className="px-4 py-2.5 rounded-xl border" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
@@ -124,10 +125,20 @@ export default function Users() {
                 <td className="px-4 py-3 font-medium" style={{ color: 'var(--text-primary)' }}>{u.name}</td>
                 <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{u.email}</td>
                 <td className="px-4 py-3">
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium"
-                    style={{ backgroundColor: `${roleColors[u.role]}15`, color: roleColors[u.role], border: `1px solid ${roleColors[u.role]}30` }}>
-                    <Shield className="w-3 h-3" /> {roleNames[u.role] || u.role}
-                  </span>
+                  {/* roleColors/roleNames only ever listed admin/manager/member --
+                      any other role (the "viewer" option below, or any custom
+                      role created via فريق العمل) fell through to `undefined`,
+                      producing invalid CSS ("undefined15" etc.) the browser
+                      silently drops, leaving an unstyled, borderless badge. */}
+                  {(() => {
+                    const color = roleColors[u.role] || '#6B7280';
+                    return (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium"
+                        style={{ backgroundColor: `${color}15`, color, border: `1px solid ${color}30` }}>
+                        <Shield className="w-3 h-3" /> {roleNames[u.role] || u.role}
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">

@@ -9,13 +9,13 @@ const { getSupabase } = require('../supabase');
 const RESOURCES = [
   { key: 'cases', label: 'القضايا', actions: ['view', 'view_all', 'create', 'edit', 'delete'] },
   { key: 'agencies', label: 'الجهات', actions: ['view', 'create', 'edit', 'delete'] },
-  { key: 'pipeline', label: 'خط الإنتاج', actions: ['view', 'move', 'edit'] },
+  { key: 'pipeline', label: 'خط الإنتاج', actions: ['view', 'move', 'edit', 'manage_labels', 'reorder_lists'] },
   { key: 'production', label: 'مونتاج', actions: ['view', 'edit'] },
   { key: 'reports', label: 'التقارير', actions: ['view', 'export'] },
   { key: 'timeline', label: 'الخط الزمني الشامل', actions: ['view'] },
   { key: 'settings', label: 'الإعدادات', actions: ['view', 'manage'] },
   { key: 'users', label: 'المستخدمين', actions: ['invite', 'edit', 'delete'] },
-  { key: 'email_accounts', label: 'حسابات البريد', actions: ['manage', 'override_lock'] },
+  { key: 'email_accounts', label: 'حسابات البريد', actions: ['manage', 'override_lock', 'view_all'] },
   // Self-service control over the email auto-matching heuristics
   // (mailPoller.js's matchToCase) -- who may toggle a built-in matching
   // tier on/off, or add/remove a custom global keyword rule, from the
@@ -36,6 +36,21 @@ const RESOURCES = [
   // dial an admin can widen or narrow based on how accurate they find its
   // results, independent of which role happens to be chatting with it.
   { key: 'ai_assistant', label: 'المساعد الذكي', actions: ['use_chat'] },
+  // Every delete across the system moves an item here instead of removing
+  // it immediately -- who may even SEE the trash, restore an item, or
+  // permanently destroy one are three separate actions on purpose (a role
+  // trusted to undo an accidental delete isn't necessarily trusted to
+  // wipe data for good). Defaults to admin-only for everyone else with no
+  // row here at all (requirePermission already fails closed) -- an admin
+  // can loosen this later from the matrix with zero code change.
+  { key: 'trash', label: 'سلة المحذوفات', actions: ['view', 'restore', 'destroy'] },
+  { key: 'ai_tasks', label: 'مهام المساعد الذكي الدورية', actions: ['view', 'manage', 'run', 'review'] },
+  // Internal messaging (DMs/groups + org-wide broadcast) -- 'view' gates the
+  // feature itself (default: every real role can message, see requireAuth-
+  // only reasoning in routes/messages.js), 'broadcast' gates who may post to
+  // the org-wide channel everyone can read (default admin/manager-only,
+  // matching the user's own ask).
+  { key: 'internal_messages', label: 'الرسائل الداخلية', actions: ['broadcast'] },
 ];
 
 // Every real, hardcoded tool the AI assistant can call (services/aiTools.js
@@ -55,7 +70,45 @@ const AI_CAPABILITY_ACTIONS = [
   { key: 'suggest_email_link', label: 'اقتراح ربط إيميل بقضية (يتطلب تأكيد الموظف)' },
   { key: 'auto_link_email', label: 'ربط إيميل بقضية مباشرة بدون تأكيد' },
   { key: 'assign_case_to_employee', label: 'توزيع العمل (تعيين قضية لموظف)' },
+  { key: 'draft_message_to_employee', label: 'صياغة رسالة داخلية لموظف (تتطلب تأكيد الإرسال يدويًا)' },
   { key: 'navigate_ui', label: 'التنقل وفتح الصفحات بفلاتر (يغيّر الشاشة أمامك مباشرة)' },
+  { key: 'search_emails', label: 'البحث الشامل في كل الإيميلات (وارد/صادر، مرتبط/غير مرتبط)' },
+  { key: 'get_case_communications', label: 'قراءة سجل مراسلات قضية' },
+  { key: 'list_case_documents', label: 'سرد مستندات قضية' },
+  { key: 'read_document_text', label: 'قراءة محتوى مستند (PDF/Word/صور ممسوحة/نصوص) داخل قضية' },
+  { key: 'read_email_attachment_text', label: 'قراءة محتوى مرفق بريد إلكتروني (حتى لو غير مرتبط بقضية بعد)' },
+  { key: 'update_case_status', label: 'تغيير حالة/أولوية قضية (كتابة)' },
+  { key: 'create_request', label: 'إنشاء طلب (request) داخل قضية (كتابة)' },
+  { key: 'set_case_reminder', label: 'إضافة تذكير (يومي على قضية، أو شخصي بوقت محدد) -- كتابة، ينبّه تلقائيًا عند الاستحقاق' },
+  { key: 'list_case_reminders', label: 'عرض التذكيرات (قضية معيّنة أو الشخصية)' },
+  { key: 'compose_email', label: 'صياغة مسودة بريد لقضية (تتطلب تأكيد الإرسال يدويًا)' },
+  { key: 'search_requests_by_outcome', label: 'مراقبة الجهات حسب نتيجة الرد (سجلات واردة/لا سجلات/رفض/طلب دفع)' },
+  { key: 'log_requested_task', label: 'تسجيل طلب/متابعة كمهمة بلا موعد تنبيه (to-do)' },
+  { key: 'delete_case', label: 'حذف قضية كاملة (نقل لسلة المحذوفات -- قابل للاسترجاع)' },
+  { key: 'delete_case_document', label: 'حذف مستند داخل قضية (نقل لسلة المحذوفات)' },
+  { key: 'delete_request', label: 'حذف طلب (جهة) داخل قضية (نقل لسلة المحذوفات)' },
+  { key: 'delete_communication', label: 'حذف رسالة بريد (نقل لسلة المحذوفات)' },
+  { key: 'unlink_communication', label: 'فك ارتباط رسالة بريد بقضيتها دون حذفها (ترجع لقائمة غير مرتبط)' },
+  { key: 'delete_agency', label: 'حذف جهة من القائمة العامة (نقل لسلة المحذوفات)' },
+  { key: 'list_trash', label: 'عرض محتويات سلة المحذوفات' },
+  { key: 'restore_from_trash', label: 'استرجاع عنصر من سلة المحذوفات (مباشرة)' },
+  { key: 'purge_from_trash', label: 'حذف نهائي من سلة المحذوفات (بعد موافقة صريحة من المستخدم)' },
+  { key: 'get_system_overview', label: 'نظرة شاملة على النظام (أرقام القضايا والطلبات والبريد)' },
+  { key: 'search_cases', label: 'بحث وفلترة شاملة في القضايا' },
+  { key: 'list_requests', label: 'قائمة الطلبات بفلاتر (المتأخر، القائمة، الجهة، النتيجة)' },
+  { key: 'get_pipeline_overview', label: 'نظرة على خط الإنتاج (كل قائمة وعدد بطاقاتها)' },
+  { key: 'get_agency_profile', label: 'ملف جهة (طلباتنا لها ومعدل ردّها)' },
+  { key: 'get_case_timeline', label: 'الخط الزمني الكامل لقضية' },
+  { key: 'find_cases_by_gap', label: 'قضايا ينقصها شيء (بلا مستندات/طلبات/فريق/ردود/نشاط)' },
+  { key: 'list_ai_findings', label: 'قراءة نتائج مهام المساعد الدورية' },
+  { key: 'list_employees', label: 'قائمة الموظفين وأحمالهم' },
+  { key: 'get_activity_feed', label: 'قراءة آخر نشاط في النظام' },
+  { key: 'query_data', label: 'قراءة مباشرة من جداول النظام (للمدير فقط)' },
+  { key: 'get_list_tags', label: 'قراءة الـ Labels والـ Milestones داخل قوائم خط الإنتاج' },
+  { key: 'manage_list_tags', label: 'إنشاء/تعديل/حذف Labels وMilestones داخل القوائم' },
+  { key: 'tag_request', label: 'وضع Labels وMilestone على بطاقات خط الإنتاج' },
+  { key: 'create_recurring_task', label: 'أن ينشئ المساعد مهمة دورية لنفسه (بخطة وجدولة)' },
+  { key: 'manage_recurring_task', label: 'عرض/تعديل/إيقاف/تشغيل مهام المساعد الدورية' },
 ];
 
 // Navigation visibility catalog — mirrors the Sidebar items exactly.
@@ -74,6 +127,7 @@ const NAV_ITEMS = [
   { key: 'portals', label: 'بوابات' },
   { key: 'inbox', label: 'صندوق الوارد' },
   { key: 'forum', label: 'المنتدى العام' },
+  { key: 'messages', label: 'الرسائل الداخلية' },
   { key: 'email_accounts', label: 'إيميلات' },
   { key: 'teams', label: 'الفرق' },
   { key: 'permissions', label: 'فريق العمل' },
@@ -82,6 +136,8 @@ const NAV_ITEMS = [
   { key: 'mail_logs', label: 'البريد الفعلي' },
   { key: 'production_lists', label: 'إدارة قوائم الإنتاج' },
   { key: 'theme_settings', label: 'الألوان والثيم' },
+  { key: 'trash', label: 'سلة المحذوفات' },
+  { key: 'ai_tasks', label: 'مهام المساعد' },
 ];
 
 // Production Line visibility catalog — mirrors pipeline_lists (list_number).
@@ -104,16 +160,16 @@ const PRODUCTION_LISTS = [
 // is derived straight from the resource's view permission instead of its
 // own row. Every other nav item (no matching resource, or no 'view' action)
 // keeps its own independently-configured visibility below.
-const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production', 'settings', 'forum', 'intake', 'ai_assistant', 'ai_assistant_chat'];
+const RESOURCE_VIEW_NAV_KEYS = ['cases', 'agencies', 'pipeline', 'production', 'settings', 'forum', 'intake', 'ai_assistant_chat', 'ai_tasks'];
 
 // Which {resource, action} actually gates each RESOURCE_VIEW_NAV_KEYS item's
 // sidebar visibility -- defaults to {resource: item.key, action: 'view'} for
-// every key except where that's wrong. ai_assistant has no 'view' action at
-// all (see RESOURCES above), so both it AND the separate full-page chat nav
-// item (ai_assistant_chat -- a different sidebar entry, same underlying
-// capability) are gated by the one real permission, ai_assistant:use_chat.
+// every key except where that's wrong. ai_assistant_chat (the full-page chat
+// nav item) has no 'view' action of its own (see RESOURCES above), so it's
+// gated by the one real permission, ai_assistant:use_chat. The separate
+// 'ai_assistant' settings nav item is NOT in this list -- it's handled by
+// its own explicit, always-admin-only branch in the loop below instead.
 const NAV_GATE = {
-  ai_assistant: { resource: 'ai_assistant', action: 'use_chat' },
   ai_assistant_chat: { resource: 'ai_assistant', action: 'use_chat' },
 };
 
@@ -169,6 +225,18 @@ router.get('/permissions/mine', requireAuth, async (req, res) => {
   const navRows = (data || []).filter(p => p.resource === 'nav');
   const navVisibility = {};
   for (const item of NAV_ITEMS) {
+    if (item.key === 'ai_assistant') {
+      // "الربط الذكي" is the admin-only AI provider/capability settings
+      // page -- every one of its routes is requireRole('admin'), not a
+      // use_chat permission check. It used to share ai_assistant:use_chat's
+      // gate with the separate full-page chat nav item, so any non-admin
+      // role granted just "use the chat" also got a sidebar link into a
+      // page where every single action 403'd. This function's early return
+      // above already makes navVisibility unconditionally true for admin,
+      // so reaching this line means the caller is NOT admin -- always hide.
+      navVisibility[item.key] = false;
+      continue;
+    }
     if (item.key === 'forum' || item.key === 'intake') {
       // Being able to comment/create/pin/moderate the forum (or create/
       // triage/promote in الاستقبال الذكي) is meaningless without being

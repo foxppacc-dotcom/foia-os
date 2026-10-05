@@ -5,6 +5,7 @@ const { getSupabase } = require('../supabase');
 const { logActivity } = require('../services/activityLogger');
 const { notifyUsers } = require('../services/notificationService');
 const { requireCaseAccess } = require('../services/caseAccess');
+const trash = require('../services/trash');
 // The three /cases/:id/assignees routes below previously had no per-case
 // access check -- a role restricted to its own assigned cases could
 // read/replace/remove ANY case's team roster just by knowing its id.
@@ -24,8 +25,9 @@ router.get('/cases/:id/assignees', requireAuth, caseGate, async (req, res) => {
   const sup = getSupabase();
   const { data: assignees } = await sup
     .from('case_assignees')
-    .select(`*, users!inner(id, name, email, role), specialties!left(name_ar, name_en, icon)`)
+    .select(`*, users!user_id!inner(id, name, email, role), specialties!left(name_ar, name_en, icon)`)
     .eq('case_id', parseInt(req.params.id))
+    .is('deleted_at', null)
     .order('assigned_at');
 
   const mapped = (assignees || []).map(a => ({
@@ -95,7 +97,7 @@ router.post('/cases/:id/assignees', requireAuth, caseGate, async (req, res) => {
 
   const { data: assignees } = await sup
     .from('case_assignees')
-    .select(`*, users!inner(id, name, email, role), specialties!left(name_ar, name_en, icon)`)
+    .select(`*, users!user_id!inner(id, name, email, role), specialties!left(name_ar, name_en, icon)`)
     .eq('case_id', caseId);
 
   const mapped = (assignees || []).map(a => ({
@@ -118,7 +120,7 @@ router.delete('/cases/:id/assignees/:userId', requireAuth, caseGate, async (req,
   const caseId = parseInt(req.params.id);
   const userId = parseInt(req.params.userId);
 
-  const { error } = await sup.from('case_assignees').delete().eq('case_id', caseId).eq('user_id', userId);
+  const { error } = await trash.softDelete(sup, { table: 'case_assignees', userId: req.user?.id, extraFilters: { case_id: caseId, user_id: userId } });
   if (error) return res.status(400).json({ error: error.message });
 
   logActivity({
@@ -207,7 +209,7 @@ router.post('/pipeline/lists/:id/assignees', requireAuth, requirePermission('pip
 
 router.get('/users/list', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data: users } = await sup.from('users').select('id, name, email, role').order('name');
+  const { data: users } = await sup.from('users').select('id, name, email, role').is('deleted_at', null).order('name');
   res.json({ success: true, data: users || [] });
 });
 

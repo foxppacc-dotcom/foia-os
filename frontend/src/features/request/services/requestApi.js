@@ -8,5 +8,7 @@ export const deleteRequest = (caseId, reqId) =>
   api.delete(`/cases/${caseId}/requests/${reqId}`);
 export const classifyRequest = (caseId, reqId, value) =>
   api.put(`/cases/${caseId}/requests/${reqId}/classification`, { agency_classification: value });
+export const setReplyOutcome = (caseId, reqId, value) =>
+  api.put(`/cases/${caseId}/requests/${reqId}/reply-outcome`, { reply_outcome: value });
 export const setRequestChannel = (id, channel) =>
   api.put(`/requests/${id}/channel`, { channel });

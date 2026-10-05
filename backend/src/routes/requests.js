@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requirePermission } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { requireCaseAccess, canAccessCase } = require('../services/caseAccess');
@@ -20,6 +20,7 @@ router.get('/cases/:caseId/requests', caseGate, async (req, res) => {
       .from('requests')
       .select(`*, pipeline_lists!left(name_ar, name_en, color), agencies!left(name_en)`)
       .eq('case_id', caseId)
+      .is('deleted_at', null)
       .order('created_at', { ascending: false });
 
     const mapped = (requests || []).map(r => ({
@@ -179,7 +180,7 @@ router.put('/requests/:id/channel', async (req, res) => {
 });
 
 // PUT /api/requests/:id/sort — update sort order within a list
-router.put('/requests/:id/sort', async (req, res) => {
+router.put('/requests/:id/sort', requirePermission('pipeline', 'move'), async (req, res) => {
   try {
     const sup = getSupabase();
     const requestId = parseInt(req.params.id);

@@ -7,6 +7,8 @@ const { requireAuth, requireRole, requirePermission } = require('../middleware/a
 const { getSupabase } = require('../supabase');
 const gdrive = require('../services/googleDriveService');
 const { isSafeLinkUrl } = require('../services/urlSafety');
+const trash = require('../services/trash');
+const { scopeEmailAccountsQuery } = require('../services/emailAccountAccess');
 // Same class of bug already fixed in forum.js/cases.js's link_url fields --
 // these columns are rendered verbatim as a real <a href> on the Agencies/
 // Portals pages with no sanitization at render time, so a stored
@@ -70,7 +72,7 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
       const name_en = String(row[colMap.name_en] || '').trim();
       if (!name_en) continue;
 
-      const { data: exists } = await sup.from('agencies').select('id').eq('name_en', name_en).maybeSingle();
+      const { data: exists } = await sup.from('agencies').select('id').eq('name_en', name_en).is('deleted_at', null).maybeSingle();
       if (exists) continue;
 
       const { error: insertErr } = await sup.from('agencies').insert({
@@ -116,12 +118,14 @@ router.post('/agencies/upload', requireAuth, requireRole('admin'), upload.single
   }
 });
 
+const REPLY_OUTCOMES = ['pending', 'records_received', 'no_records', 'rejected', 'payment_requested'];
+
 // GET /api/agencies — قائمة الجهات (بحث + فلترة + صفحات)
 router.get('/agencies', requireAuth, requirePermission('agencies', 'view'), async (req, res) => {
   const sup = getSupabase();
-  const { search, type, status, page = 1, limit = 100 } = req.query;
+  const { search, type, status, reply_outcome, page = 1, limit = 100 } = req.query;
 
-  let query = sup.from('agencies').select('*', { count: 'exact' });
+  let query = sup.from('agencies').select('*', { count: 'exact' }).is('deleted_at', null);
 
   if (search) {
     // Resolved via 4 separate single-column ilike queries instead of a
@@ -143,6 +147,19 @@ router.get('/agencies', requireAuth, requirePermission('agencies', 'view'), asyn
   if (status === 'active') query = query.eq('is_active', true);
   else if (status === 'inactive') query = query.eq('is_active', false);
 
+  // Reply-outcome filter -- "which agencies replied / sent records /
+  // requested payment / rejected / still pending", the same outcome
+  // requests.reply_outcome tracks per-request. PostgREST can't filter
+  // agencies by a column on `requests`, so resolve the matching agency ids
+  // first, same pattern aiTools.js's search_requests_by_outcome already uses.
+  if (reply_outcome) {
+    if (!REPLY_OUTCOMES.includes(reply_outcome)) return res.status(400).json({ error: `reply_outcome يجب أن تكون إحدى: ${REPLY_OUTCOMES.join(', ')}` });
+    const { data: matches } = await sup.from('requests').select('agency_id').eq('reply_outcome', reply_outcome).is('deleted_at', null).not('agency_id', 'is', null);
+    const matchedAgencyIds = [...new Set((matches || []).map(r => r.agency_id))];
+    if (!matchedAgencyIds.length) return res.json({ success: true, data: [], total: 0, page: parseInt(page), limit: parseInt(limit) });
+    query = query.in('id', matchedAgencyIds);
+  }
+
   query = query.order('name_en', { ascending: true })
     .range((parseInt(page) - 1) * parseInt(limit), parseInt(page) * parseInt(limit) - 1);
 
@@ -156,6 +173,20 @@ router.get('/agencies', requireAuth, requirePermission('agencies', 'view'), asyn
     return { ...a, contacts, contacts_count: contacts.length };
   });
 
+  // Attach a reply-outcome breakdown per agency -- one batched query for
+  // whatever page was just fetched, so the card can show "at a glance" how
+  // many of its requests are in each outcome without a per-card round trip.
+  const agencyIds = withCounts.map(a => a.id);
+  if (agencyIds.length) {
+    const { data: reqRows } = await sup.from('requests').select('agency_id, reply_outcome').in('agency_id', agencyIds).is('deleted_at', null);
+    const countsByAgency = {};
+    for (const r of reqRows || []) {
+      const bucket = (countsByAgency[r.agency_id] ||= { pending: 0, records_received: 0, no_records: 0, rejected: 0, payment_requested: 0 });
+      bucket[r.reply_outcome] = (bucket[r.reply_outcome] || 0) + 1;
+    }
+    withCounts = withCounts.map(a => ({ ...a, reply_outcome_counts: countsByAgency[a.id] || null }));
+  }
+
   res.json({ success: true, data: withCounts, total: total || 0, page: parseInt(page), limit: parseInt(limit) });
 });
 
@@ -163,7 +194,7 @@ router.get('/agencies', requireAuth, requirePermission('agencies', 'view'), asyn
 router.get('/agencies/:id', requireAuth, requirePermission('agencies', 'view'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
-  const { data: agency } = await sup.from('agencies').select('*').eq('id', id).single();
+  const { data: agency } = await sup.from('agencies').select('*').eq('id', id).is('deleted_at', null).single();
   if (!agency) return res.status(404).json({ error: 'Agency not found' });
 
   // Parse contacts from notes._contacts JSON
@@ -173,9 +204,14 @@ router.get('/agencies/:id', requireAuth, requirePermission('agencies', 'view'), 
   // is_active is stored as INTEGER (1/0) on email_accounts, not boolean --
   // .eq('is_active', true) silently matched zero rows (same bug fixed in
   // mailPoller.pollAll). Filter in JS instead of relying on the DB-side type match.
-  const [{ data: allEmailAccounts }] = await Promise.all([
-    sup.from('email_accounts').select('id, email, name, is_active').then(r => r.error ? { data: [] } : r),
-  ]);
+  // A mailbox-restricted employee (email_accounts.view_all = false) should
+  // only be offered accounts actually assigned to them here too -- otherwise
+  // they could pick an unassigned account from this dropdown and send
+  // through it despite POST /send's own per-account check (that check would
+  // still block the send, but only after the fact with a confusing error).
+  let accountsQuery = sup.from('email_accounts').select('id, email, name, is_active').is('deleted_at', null);
+  accountsQuery = await scopeEmailAccountsQuery(sup, accountsQuery, req.user);
+  const { data: allEmailAccounts } = accountsQuery ? await accountsQuery : { data: [] };
   const emailAccounts = (allEmailAccounts || []).filter(a => a.is_active === true || a.is_active === 1);
 
   res.json({ ...agency, contacts, available_email_accounts: emailAccounts || [] });
@@ -183,38 +219,40 @@ router.get('/agencies/:id', requireAuth, requirePermission('agencies', 'view'), 
 
 // POST /api/agencies — إضافة جهة يدوية
 router.post('/agencies', requireAuth, requirePermission('agencies', 'create'), async (req, res) => {
-  const sup = getSupabase();
-  const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, reply_to, default_email_account_id, website, tracking_portal_url } = req.body;
-  if (!name_en) return res.status(400).json({ error: 'name_en (English name) مطلوب' });
-  const badUrlField = firstUnsafeUrl({ portal_url, website, tracking_portal_url });
-  if (badUrlField) return res.status(400).json({ error: `رابط غير صالح في ${badUrlField} -- يجب أن يبدأ بـ http:// أو https://` });
+  try {
+    const sup = getSupabase();
+    const { name_ar, name_en, state, city, type, email, phone, portal_url, notes, address, reply_to, default_email_account_id, website, tracking_portal_url } = req.body;
+    if (!name_en) return res.status(400).json({ error: 'name_en (English name) مطلوب' });
+    const badUrlField = firstUnsafeUrl({ portal_url, website, tracking_portal_url });
+    if (badUrlField) return res.status(400).json({ error: `رابط غير صالح في ${badUrlField} -- يجب أن يبدأ بـ http:// أو https://` });
 
-  const { data: existing } = await sup.from('agencies').select('id').eq('name_en', name_en).maybeSingle();
-  if (existing) return res.status(409).json({ error: 'هذه الجهة موجودة مسبقاً' });
+    const { data: existing } = await sup.from('agencies').select('id').eq('name_en', name_en).is('deleted_at', null).maybeSingle();
+    if (existing) return res.status(409).json({ error: 'هذه الجهة موجودة مسبقاً' });
 
-  const insertData = {
-    name_ar: name_ar || null, name_en,
-    state: state || null, city: city || null, type: type || null,
-    email: email || null, phone: phone || null, portal_url: portal_url || null, notes: notes || null,
-  };
-  // Optional columns — insert only if the migration adding them has run
-  if (address !== undefined) insertData.address = address || null;
-  if (reply_to !== undefined) insertData.reply_to = reply_to || null;
-  if (default_email_account_id !== undefined) insertData.default_email_account_id = default_email_account_id || null;
-  if (website !== undefined) insertData.website = website || null;
-  if (tracking_portal_url !== undefined) insertData.tracking_portal_url = tracking_portal_url || null;
+    const insertData = {
+      name_ar: name_ar || null, name_en,
+      state: state || null, city: city || null, type: type || null,
+      email: email || null, phone: phone || null, portal_url: portal_url || null, notes: notes || null,
+    };
+    // Optional columns — insert only if the migration adding them has run
+    if (address !== undefined) insertData.address = address || null;
+    if (reply_to !== undefined) insertData.reply_to = reply_to || null;
+    if (default_email_account_id !== undefined) insertData.default_email_account_id = default_email_account_id || null;
+    if (website !== undefined) insertData.website = website || null;
+    if (tracking_portal_url !== undefined) insertData.tracking_portal_url = tracking_portal_url || null;
 
-  let { data: created, error } = await sup.from('agencies').insert(insertData).select().single();
-  while (error && /column .* does not exist|Could not find the '(\w+)' column/.test(error.message)) {
-    const m = error.message.match(/'(\w+)' column|column "(\w+)"/);
-    const badCol = m && (m[1] || m[2]);
-    if (!badCol || !(badCol in insertData)) break;
-    delete insertData[badCol];
-    ({ data: created, error } = await sup.from('agencies').insert(insertData).select().single());
-  }
-  if (error) throw error;
+    let { data: created, error } = await sup.from('agencies').insert(insertData).select().single();
+    while (error && /column .* does not exist|Could not find the '(\w+)' column/.test(error.message)) {
+      const m = error.message.match(/'(\w+)' column|column "(\w+)"/);
+      const badCol = m && (m[1] || m[2]);
+      if (!badCol || !(badCol in insertData)) break;
+      delete insertData[badCol];
+      ({ data: created, error } = await sup.from('agencies').insert(insertData).select().single());
+    }
+    if (error) return res.status(400).json({ error: error.message });
 
-  res.status(201).json({ success: true, id: created.id });
+    res.status(201).json({ success: true, id: created.id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // PUT /api/agencies/:id — تحديث بيانات الجهة (بما فيها التفعيل/التعطيل وإعدادات الإرسال)
@@ -280,7 +318,7 @@ router.put('/agencies/:id', requireAuth, requirePermission('agencies', 'edit'), 
 // DELETE /api/agencies/:id
 router.delete('/agencies/:id', requireAuth, requirePermission('agencies', 'delete'), async (req, res) => {
   const sup = getSupabase();
-  const { error } = await sup.from('agencies').delete().eq('id', parseInt(req.params.id));
+  const { error } = await trash.softDelete(sup, { table: 'agencies', id: parseInt(req.params.id), userId: req.user.id });
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
@@ -302,7 +340,7 @@ router.post('/agencies/bulk/delete', requireAuth, requirePermission('agencies', 
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids مطلوبة' });
   const sup = getSupabase();
-  const { error } = await sup.from('agencies').delete().in('id', ids);
+  const { error } = await trash.softDelete(sup, { table: 'agencies', ids, userId: req.user.id });
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true, deleted: ids.length });
 });

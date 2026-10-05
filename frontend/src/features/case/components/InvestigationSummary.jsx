@@ -46,7 +46,9 @@ function EditableField({ icon: Icon, label, value, onSave, placeholder, multilin
       <span className="font-medium shrink-0" style={{ color: 'var(--ds-text-muted)' }}>{label}:</span>
       {value ? (
         isLink ? (
-          <a href={value} target="_blank" rel="noreferrer" className="flex-1 min-w-0 truncate" style={{ color: '#3b82f6' }}>{value}</a>
+          /^https?:\/\//i.test(String(value).trim())
+            ? <a href={String(value).trim()} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0 truncate" style={{ color: '#3b82f6' }}>{value}</a>
+            : <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--ds-text-primary)' }} title="رابط غير صالح">{value}</span>
         ) : (
           <span className="flex-1 min-w-0" style={{ color: 'var(--ds-text-primary)', whiteSpace: multiline ? 'pre-wrap' : 'nowrap' }}>{value}</span>
         )

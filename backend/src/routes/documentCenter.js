@@ -8,8 +8,11 @@ const caseFileStorage = require('../services/caseFileStorage');
 const gdrive = require('../services/googleDriveService');
 const composeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const { requireCaseAccess, canAccessCase, canViewAllCases, getVisibleCaseIds } = require('../services/caseAccess');
+const { canViewAllEmailAccounts, getVisibleEmailAccountIds, canAccessEmailAccount } = require('../services/emailAccountAccess');
 const { notifyUsers, getCaseRecipients, getCaseActivityRecipients } = require('../services/notificationService');
-const { checkLock } = require('../services/emailAccountLock');
+const { checkLock, getLockingCase } = require('../services/emailAccountLock');
+const trash = require('../services/trash');
+const { logActivity } = require('../services/activityLogger');
 // /cases/:caseId/documents, /upload, /compose, /portal-log previously had no
 // per-case access check -- a role restricted to its own assigned cases
 // could list/upload documents, SEND A REAL OUTBOUND EMAIL as, or log a
@@ -21,6 +24,25 @@ function parseMetadata(raw) {
   if (!raw) return {};
   if (typeof raw === 'object') return raw;
   try { return JSON.parse(raw); } catch { return {}; }
+}
+
+// RFC 5322 References header must list EVERY ancestor Message-ID in the
+// thread (oldest first), not just the immediate parent -- a References
+// header that only ever repeats the last parent is indistinguishable from a
+// broken chain to Gmail/Outlook once a thread goes 3+ messages deep, and
+// they silently fall back to subject-line grouping (unreliable once a
+// subject gets a stray "RE: RE:" or a translated prefix). thread_id already
+// groups every message (inbound + outbound) in this conversation, so the
+// full chain is just every message_id in that group, oldest first.
+async function buildReferencesChain(sup, threadId, fallbackMessageId) {
+  if (!threadId) return fallbackMessageId;
+  const { data } = await sup.from('communications')
+    .select('message_id')
+    .eq('thread_id', threadId)
+    .not('message_id', 'is', null)
+    .order('created_at', { ascending: true });
+  const chain = (data || []).map(r => r.message_id).filter(Boolean);
+  return chain.length ? chain.join(' ') : fallbackMessageId;
 }
 
 // ============ AGENCY COMMUNICATION CONFIG ============
@@ -73,7 +95,7 @@ router.get('/documents/categories', requireAuth, async (req, res) => {
 // GET /api/documents/:id — get single document
 router.get('/documents/:id', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data, error } = await sup.from('case_documents').select('*').eq('id', parseInt(req.params.id)).single();
+  const { data, error } = await sup.from('case_documents').select('*').eq('id', parseInt(req.params.id)).is('deleted_at', null).single();
   if (error) return res.status(404).json({ error: error.message });
   // Scoped by the DOCUMENT's own id, not a case id in the URL -- still owned
   // by a case, so still has to check that case's visibility.
@@ -86,7 +108,7 @@ router.get('/documents/:id', requireAuth, async (req, res) => {
 // GET /api/cases/:caseId/documents — list documents for a case
 router.get('/cases/:caseId/documents', requireAuth, caseGate, async (req, res) => {
   const sup = getSupabase();
-  const { data, error } = await sup.from('case_documents').select('*').eq('case_id', parseInt(req.params.caseId)).order('created_at', { ascending: false });
+  const { data, error } = await sup.from('case_documents').select('*').eq('case_id', parseInt(req.params.caseId)).is('deleted_at', null).order('created_at', { ascending: false });
   if (error) return res.status(400).json({ error: error.message });
   res.json({ documents: data });
 });
@@ -104,8 +126,12 @@ router.post('/cases/:caseId/upload', requireAuth, caseGate, async (req, res) => 
     notes, uploaded_by: user.id, version: 1,
   }).select().single();
   if (error) return res.status(400).json({ error: error.message });
-  await sup.from('case_comments').insert({
-    case_id: parseInt(req.params.caseId), content: `📄 ${file_name}`,
+  // Timeline entry, not case_comments -- a document-registered auto-note
+  // isn't real team discussion, it belongs in الخط الزمني.
+  logActivity({
+    user_id: user.id, user_name: user.name,
+    action_type: 'document_registered', target_type: 'document', target_id: parseInt(req.params.caseId),
+    target_title: `📄 ${file_name}`,
   });
   res.json({ success: true, document: data });
 });
@@ -149,11 +175,20 @@ router.put('/documents/:id', requireAuth, async (req, res) => {
   }
 
   if (before && updates.original_name && updates.original_name !== before.original_name) {
-    await sup.from('activity_logs').insert({
-      user_id: req.user?.id, user_name: req.user?.name,
-      action_type: 'document_renamed', target_type: 'case', target_id: before.case_id,
-      target_title: `✏️ ${before.original_name} → ${updates.original_name}`,
-    }).catch(e => console.error('[documents] rename activity log failed:', e.message));
+    // Supabase's query builder is a bare thenable (only .then(), no
+    // .catch()/.finally()) -- chaining .catch() directly on it throws "not
+    // a function" instead of swallowing the error. With no async-error
+    // middleware in this app, that throw becomes an unhandled rejection and
+    // the response below never gets sent -- the rename (DB update + Drive
+    // rename above) had already succeeded, but the request just hangs/times
+    // out, showing as a failure for something that actually worked.
+    try {
+      await sup.from('activity_logs').insert({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'document_renamed', target_type: 'case', target_id: before.case_id,
+        target_title: `✏️ ${before.original_name} → ${updates.original_name}`,
+      });
+    } catch (e) { console.error('[documents] rename activity log failed:', e.message); }
   }
 
   res.json({ success: true, document: data });
@@ -203,7 +238,7 @@ router.delete('/documents/:id', requireAuth, async (req, res) => {
   if (docRow && !(await canAccessCase(sup, req.user, docRow.case_id))) {
     return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
   }
-  const { error } = await sup.from('case_documents').update({ is_deleted: true }).eq('id', parseInt(req.params.id));
+  const { error } = await trash.softDelete(sup, { table: 'case_documents', id: parseInt(req.params.id), userId: req.user?.id });
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
@@ -211,13 +246,13 @@ router.delete('/documents/:id', requireAuth, async (req, res) => {
 // GET /api/email-accounts — list email accounts
 router.get('/email-accounts', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data, error } = await sup.from('email_accounts').select('*');
+  const { data, error } = await sup.from('email_accounts').select('*').is('deleted_at', null);
   if (error) return res.status(400).json({ error: error.message });
   res.json({ accounts: data || [] });
 });
 
 // GET /api/imap/diagnose/:accountId — production IMAP diagnostic (instrumented)
-router.get('/imap/diagnose/:accountId', requireAuth, async (req, res) => {
+router.get('/imap/diagnose/:accountId', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
@@ -229,7 +264,7 @@ router.get('/imap/diagnose/:accountId', requireAuth, async (req, res) => {
 });
 
 // GET /api/imap/connectivity/:accountId — minimal connect+auth test
-router.get('/imap/connectivity/:accountId', requireAuth, async (req, res) => {
+router.get('/imap/connectivity/:accountId', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
@@ -242,8 +277,12 @@ router.get('/imap/connectivity/:accountId', requireAuth, async (req, res) => {
 
 // GET /api/imap/folders/:accountId — INBOX vs Spam vs All Mail counts
 // (mailPoller only ever reads INBOX; this checks whether a message that
-// never showed up actually landed in Spam instead).
-router.get('/imap/folders/:accountId', requireAuth, async (req, res) => {
+// never showed up actually landed in Spam instead). Was requireAuth-only,
+// unlike its siblings /imap/compare and /imap/fix-credentials -- meant any
+// authenticated employee, regardless of case assignment, could read real
+// subject/sender lines from ANY account's Spam/All Mail folders, including
+// mail tied to cases they have no access to.
+router.get('/imap/folders/:accountId', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.accountId)).single();
@@ -330,11 +369,17 @@ router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
-    const { to, cc, bcc, subject, body, html, account_id, agency_id, request_id, reply_to_id, expected_response_days } = req.body;
+    const { to, cc, bcc, subject, body, html, account_id, agency_id, request_id: requestIdRaw, reply_to_id, expected_response_days } = req.body;
     if (!to || !subject || !account_id) return res.status(400).json({ error: 'to, subject, account_id مطلوبون' });
 
     const { data: account } = await sup.from('email_accounts').select('email').eq('id', parseInt(account_id)).single();
     if (!account) return res.status(404).json({ error: 'Email account not found' });
+    // Sending as a mailbox needs access to THAT mailbox (email.js's own send route
+    // already enforces this; the compose routes here did not).
+    if (!(await canAccessEmailAccount(sup, req.user, account_id))) {
+      return res.status(403).json({ error: 'Forbidden — لا تملك صلاحية استخدام هذا الحساب' });
+    }
+    const request_id = await ownedRequestId(sup, requestIdRaw, caseId);
 
     // Once this account has emailed this agency for another case, block
     // reusing it here too (unless a permissioned user explicitly unlocked
@@ -355,11 +400,11 @@ router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array
     // References headers) group this into the same conversation.
     let inReplyTo, references, threadId;
     if (reply_to_id) {
-      const { data: original } = await sup.from('communications').select('message_id, thread_id').eq('id', parseInt(reply_to_id)).maybeSingle();
-      if (original) {
+      const { data: original } = await sup.from('communications').select('message_id, thread_id, case_id').eq('id', parseInt(reply_to_id)).is('deleted_at', null).maybeSingle();
+      if (original && (!original.case_id || original.case_id === caseId)) {
         inReplyTo = original.message_id;
-        references = original.message_id;
         threadId = original.thread_id || original.message_id;
+        references = await buildReferencesChain(sup, threadId, original.message_id);
       }
     }
 
@@ -433,6 +478,32 @@ router.post('/cases/:caseId/compose', requireAuth, caseGate, composeUpload.array
     });
     if (commErr) console.error('[compose] communications insert failed (email was still sent):', commErr.message);
 
+    // The lock check above and this insert straddle a real SMTP send (real
+    // network time, not just a couple of DB round-trips) -- two people
+    // composing to the same agency from the same account for two DIFFERENT
+    // cases at nearly the same moment could both pass the check before
+    // either's row lands, silently defeating the one-account-per-agency-
+    // per-case invariant this lock exists for (a later inbound reply from
+    // that agency would then have two candidate cases to file under instead
+    // of one). Can't undo an email that's already sent, and this SAME
+    // request's own send/insert already succeeded either way -- but re-
+    // checking now means the rare collision becomes a visible admin alert
+    // instead of a silent, hard-to-diagnose routing ambiguity later.
+    if (agency_id) {
+      try {
+        const raceCheck = await getLockingCase(sup, parseInt(account_id), parseInt(agency_id), caseId);
+        if (raceCheck) {
+          const { data: admins } = await sup.from('users').select('id').eq('role', 'admin');
+          await notifyUsers(sup, (admins || []).map(a => a.id), {
+            type: 'email_lock_race_detected',
+            title: '⚠️ تعارض في استخدام حساب بريد لنفس الجهة',
+            body: `حساب "${account.email}" استُخدم لمراسلة نفس الجهة في القضية #${caseId} والقضية "${raceCheck.title || '#' + raceCheck.id}" في وقت متقارب جدًا -- ردود هذه الجهة لاحقًا قد لا تُصنّف تلقائيًا لقضية واحدة بدقة.`,
+            target_type: 'case', target_id: caseId,
+          });
+        }
+      } catch (raceErr) { console.error('[compose] lock race re-check failed:', raceErr.message); }
+    }
+
     // Create timeline event (best-effort)
     try {
       await sup.from('activity_logs').insert({
@@ -481,8 +552,9 @@ router.post('/cases/:caseId/portal-log', requireAuth, caseGate, async (req, res)
   try {
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
-    const { agency_id, request_id, note, expected_response_days, confirmation_number } = req.body;
+    const { agency_id, request_id: requestIdRaw, note, expected_response_days, confirmation_number } = req.body;
     if (!agency_id) return res.status(400).json({ error: 'agency_id مطلوب' });
+    const request_id = await ownedRequestId(sup, requestIdRaw, caseId);
 
     const { data: agency } = await sup.from('agencies').select('name_ar, name_en, portal_url').eq('id', parseInt(agency_id)).maybeSingle();
 
@@ -495,13 +567,14 @@ router.post('/cases/:caseId/portal-log', requireAuth, caseGate, async (req, res)
     }
 
     const subject = confirmation_number ? `تقديم عبر البوابة — رقم التأكيد: ${confirmation_number}` : 'تقديم عبر البوابة';
-    await sup.from('communications').insert({
+    const { error: portalErr } = await sup.from('communications').insert({
       case_id: caseId, request_id: targetRequestId, agency_id: parseInt(agency_id),
       type: 'portal', direction: 'outbound',
       subject, body: note || '',
       sender: req.user?.name || 'النظام', recipient: agency?.portal_url || agency?.name_en || '',
       created_at: new Date().toISOString(),
     });
+    if (portalErr) return res.status(500).json({ error: portalErr.message });
 
     try {
       await sup.from('activity_logs').insert({
@@ -524,18 +597,56 @@ router.post('/cases/:caseId/portal-log', requireAuth, caseGate, async (req, res)
   }
 });
 
+// Can `user` open / act on this ONE message? The inbox LIST already applies both
+// scopes (case visibility + assigned mailboxes); every single-message route used
+// to check only the case, so a mailbox-restricted employee could read, archive,
+// link, delete or pull attachments from another mailbox's mail just by id.
+// Same rules as the list: an account the user isn't assigned to is off-limits
+// even for their own cases; their OWN mailbox stays accessible even when the
+// message is linked to a case they can't see.
+async function canAccessComm(sup, user, comm) {
+  const [viewAllCases, viewAllAccounts] = await Promise.all([
+    canViewAllCases(sup, user.role), canViewAllEmailAccounts(sup, user.role),
+  ]);
+  if (viewAllCases && viewAllAccounts) return true;
+  if (!viewAllAccounts) {
+    const ids = await getVisibleEmailAccountIds(sup, user.id);
+    if (comm.email_account_id != null && !ids.includes(comm.email_account_id)) return false;
+    if (!viewAllCases && comm.email_account_id != null) return true;
+  }
+  if (viewAllCases) return true;
+  return !comm.case_id || (await canAccessCase(sup, user, comm.case_id));
+}
+
+// Loads a live message and enforces canAccessComm; on failure it has ALREADY
+// answered (404 / 403) and returns null.
+async function loadCommForAccess(sup, user, id, res, extraFields = '') {
+  const commId = parseInt(id);
+  if (!Number.isInteger(commId)) { res.status(400).json({ error: 'معرّف غير صالح' }); return null; }
+  const { data: comm } = await sup.from('communications')
+    .select('id, case_id, email_account_id, deleted_at' + (extraFields ? ', ' + extraFields : ''))
+    .eq('id', commId).maybeSingle();
+  if (!comm || comm.deleted_at) { res.status(404).json({ error: 'Message not found' }); return null; }
+  if (!(await canAccessComm(sup, user, comm))) { res.status(403).json({ error: 'Forbidden — لا تملك صلاحية هذه الرسالة' }); return null; }
+  return comm;
+}
+
+// A request_id coming from the client must belong to THIS case, otherwise one
+// case's compose/portal-log could overwrite deadlines on another case's request.
+async function ownedRequestId(sup, rawRequestId, caseId) {
+  const rid = parseInt(rawRequestId);
+  if (!Number.isInteger(rid)) return null;
+  const { data } = await sup.from('requests').select('id').eq('id', rid).eq('case_id', caseId).is('deleted_at', null).maybeSingle();
+  return data ? data.id : null;
+}
+
 // GET /api/communications/:id/attachments/:index/download — signed URL for an attachment
 router.get('/communications/:id/attachments/:index/download', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data: comm } = await sup.from('communications').select('case_id, metadata').eq('id', parseInt(req.params.id)).maybeSingle();
-    // A standalone inbox message (case_id null) isn't case-scoped -- the
-    // org-wide inbox itself has no per-case visibility boundary to enforce
-    // here. One that IS linked to a case must respect that case's scope.
-    if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
-      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-    }
-    const attachments = parseMetadata(comm?.metadata).attachments || [];
+    const comm = await loadCommForAccess(sup, req.user, req.params.id, res, 'metadata');
+    if (!comm) return;
+    const attachments = parseMetadata(comm.metadata).attachments || [];
     const att = attachments[parseInt(req.params.index)];
     if (!att) return res.status(404).json({ error: 'Attachment not found' });
     if (att.driveFileId) {
@@ -543,6 +654,11 @@ router.get('/communications/:id/attachments/:index/download', requireAuth, async
       return res.json({ success: true, url: downloadUrl || viewUrl || att.viewUrl, filename: att.filename });
     }
     if (!att.storageKey) return res.status(404).json({ error: 'Attachment not found' });
+    // A storage key must live under THIS message's own case folder -- never sign
+    // an arbitrary bucket/path taken from stored metadata.
+    if (comm.case_id == null || !String(att.storageKey).startsWith(`case-documents/case_${comm.case_id}/`)) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
     const [bucket, ...pathParts] = att.storageKey.split('/');
     const url = await storage.getSignedUrl(bucket, pathParts.join('/'));
     if (!url) return res.status(500).json({ error: 'Could not generate download URL' });
@@ -558,17 +674,15 @@ router.delete('/communications/:id/attachments/:index', requireAuth, async (req,
     const sup = getSupabase();
     const commId = parseInt(req.params.id);
     const index = parseInt(req.params.index);
-    const { data: comm } = await sup.from('communications').select('case_id, metadata').eq('id', commId).maybeSingle();
-    if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
-      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-    }
-    const meta = parseMetadata(comm?.metadata);
+    const comm = await loadCommForAccess(sup, req.user, commId, res, 'metadata');
+    if (!comm) return;
+    const meta = parseMetadata(comm.metadata);
     const attachments = meta.attachments || [];
     const att = attachments[index];
     if (!att) return res.status(404).json({ error: 'Attachment not found' });
 
     if (att.driveFileId) await gdrive.deleteFile(att.driveFileId).catch(e => console.warn('Drive delete failed:', e.message));
-    else if (att.storageKey) await storage.deleteByKey(att.storageKey).catch(e => console.warn('Storage delete failed:', e.message));
+    else if (att.storageKey && comm.case_id != null && String(att.storageKey).startsWith(`case-documents/case_${comm.case_id}/`)) await storage.deleteByKey(att.storageKey).catch(e => console.warn('Storage delete failed:', e.message));
 
     const updatedAttachments = attachments.filter((_, i) => i !== index);
     const { error: metaErr } = await sup.from('communications').update({ metadata: JSON.stringify({ ...meta, attachments: updatedAttachments }) }).eq('id', commId);
@@ -592,7 +706,9 @@ router.delete('/communications/:id/attachments/:index', requireAuth, async (req,
 router.get('/inbox', requireAuth, async (req, res) => {
   const sup = getSupabase();
   try {
-    const { status, account_id, direction, date_from, date_to, search, limit = 50, offset = 0 } = req.query;
+    const { status, account_id, direction, date_from, date_to, search } = req.query;
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
     // Resolve free-text search to a set of matching ids via 3 separate
     // single-column ilike queries instead of a hand-rolled
@@ -603,13 +719,34 @@ router.get('/inbox', requireAuth, async (req, res) => {
     // instead of just not matching. A plain .ilike() call passes the value
     // as a normal parameter -- nothing hand-rolled, nothing to break.
     let searchIds = null;
+    // id -> relevance score, used to sort search results best-match-first
+    // instead of the flat created_at-only ordering every other tab uses.
+    let searchRelevance = null;
     if (search) {
-      const [bySubject, bySender, byBody] = await Promise.all([
-        sup.from('communications').select('id').ilike('subject', `%${search}%`),
-        sup.from('communications').select('id').ilike('sender', `%${search}%`),
-        sup.from('communications').select('id').ilike('body', `%${search}%`),
+      const term = search.trim();
+      const termLower = term.toLowerCase();
+      // `recipient` was never searched before -- a full email address that
+      // only ever appears as the recipient (the "To:" side, e.g. searching
+      // your OWN account's address, or who an outbound message was sent to)
+      // matched nothing at all, guaranteed zero results every time no matter
+      // how exact the search was.
+      // Capped per source (a well-used org mailbox address can otherwise
+      // match a huge fraction of the whole table as sender+recipient
+      // combined) -- an uncapped id list here builds a `.in(id, [...])`
+      // filter long enough to exceed nginx's own request-URI size limit,
+      // turning a broad-but-valid search into a hard 500 instead of just a
+      // large result set. Ordered newest-first before the cap so a
+      // truncation drops the OLDEST candidate matches, not an arbitrary mix.
+      const [bySubject, bySender, byRecipient, byBody] = await Promise.all([
+        sup.from('communications').select('id, subject, sender, recipient').ilike('subject', `%${term}%`).is('deleted_at', null).order('created_at', { ascending: false }).limit(300),
+        sup.from('communications').select('id, subject, sender, recipient').ilike('sender', `%${term}%`).is('deleted_at', null).order('created_at', { ascending: false }).limit(300),
+        sup.from('communications').select('id, subject, sender, recipient').ilike('recipient', `%${term}%`).is('deleted_at', null).order('created_at', { ascending: false }).limit(300),
+        sup.from('communications').select('id').ilike('body', `%${term}%`).is('deleted_at', null).order('created_at', { ascending: false }).limit(300),
       ]);
-      searchIds = new Set([...(bySubject.data || []), ...(bySender.data || []), ...(byBody.data || [])].map(r => r.id));
+      const rowById = new Map();
+      [...(bySubject.data || []), ...(bySender.data || []), ...(byRecipient.data || [])].forEach(r => rowById.set(r.id, r));
+      const bodyMatchIds = new Set((byBody.data || []).map(r => r.id));
+      searchIds = new Set([...rowById.keys(), ...bodyMatchIds]);
       // Email number -- an exact lookup (`.eq`, indexed, no scale limit),
       // not the fetch-every-id-and-substring-match approach cases.js uses
       // for case numbers. communications already has 1200+ rows and grows
@@ -618,8 +755,70 @@ router.get('/inbox', requireAuth, async (req, res) => {
       // past that row would never match no matter what was typed -- confirmed
       // live (1219 rows, only 1000 returned). cases.js's identical pattern
       // hasn't hit this yet (181 rows) but has the same latent ceiling.
-      if (/^\d+$/.test(search.trim())) searchIds.add(parseInt(search.trim()));
+      if (/^\d+$/.test(term)) searchIds.add(parseInt(term));
+
+      // Relevance score per matched id: an exact field match ranks above a
+      // "starts with" match, which ranks above a plain "contains" substring
+      // -- across subject/sender/recipient, taking whichever field scored
+      // this row highest. A hit that only came from the body (or the bare
+      // numeric-id fallback) has no field text to score, so it sits below
+      // every real field match, then falls back to recency like before.
+      searchRelevance = new Map();
+      for (const id of searchIds) {
+        const row = rowById.get(id);
+        let score = 0;
+        for (const field of ['subject', 'sender', 'recipient']) {
+          const v = (row?.[field] || '').toLowerCase();
+          if (!v) continue;
+          if (v === termLower) score = Math.max(score, 100);
+          else if (v.startsWith(termLower)) score = Math.max(score, 70);
+          else if (v.includes(termLower)) score = Math.max(score, 40);
+        }
+        if (score === 0 && bodyMatchIds.has(id)) score = 10;
+        searchRelevance.set(id, score);
+      }
+
+      // Guard against PostgREST's own silent row cap (see the comment above
+      // on the numeric-id lookup -- confirmed live at 1219 rows / only 1000
+      // returned on this same table). The combined candidate set here can
+      // reach ~1200 ids for a broad term (up to 900 unique across
+      // subject+sender+recipient, plus up to 300 more body-only ids) on this
+      // fast-growing table -- a `.in(id, [...])` filter with more candidates
+      // than that cap can come back silently truncated below, which would
+      // then make `count` (set from the truncated result) quietly wrong too.
+      // Rank every candidate by the same relevance score used for final
+      // sorting BEFORE capping, so if a cut is unavoidable it drops the
+      // least-relevant candidates first, not an arbitrary recency-based mix.
+      const SEARCH_CANDIDATE_CAP = 900;
+      if (searchIds.size > SEARCH_CANDIDATE_CAP) {
+        const ranked = [...searchIds].sort((a, b) => (searchRelevance.get(b) || 0) - (searchRelevance.get(a) || 0));
+        searchIds = new Set(ranked.slice(0, SEARCH_CANDIDATE_CAP));
+      }
     }
+
+    // Case-visibility scope: a role restricted to its own assigned cases
+    // (cases.view_all = false) should only see inbox messages that are
+    // either still unlinked (case_id null -- anyone doing triage needs to
+    // see and link these) or linked to a case they can actually access.
+    // Previously ANY authenticated user could read the full content
+    // (subject/sender/body) of ANY other case's real government/police
+    // correspondence just by opening صندوق البريد, regardless of their own
+    // case assignments -- the one boundary every other case-scoped route in
+    // this codebase already enforces.
+    const viewAllCases = await canViewAllCases(sup, req.user.role);
+    const visibleCaseIds = viewAllCases ? null : await getVisibleCaseIds(sup, req.user.id);
+
+    // Mailbox-visibility scope: same idea, one layer down -- a role
+    // restricted to specific mailboxes (email_accounts.view_all = false)
+    // should only see messages through an account it's been explicitly
+    // assigned (services/emailAccountAccess.js), or messages with no
+    // account at all. Many communications rows are never tied to any
+    // account in the first place (phone/mail logs, portal submissions, the
+    // /email/receive simulate route all insert with email_account_id left
+    // null) -- those must stay visible to everyone regardless of mailbox
+    // assignment, same as an unlinked case_id stays visible above.
+    const viewAllAccounts = await canViewAllEmailAccounts(sup, req.user.role);
+    const visibleAccountIds = viewAllAccounts ? null : await getVisibleEmailAccountIds(sup, req.user.id);
 
     // migrations/012 (is_archived/reviewed_by) may not have been run yet in
     // this environment -- build the query with archive support, but if it
@@ -627,7 +826,41 @@ router.get('/inbox', requireAuth, async (req, res) => {
     // without it rather than hard-failing the entire inbox (every tab, not
     // just أرشيف) until the migration lands.
     const buildQuery = (withArchiveSupport) => {
-      let q = sup.from('communications').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+      let q = sup.from('communications').select('*', { count: 'exact' }).is('deleted_at', null).order('created_at', { ascending: false });
+      // When search is active, relevance (computed above) decides the order,
+      // not created_at -- so pagination has to happen AFTER that sort, in
+      // JS, rather than as a DB-side .range() here (searchIds already
+      // bounds this to a small result set, not the whole table).
+      if (!search) q = q.range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+      if (!viewAllCases && !viewAllAccounts && visibleAccountIds.length) {
+        // Both scopes restricted at once AND the user has at least one
+        // assigned mailbox -- a message through THEIR OWN assigned account
+        // must stay visible no matter which case (if any) it's linked to.
+        // Confirmed live: a brand-new employee assigned exactly one mailbox
+        // still couldn't see a message sitting in that very mailbox, because
+        // it happened to already be linked to an unrelated case they weren't
+        // assigned to -- the case AND account filters were being ANDed
+        // together below, so either restriction alone could hide a message.
+        // Managing a mailbox means seeing everything that lands in it, even
+        // something mistakenly linked to a case they don't have access to.
+        // Only a message with NO account at all still falls back to the
+        // plain case-visibility rule (the original "still needs triage"
+        // reasoning in the `else` branch below) -- and a message through
+        // some OTHER account they're NOT assigned to stays hidden even if
+        // it's tied to one of their own cases, since account privacy isn't
+        // overridden by case access, only the reverse.
+        const caseOr = visibleCaseIds.length
+          ? `or(case_id.is.null,case_id.in.(${visibleCaseIds.join(',')}))`
+          : 'case_id.is.null';
+        q = q.or(`email_account_id.in.(${visibleAccountIds.join(',')}),and(email_account_id.is.null,${caseOr})`);
+      } else {
+        if (!viewAllCases) {
+          q = visibleCaseIds.length ? q.or(`case_id.is.null,case_id.in.(${visibleCaseIds.join(',')})`) : q.is('case_id', null);
+        }
+        if (!viewAllAccounts) {
+          q = visibleAccountIds.length ? q.or(`email_account_id.is.null,email_account_id.in.(${visibleAccountIds.join(',')})`) : q.is('email_account_id', null);
+        }
+      }
       if (status === 'archived') {
         if (withArchiveSupport) q = q.eq('is_archived', true);
       } else {
@@ -663,6 +896,20 @@ router.get('/inbox', requireAuth, async (req, res) => {
     }
     if (error) return res.status(500).json({ error: error.message });
 
+    // Best-match-first when searching (closest/most exact hits before
+    // looser ones, ties broken by recency), then paginate the now-sorted
+    // full result set manually -- the DB-side .range() above was skipped
+    // for exactly this case.
+    if (search && messages) {
+      messages = [...messages].sort((a, b) => {
+        const sa = searchRelevance.get(a.id) || 0, sb = searchRelevance.get(b.id) || 0;
+        if (sb !== sa) return sb - sa;
+        return new Date(b.created_at) - new Date(a.created_at);
+      });
+      count = messages.length;
+      messages = messages.slice(parseInt(offset), parseInt(offset) + parseInt(limit));
+    }
+
     // Batch-resolve reviewer names ("تم الفحص") -- no reliance on a
     // PostgREST embedded-relationship join (see portals.js's earlier fix for
     // why that's fragile), just a second query keyed by the distinct ids.
@@ -696,6 +943,49 @@ router.get('/inbox', requireAuth, async (req, res) => {
   } catch (ex) { res.status(500).json({ error: ex.message }); }
 });
 
+// GET /api/communications/thread/:threadId — every message sharing this
+// thread_id (chronological), so opening any one message from صندوق البريد or
+// a case's الاتصالات tab can show the whole back-and-forth (sent + received)
+// together, like Gmail/Outlook's conversation view -- not just the single
+// row that was clicked. Same case-visibility scope as GET /inbox: a message
+// still unlinked (case_id null) stays visible to anyone, but a message
+// linked to a case the requester can't access is dropped from the result --
+// otherwise a thread spanning two different cases (possible via
+// PUT /inbox/:id/link re-tagging one message's case_id) could surface a
+// case-B message's full content to someone opening a case-A message they
+// DO have access to, bypassing the very check GET /communications/:id
+// enforces for that same message read individually.
+router.get('/communications/thread/:threadId', requireAuth, async (req, res) => {
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('communications').select('*')
+      .eq('thread_id', req.params.threadId).is('deleted_at', null)
+      .order('created_at', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const viewAllCases = await canViewAllCases(sup, req.user.role);
+    let rows = data || [];
+    if (!viewAllCases) {
+      const visibleCaseIds = new Set(await getVisibleCaseIds(sup, req.user.id));
+      rows = rows.filter(m => !m.case_id || visibleCaseIds.has(m.case_id));
+    }
+    // ...and the mailbox scope: a thread can span mailboxes the user isn't assigned to.
+    const accessibleRows = [];
+    for (const m of rows) { if (await canAccessComm(sup, req.user, m)) accessibleRows.push(m); }
+    rows = accessibleRows;
+
+    const parsed = rows.map(m => {
+      let metadata = {};
+      if (m.metadata) {
+        if (typeof m.metadata !== 'string') metadata = m.metadata;
+        else { try { metadata = JSON.parse(m.metadata); } catch { metadata = {}; } }
+      }
+      return { ...m, metadata };
+    });
+    res.json({ success: true, data: parsed });
+  } catch (ex) { res.status(500).json({ error: ex.message }); }
+});
+
 // POST /api/inbox/compose — send a standalone email from صندوق البريد, not
 // tied to any case. The only compose path before this was /cases/:caseId/compose,
 // which hard-requires a case; general correspondence unrelated to any
@@ -708,6 +998,9 @@ router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10
     const sup = getSupabase();
     const { data: account } = await sup.from('email_accounts').select('email').eq('id', parseInt(account_id)).maybeSingle();
     if (!account) return res.status(404).json({ error: 'Email account not found' });
+    if (!(await canAccessEmailAccount(sup, req.user, account_id))) {
+      return res.status(403).json({ error: 'Forbidden — لا تملك صلاحية استخدام هذا الحساب' });
+    }
 
     // Replying/forwarding from the standalone message tab: thread against
     // the original so both our own matching (thread_id) and the
@@ -715,13 +1008,14 @@ router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10
     // same conversation, and keep the same case link if the original had one.
     let inReplyTo, references, threadId, linkedCaseId = case_id ? parseInt(case_id) : null, linkedAgencyId = null;
     if (reply_to_id) {
-      const { data: original } = await sup.from('communications').select('message_id, thread_id, case_id, agency_id').eq('id', parseInt(reply_to_id)).maybeSingle();
-      if (original) {
+      const { data: original } = await sup.from('communications').select('message_id, thread_id, case_id, agency_id, email_account_id, deleted_at').eq('id', parseInt(reply_to_id)).maybeSingle();
+      if (original && !original.deleted_at && (await canAccessComm(sup, req.user, original))) {
         inReplyTo = original.message_id;
-        references = original.message_id;
         threadId = original.thread_id || original.message_id;
+        references = await buildReferencesChain(sup, threadId, original.message_id);
         if (!linkedCaseId) linkedCaseId = original.case_id || null;
-        linkedAgencyId = original.agency_id || null;
+        // Only inherit the agency when the reply stays on the SAME case.
+        linkedAgencyId = (!case_id || original.case_id === parseInt(case_id)) ? (original.agency_id || null) : null;
       }
     }
     // Same class of gap the earlier case-scoping audit fixed on every other
@@ -730,6 +1024,21 @@ router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10
     // restricted-role user fabricate a communications row on any case.
     if (linkedCaseId && !(await canAccessCase(sup, req.user, linkedCaseId))) {
       return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
+
+    // /cases/:id/compose enforces the same-account-same-agency-one-case
+    // lock (emailAccountLock.js); this second, less obvious send path never
+    // did -- sending straight from صندوق البريد's own composer with a
+    // case_id/reply_to_id could freely reuse a locked account+agency pair
+    // for a different case, bypassing the check entirely rather than just
+    // racing it.
+    if (linkedCaseId && linkedAgencyId) {
+      const lockCheck = await checkLock(sup, parseInt(account_id), linkedAgencyId, linkedCaseId);
+      if (lockCheck.locked) {
+        return res.status(409).json({
+          error: `هذا الحساب مستخدم بالفعل لمراسلة هذه الجهة في قضية "${lockCheck.lockedByCase?.title || '#' + lockCheck.lockedByCase?.id}" — اختر حسابًا آخر، أو اطلب فك القيد من صاحب الصلاحية.`,
+        });
+      }
     }
 
     // Attached straight to the outgoing email only -- there's no case here
@@ -758,6 +1067,27 @@ router.post('/inbox/compose', requireAuth, composeUpload.array('attachments', 10
       metadata: storedAttachments.length ? JSON.stringify({ attachments: storedAttachments }) : null,
     }).select().single();
     if (error) return res.status(500).json({ error: error.message });
+
+    // Same race-visibility safety net as /cases/:id/compose -- the lock
+    // check above and this insert straddle a real SMTP send, so a
+    // near-simultaneous send elsewhere for the same account+agency+a
+    // different case could still slip through; can't undo an email that's
+    // already sent, but this at least surfaces the collision to admins
+    // instead of it silently corrupting future reply-routing.
+    if (linkedCaseId && linkedAgencyId) {
+      try {
+        const raceCheck = await getLockingCase(sup, parseInt(account_id), linkedAgencyId, linkedCaseId);
+        if (raceCheck) {
+          const { data: admins } = await sup.from('users').select('id').eq('role', 'admin');
+          await notifyUsers(sup, (admins || []).map(a => a.id), {
+            type: 'email_lock_race_detected',
+            title: '⚠️ تعارض في استخدام حساب بريد لنفس الجهة',
+            body: `حساب "${account.email}" استُخدم لمراسلة نفس الجهة في القضية #${linkedCaseId} والقضية "${raceCheck.title || '#' + raceCheck.id}" في وقت متقارب جدًا -- ردود هذه الجهة لاحقًا قد لا تُصنّف تلقائيًا لقضية واحدة بدقة.`,
+            target_type: 'case', target_id: linkedCaseId,
+          });
+        }
+      } catch (raceErr) { console.error('[inbox/compose] lock race re-check failed:', raceErr.message); }
+    }
 
     res.status(201).json({ success: true, data, messageId: info.messageId });
   } catch (err) {
@@ -790,11 +1120,16 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
     // flagged (see mailPoller.js's possibleMatches) -- clear it so a
     // resolved message doesn't keep showing a stale "might also be case X/Y"
     // hint after the user already picked one.
-    const { data: existing } = await sup.from('communications').select('metadata, subject, sender, case_id').eq('id', parseInt(req.params.id)).maybeSingle();
-    if (existing?.case_id && !(await canAccessCase(sup, req.user, existing.case_id))) {
-      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    const existing = await loadCommForAccess(sup, req.user, req.params.id, res, 'metadata, subject, sender');
+    if (!existing) return;
+    if (case_id) {
+      const { data: targetCase } = await sup.from('cases').select('id').eq('id', parseInt(case_id)).is('deleted_at', null).maybeSingle();
+      if (!targetCase) return res.status(404).json({ error: 'Case not found' });
+      // Re-linking to a DIFFERENT case: the old request_id belongs to the old
+      // case and would make the classifier act on the wrong case's request.
+      if (existing.case_id !== parseInt(case_id)) updates.request_id = null;
     }
-    if (existing) {
+    {
       let meta = {};
       try { meta = existing.metadata ? JSON.parse(existing.metadata) : {}; } catch { meta = {}; }
       if (meta.possible_matches) { delete meta.possible_matches; updates.metadata = JSON.stringify(meta); }
@@ -834,10 +1169,8 @@ router.put('/inbox/:id/link', requireAuth, async (req, res) => {
 // counted as "unread" forever unless separately linked or archived.
 router.put('/inbox/:id/read', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
-    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-  }
+  const comm = await loadCommForAccess(sup, req.user, req.params.id, res);
+  if (!comm) return;
   const { error } = await sup.from('communications').update({ is_read: true }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
@@ -849,10 +1182,8 @@ router.put('/inbox/:id/read', requireAuth, async (req, res) => {
 // removes the message from the main inbox tabs into its own أرشيف tab.
 router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
-    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-  }
+  const comm = await loadCommForAccess(sup, req.user, req.params.id, res);
+  if (!comm) return;
   const { error } = await sup.from('communications').update({ is_archived: true, archived_at: new Date().toISOString() }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
@@ -861,10 +1192,8 @@ router.put('/inbox/:id/archive', requireAuth, async (req, res) => {
 // PUT /api/inbox/:id/unarchive -- restore a message back to the main inbox.
 router.put('/inbox/:id/unarchive', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
-    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-  }
+  const comm = await loadCommForAccess(sup, req.user, req.params.id, res);
+  if (!comm) return;
   const { error } = await sup.from('communications').update({ is_archived: false, archived_at: null }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
@@ -875,10 +1204,8 @@ router.put('/inbox/:id/unarchive', requireAuth, async (req, res) => {
 // message can be opened without anyone having actually verified its content.
 router.put('/inbox/:id/review', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
-    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-  }
+  const comm = await loadCommForAccess(sup, req.user, req.params.id, res);
+  if (!comm) return;
   const { error } = await sup.from('communications')
     .update({ reviewed_by: req.user.id, reviewed_at: new Date().toISOString() })
     .eq('id', parseInt(req.params.id));
@@ -893,10 +1220,8 @@ router.put('/inbox/:id/review', requireAuth, async (req, res) => {
 // plausible case as `possible_matches` in metadata).
 router.put('/inbox/:id/unlink', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data: comm } = await sup.from('communications').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (comm?.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
-    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-  }
+  const comm = await loadCommForAccess(sup, req.user, req.params.id, res);
+  if (!comm) return;
   let { error } = await sup.from('communications')
     .update({ case_id: null, agency_id: null, request_id: null, match_reason: null })
     .eq('id', parseInt(req.params.id));
@@ -916,11 +1241,8 @@ router.put('/inbox/:id/unlink', requireAuth, async (req, res) => {
 // criterion's stats.
 router.put('/inbox/:id/reject-match', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data: comm } = await sup.from('communications').select('case_id, match_reason').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (!comm) return res.status(404).json({ error: 'Message not found' });
-  if (comm.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
-    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-  }
+  const comm = await loadCommForAccess(sup, req.user, req.params.id, res, 'match_reason');
+  if (!comm) return;
   let { error } = await sup.from('communications')
     .update({ case_id: null, agency_id: null, request_id: null, match_reason: null })
     .eq('id', parseInt(req.params.id));
@@ -999,6 +1321,14 @@ router.post('/inbox/matching-keywords', requireAuth, requirePermission('email_ma
     const { keyword_phrase, case_id } = req.body;
     if (!keyword_phrase || !keyword_phrase.trim()) return res.status(400).json({ error: 'keyword_phrase مطلوب' });
     if (!case_id) return res.status(400).json({ error: 'case_id مطلوب -- كلمة مفتاحية بلا قضية محددة لن تربط أي شيء' });
+    // Same guard as case_agency_channels' own POST -- a generic portal label
+    // ("Request Number" etc.) instead of the actual unique code silently
+    // mass-links every automated confirmation email system-wide to this one
+    // case (confirmed live on case 785, see isGenericFilterPhrase's comment).
+    const { isGenericFilterPhrase } = require('../services/mailPoller');
+    if (isGenericFilterPhrase(keyword_phrase)) {
+      return res.status(400).json({ error: `"${keyword_phrase.trim()}" عبارة عامة جدًا وموجودة في رسائل تأكيد أي بوابة تقريبًا -- استخدم الكود/الرقم الفعلي المميز فقط، مش تسمية الحقل` });
+    }
     const sup = getSupabase();
     if (!(await canAccessCase(sup, req.user, parseInt(case_id)))) {
       return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
@@ -1034,12 +1364,12 @@ router.delete('/inbox/matching-keywords/:id', requireAuth, requirePermission('em
 router.get('/communications/:id', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data, error } = await sup.from('communications').select('*').eq('id', parseInt(req.params.id)).maybeSingle();
+    const { data, error } = await sup.from('communications').select('*').eq('id', parseInt(req.params.id)).is('deleted_at', null).maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Message not found' });
     // Standalone inbox messages (case_id null) have no case boundary to
     // enforce; a message linked to a case must respect that case's scope.
-    if (data.case_id && !(await canAccessCase(sup, req.user, data.case_id))) {
+    if (!(await canAccessComm(sup, req.user, data))) {
       return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
     }
     res.json({ success: true, data: { ...data, metadata: parseMetadata(data.metadata) } });
@@ -1054,20 +1384,13 @@ router.delete('/communications/:id', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
     const commId = parseInt(req.params.id);
-    const { data: comm } = await sup.from('communications').select('case_id, metadata, subject').eq('id', commId).maybeSingle();
-    if (!comm) return res.status(404).json({ error: 'Message not found' });
-    if (comm.case_id && !(await canAccessCase(sup, req.user, comm.case_id))) {
-      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-    }
+    const comm = await loadCommForAccess(sup, req.user, commId, res, 'metadata, subject');
+    if (!comm) return;
 
-    const meta = parseMetadata(comm.metadata);
-    for (const att of meta.attachments || []) {
-      if (att.driveFileId) {
-        await gdrive.deleteFile(att.driveFileId).catch(e => console.warn('[communications] Drive attachment delete failed:', e.message));
-      }
-    }
-
-    const { error } = await sup.from('communications').delete().eq('id', commId);
+    // Soft delete only -- attachment bytes stay on Drive until this is
+    // permanently deleted from سلة المحذوفات (see trash.js's communications
+    // special-case), so an accidental click here is fully reversible.
+    const { error } = await trash.softDelete(sup, { table: 'communications', id: commId, userId: req.user?.id });
     if (error) throw error;
 
     try {
@@ -1085,7 +1408,7 @@ router.delete('/communications/:id', requireAuth, async (req, res) => {
 });
 
 // POST /api/imap/poll — Trigger IMAP polling
-router.post('/imap/poll', requireAuth, async (req, res) => {
+router.post('/imap/poll', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const mailPoller = require('../services/mailPoller');
     const { total, errors, warnings } = await mailPoller.pollAll();
@@ -1155,11 +1478,37 @@ router.get('/inbox/unread-count', requireAuth, async (req, res) => {
     // counted in this badge forever, while never appearing under the
     // "غير مقروء" tab itself (excluded there because archived), only under
     // "الأرشيف". Badge and tab permanently disagreed on the same message.
-    let { count, error } = await sup.from('communications').select('*', { count: 'exact', head: true })
-      .is('is_read', false).eq('direction', 'inbound').not('is_archived', 'is', true);
+    // Same case-visibility scope as GET /inbox itself -- otherwise a
+    // restricted role's badge count included messages linked to cases they
+    // can't even open, disagreeing with what their own inbox list shows.
+    const viewAllCases = await canViewAllCases(sup, req.user.role);
+    const visibleCaseIds = viewAllCases ? null : await getVisibleCaseIds(sup, req.user.id);
+    // Same mailbox-visibility scope as GET /inbox itself (see the long
+    // comment there) -- otherwise a mailbox-restricted employee's badge
+    // count would include messages from accounts their own inbox list hides.
+    const viewAllAccounts = await canViewAllEmailAccounts(sup, req.user.role);
+    const visibleAccountIds = viewAllAccounts ? null : await getVisibleEmailAccountIds(sup, req.user.id);
+    // Same combined-scope override as GET /inbox's own buildQuery (see its
+    // long comment) -- a message through the employee's OWN assigned
+    // mailbox must count as visible/unread regardless of case link, or this
+    // badge undercounts relative to what their own inbox list now shows.
+    const applyVisibility = (q) => {
+      if (!viewAllCases && !viewAllAccounts && visibleAccountIds.length) {
+        const caseOr = visibleCaseIds.length
+          ? `or(case_id.is.null,case_id.in.(${visibleCaseIds.join(',')}))`
+          : 'case_id.is.null';
+        return q.or(`email_account_id.in.(${visibleAccountIds.join(',')}),and(email_account_id.is.null,${caseOr})`);
+      }
+      if (!viewAllCases) q = visibleCaseIds.length ? q.or(`case_id.is.null,case_id.in.(${visibleCaseIds.join(',')})`) : q.is('case_id', null);
+      if (!viewAllAccounts) q = visibleAccountIds.length ? q.or(`email_account_id.is.null,email_account_id.in.(${visibleAccountIds.join(',')})`) : q.is('email_account_id', null);
+      return q;
+    };
+
+    let { count, error } = await applyVisibility(sup.from('communications').select('*', { count: 'exact', head: true })
+      .is('is_read', false).eq('direction', 'inbound').not('is_archived', 'is', true).is('deleted_at', null));
     if (error && /is_archived/.test(error.message)) {
-      ({ count, error } = await sup.from('communications').select('*', { count: 'exact', head: true })
-        .is('is_read', false).eq('direction', 'inbound'));
+      ({ count, error } = await applyVisibility(sup.from('communications').select('*', { count: 'exact', head: true })
+        .is('is_read', false).eq('direction', 'inbound').is('deleted_at', null)));
     }
     if (error) return res.json({ unread: 0 });
     res.json({ unread: count || 0 });

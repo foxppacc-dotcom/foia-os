@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, Paperclip, X, Mic, Minus, GripHorizontal, MessageSquarePlus } from 'lucide-react';
+import { Send, Paperclip, X, Mic, Minus, GripHorizontal, MessageSquarePlus, Volume2, VolumeX, Square } from 'lucide-react';
 import FoxBotIcon from './icons/FoxBotIcon';
+import VoiceSettingsPanel from './VoiceSettingsPanel';
 import { useAIChat } from '../hooks/useAIChat';
 import { useActiveProviderStatus } from '../hooks/useActiveProviderStatus';
 import { WIDGET_HIDDEN_KEY as HIDDEN_KEY, WIDGET_VISIBILITY_EVENT as AI_WIDGET_VISIBILITY_EVENT } from '../aiWidgetVisibility';
+import { isSameDay, dayDividerLabel, formatArabicTime, formatArabicDateTime } from '../utils/formatDate';
 
 const POS_KEY = 'ai_widget_position';
 
@@ -64,15 +66,17 @@ export default function AIAssistantWidget() {
   const [position, setPosition] = useState(loadPosition);
   const [layout, setLayout] = useState(() => computePanelLayout(loadPosition()));
   const [hasUnread, setHasUnread] = useState(false);
-  const [listening, setListening] = useState(false);
   const listRef = useRef(null);
   const fileInputRef = useRef(null);
-  const recognitionRef = useRef(null);
   const dragState = useRef(null); // { startX, startY, origX, origY, moved }
   const collapsedRef = useRef(collapsed);
   useEffect(() => { collapsedRef.current = collapsed; }, [collapsed]);
 
-  const { messages, input, setInput, file, setFile, sending, send, newConversation } = useAIChat({
+  const {
+    messages, input, setInput, file, setFile, sending, send, stopGenerating, newConversation, resolveDraft,
+    voiceMode, toggleVoiceMode, listening, toggleListening, canListen,
+    voiceRate, setVoiceRate, voiceVolume, setVoiceVolume,
+  } = useAIChat({
     // Reads a ref, not the `collapsed` state directly -- this callback is
     // captured once inside the hook's closure at whatever render created it,
     // a stale `collapsed` would wrongly skip the unread badge if the user
@@ -159,26 +163,6 @@ export default function AIAssistantWidget() {
   // wouldn't do this since the widget is global, but defensive regardless).
   useEffect(() => () => cleanupDragListeners(), []);
 
-  // ---- Voice input (Chrome/Edge only -- Web Speech API has no Firefox/Safari equivalent) ----
-  const SpeechRecognitionCtor = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
-  const toggleListening = () => {
-    if (!SpeechRecognitionCtor) return;
-    if (listening) { recognitionRef.current?.stop(); return; }
-    const rec = new SpeechRecognitionCtor();
-    rec.lang = 'ar-SA';
-    rec.interimResults = false;
-    rec.onresult = (e) => setInput(prev => (prev ? prev + ' ' : '') + e.results[0][0].transcript);
-    rec.onend = () => setListening(false);
-    rec.onerror = () => setListening(false);
-    recognitionRef.current = rec;
-    setListening(true);
-    rec.start();
-  };
-  // Stop any in-progress recognition if the widget unmounts mid-listen --
-  // otherwise the mic session (and its onresult callback, which closes over
-  // this unmounted instance's setInput) keeps running invisibly.
-  useEffect(() => () => recognitionRef.current?.stop(), []);
-
   if (hidden) return null;
 
   return (
@@ -234,14 +218,77 @@ export default function AIAssistantWidget() {
               <div ref={listRef} className="flex-1 space-y-2 overflow-y-auto p-2.5" style={{ minHeight: '200px' }}>
                 {messages.length === 0 ? (
                   <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>اسألني عن قضايا الاستقبال، تقارير الموظفين، الإيميلات غير المرتبطة، أو اطلب مني فتح وتصفية القضايا...</p>
-                ) : messages.map((m, i) => (
-                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-start' : 'justify-end'}`}>
-                    <div className="max-w-[85%] px-3 py-2 rounded-lg text-xs whitespace-pre-wrap" style={{
-                      background: m.role === 'user' ? 'var(--accent)' : 'var(--bg-tertiary)',
-                      color: m.role === 'user' ? 'white' : 'var(--text-primary)',
-                    }}>{m.content}</div>
-                  </div>
-                ))}
+                ) : messages.map((m, i) => {
+                  // A date divider whenever the day changes from the previous
+                  // message (or before the very first one) -- same convention
+                  // any normal chat app uses, and the same shared helper the
+                  // internal team-messaging page and the full-page chat use,
+                  // so "اليوم"/"أمس" mean the same thing everywhere.
+                  const showDivider = m.created_at && (i === 0 || !isSameDay(messages[i - 1]?.created_at, m.created_at));
+                  return (
+                    <div key={i}>
+                      {showDivider && (
+                        <div className="flex items-center justify-center my-2">
+                          <span className="text-[9px] px-2 py-0.5 rounded-full" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+                            {dayDividerLabel(m.created_at)}
+                          </span>
+                        </div>
+                      )}
+                      {m.role === 'draft' && m.draft.kind === 'purge' ? (
+                        <div className="flex justify-end">
+                          <div className="max-w-[90%] px-3 py-2 rounded-lg text-xs" style={{ background: 'var(--bg-tertiary)', border: '1px dashed #EF4444' }}>
+                            <p className="mb-1" style={{ color: '#EF4444' }}>⚠️ طلب موافقة: حذف نهائي من السلة</p>
+                            <p className="mb-1" style={{ color: 'var(--text-muted)' }}>{m.draft.entity_label} #{m.draft.id}</p>
+                            <p className="whitespace-pre-wrap mb-2 font-medium" style={{ color: 'var(--text-primary)' }}>{m.draft.title || '(بدون عنوان)'}</p>
+                            {!m.resolved ? (
+                              <div className="flex gap-1.5">
+                                <button onClick={() => resolveDraft(i, 'send')} className="flex-1 py-1 rounded text-[11px] font-medium" style={{ background: '#EF4444', color: 'white' }}>حذف نهائي</button>
+                                <button onClick={() => resolveDraft(i, 'cancel')} className="flex-1 py-1 rounded text-[11px]" style={{ background: 'var(--bg-primary)', color: 'var(--text-muted)' }}>إلغاء</button>
+                              </div>
+                            ) : (
+                              <p className="text-[10px]" style={{ color: m.resolved === 'cancel' ? 'var(--text-muted)' : '#EF4444' }}>
+                                {m.resolved === 'cancel' ? '❌ تم الإلغاء -- لم يُحذف شيء' : '🗑️ تم الحذف النهائي'}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ) : m.role === 'draft' ? (
+                        <div className="flex justify-end">
+                          <div className="max-w-[90%] px-3 py-2 rounded-lg text-xs" style={{ background: 'var(--bg-tertiary)', border: '1px dashed var(--accent)' }}>
+                            <p className="mb-1" style={{ color: 'var(--text-muted)' }}>📝 مسودة رسالة إلى <b style={{ color: 'var(--text-primary)' }}>{m.draft.recipient_name}</b>:</p>
+                            <p className="whitespace-pre-wrap mb-2" style={{ color: 'var(--text-primary)' }}>{m.draft.content}</p>
+                            {m.draft.scheduled && (
+                              <p className="text-[10px] mb-1.5" style={{ color: 'var(--text-muted)' }}>الوقت المقترح: {formatArabicDateTime(m.draft.send_at)}</p>
+                            )}
+                            {!m.resolved ? (
+                              <div className="flex gap-1.5">
+                                <button onClick={() => resolveDraft(i, 'send')} className="flex-1 py-1 rounded text-[11px] font-medium" style={{ background: 'var(--accent)', color: 'white' }}>إرسال الآن</button>
+                                {m.draft.scheduled && (
+                                  <button onClick={() => resolveDraft(i, 'schedule')} className="flex-1 py-1 rounded text-[11px] font-medium" style={{ background: 'var(--success, #22c55e)', color: 'white' }}>جدولة</button>
+                                )}
+                                <button onClick={() => resolveDraft(i, 'cancel')} className="flex-1 py-1 rounded text-[11px]" style={{ background: 'var(--bg-primary)', color: 'var(--text-muted)' }}>إلغاء</button>
+                              </div>
+                            ) : (
+                              <p className="text-[10px]" style={{ color: m.resolved === 'cancel' ? 'var(--text-muted)' : 'var(--success)' }}>
+                                {m.resolved === 'send' ? '✅ تم الإرسال' : m.resolved === 'schedule' ? `🕒 تم الجدولة على ${formatArabicDateTime(m.draft.send_at)}` : '❌ تم الإلغاء'}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={`flex ${m.role === 'user' ? 'justify-start' : 'justify-end'}`}>
+                          <div className="max-w-[85%] px-3 py-2 rounded-lg text-xs whitespace-pre-wrap" style={{
+                            background: m.role === 'user' ? 'var(--accent)' : 'var(--bg-tertiary)',
+                            color: m.role === 'user' ? 'white' : 'var(--text-primary)',
+                          }}>
+                            {m.content}
+                            {m.created_at && <div className="text-[9px] mt-1 opacity-70">{formatArabicTime(m.created_at)}</div>}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
                 {sending && <div className="flex justify-end"><div className="px-3 py-2 rounded-lg text-xs" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>...جارٍ التفكير</div></div>}
               </div>
 
@@ -257,19 +304,37 @@ export default function AIAssistantWidget() {
                 <button onClick={() => fileInputRef.current?.click()} disabled={sending} className="p-2 rounded-lg shrink-0" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }} title="إرفاق ملف">
                   <Paperclip className="w-3.5 h-3.5" />
                 </button>
-                {SpeechRecognitionCtor && (
+                {canListen && (
                   <button onClick={toggleListening} disabled={sending} className="p-2 rounded-lg shrink-0" title="إدخال صوتي"
                     style={{ background: listening ? '#ef4444' : 'var(--bg-tertiary)', color: listening ? 'white' : 'var(--text-muted)' }}>
                     <Mic className="w-3.5 h-3.5" />
                   </button>
                 )}
+                <button onClick={toggleVoiceMode} className="p-2 rounded-lg shrink-0" title={voiceMode ? 'إيقاف رد المساعد بالصوت' : 'تفعيل رد المساعد بالصوت'}
+                  style={{ background: voiceMode ? 'var(--accent)' : 'var(--bg-tertiary)', color: voiceMode ? 'white' : 'var(--text-muted)' }}>
+                  {voiceMode ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                </button>
+                {voiceMode && (
+                  <VoiceSettingsPanel voiceRate={voiceRate} setVoiceRate={setVoiceRate} voiceVolume={voiceVolume} setVoiceVolume={setVoiceVolume} />
+                )}
                 <input value={input} onChange={e => setInput(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                   placeholder="اكتب سؤالك..." disabled={sending}
                   className="flex-1 min-w-0 px-2.5 py-2 rounded-lg text-xs" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
-                <button onClick={send} disabled={sending || (!input.trim() && !file)} className="p-2 rounded-lg shrink-0 disabled:opacity-40" style={{ background: 'var(--accent)', color: 'white' }}>
-                  <Send className="w-3.5 h-3.5" />
-                </button>
+                {sending ? (
+                  <button onClick={stopGenerating} title="إيقاف" className="p-2 rounded-lg shrink-0" style={{ background: '#ef4444', color: 'white' }}>
+                    <Square className="w-3.5 h-3.5" fill="currentColor" />
+                  </button>
+                ) : (
+                  // send() takes an optional overrideText (used by voice input) --
+                  // onClick={send} would pass the click event itself as that
+                  // argument, so a click silently threw "event.trim is not a
+                  // function" while Enter kept working (see AIAssistantChat.jsx's
+                  // identical fix).
+                  <button onClick={() => send()} disabled={!input.trim() && !file} className="p-2 rounded-lg shrink-0 disabled:opacity-40" style={{ background: 'var(--accent)', color: 'white' }}>
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </>
           )}

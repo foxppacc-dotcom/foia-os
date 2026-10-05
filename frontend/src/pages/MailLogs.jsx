@@ -62,7 +62,10 @@ export default function MailLogs() {
   const deleteLog = async (id) => {
     if (!confirm('هل أنت متأكد من حذف هذه المراسلة؟')) return;
     try {
-      await api.delete(`/cases/${selectedCaseId}/mail-logs/${id}`);
+      // Backend only ever registered this as DELETE /mail-logs/:id (no case
+      // prefix -- it looks up the row's own case_id to check access), never
+      // /cases/:caseId/mail-logs/:id -- this button 404'd every single time.
+      await api.delete(`/mail-logs/${id}`);
       fetchLogs(selectedCaseId);
     } catch (err) { alert('فشل حذف المراسلة: ' + err.message); }
   };

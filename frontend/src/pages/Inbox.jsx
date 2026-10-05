@@ -8,6 +8,16 @@ import AppBadge from '../components/ds/AppBadge';
 import AppEmptyState from '../components/ds/AppEmptyState';
 import AppDialog from '../components/ds/AppDialog';
 import EmailBodyView from '../components/EmailBodyView';
+import { formatArabicDate, formatArabicTime } from '../utils/formatDate';
+
+// English uses the browser's own en-GB formatting (already Gregorian by
+// default, no calendar quirk to guard against); Arabic goes through the
+// shared formatArabicDate/Time helpers, which force calendar: 'gregory'.
+function formatMsgDateTime(date, lang) {
+  if (!date) return '';
+  if (lang === 'en') return `${new Date(date).toLocaleDateString('en-GB')} ${new Date(date).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
+  return `${formatArabicDate(date)} ${formatArabicTime(date)}`;
+}
 
 const BASE = getApiBase();
 const tok = () => localStorage.getItem('foia_token');
@@ -18,6 +28,29 @@ function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// One message inside an expanded conversation. The message that was
+// actually clicked opens expanded by default; every other message in the
+// same thread starts collapsed to a one-line summary (sender/recipient +
+// date), tap to expand -- matches Gmail's "only the relevant message is
+// open, the rest of the thread is a quick scroll away" pattern.
+function ThreadMiniRow({ msg, isActive, i18n }) {
+  const [open, setOpen] = useState(isActive);
+  useEffect(() => { setOpen(isActive); }, [isActive]);
+  const dateStr = formatMsgDateTime(msg.created_at, i18n.language);
+  return (
+    <div className="rounded-lg" style={{ background: isActive ? 'var(--ds-bg-tertiary)' : 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', borderRight: msg.direction === 'inbound' ? '3px solid #22c55e' : '3px solid #3b82f6' }}>
+      <div className="p-2 flex items-center justify-between gap-2 cursor-pointer" onClick={() => setOpen(o => !o)}>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Mail className="w-3 h-3 shrink-0" style={{ color: msg.direction === 'inbound' ? '#22c55e' : '#3b82f6' }} />
+          <span className="text-[11px] truncate" style={{ color: 'var(--ds-text-primary)' }}>{msg.direction === 'inbound' ? msg.sender : msg.recipient}</span>
+        </div>
+        <span className="text-[9px] shrink-0" style={{ color: 'var(--ds-text-muted)' }}>{dateStr}</span>
+      </div>
+      {open && <div className="px-2 pb-2"><EmailBodyView html={msg.body_html} text={msg.body} /></div>}
+    </div>
+  );
 }
 
 // A clickable popup calendar instead of typed digit segments. Native
@@ -141,6 +174,13 @@ export default function InboxPage() {
   const [applied, setApplied] = useState(blankFilters);
 
   const [selected, setSelected] = useState(null);
+  // Cache of thread_id -> every message sharing it (sent + received),
+  // fetched lazily the first time a message in that thread is opened -- lets
+  // an expanded message show its whole conversation like Gmail/Outlook,
+  // without restructuring this page's own list/pagination/filters (those
+  // stay exactly one row per message, unchanged).
+  const [threadMsgs, setThreadMsgs] = useState({});
+  const [threadLoadingId, setThreadLoadingId] = useState(null);
   const [polling, setPolling] = useState(false);
   const [unread, setUnread] = useState(0);
   const [showComposer, setShowComposer] = useState(false);
@@ -282,7 +322,16 @@ export default function InboxPage() {
   // counted as "unread" forever unless separately linked or archived, which
   // is part of why the unread badge looked wrong.
   const handleOpen = (msg) => {
-    setSelected(selected === msg.id ? null : msg.id);
+    const opening = selected !== msg.id;
+    setSelected(opening ? msg.id : null);
+    if (opening && msg.thread_id && !threadMsgs[msg.thread_id]) {
+      setThreadLoadingId(msg.id);
+      fetch(`${BASE}/communications/thread/${encodeURIComponent(msg.thread_id)}`, { headers: hdrs() })
+        .then(r => r.json())
+        .then(d => { if (d.success) setThreadMsgs(prev => ({ ...prev, [msg.thread_id]: d.data || [] })); })
+        .catch(() => {})
+        .finally(() => setThreadLoadingId(null));
+    }
     if (msg.is_read === false) {
       setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, is_read: true } : m));
       setUnread(prev => Math.max(0, prev - 1));
@@ -559,7 +608,7 @@ export default function InboxPage() {
                   <div className="text-xs font-medium mb-0.5" style={{ color: 'var(--ds-text-primary)' }}>{msg.subject}</div>
                   <div className="text-[10px] flex items-center gap-2 flex-wrap" style={{ color: 'var(--ds-text-muted)' }}>
                     <span>{t('inbox:message.to', { recipient: msg.recipient })}</span>
-                    <span>{msg.created_at ? `${new Date(msg.created_at).toLocaleDateString(i18n.language === 'en' ? 'en-GB' : 'ar-SA')} ${new Date(msg.created_at).toLocaleTimeString(i18n.language === 'en' ? 'en-GB' : 'ar-SA', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+                    <span>{formatMsgDateTime(msg.created_at, i18n.language)}</span>
                     {attachments.length > 0 && <span>📎 {attachments.length}</span>}
                     {msg.reviewed_by_name && (
                       <span className="flex items-center gap-0.5" style={{ color: '#22c55e' }}>
@@ -643,10 +692,31 @@ export default function InboxPage() {
                 </div>
               )}
 
-              {/* Expanded message */}
+              {/* Expanded message -- if this message belongs to a multi-message
+                  thread, show the whole conversation (sent + received)
+                  stacked chronologically instead of just this one row, so
+                  it's clear which reply answered which message. */}
               {selected === msg.id && (
                 <div className="mt-2 space-y-2" onClick={e => e.stopPropagation()}>
-                  <EmailBodyView html={msg.body_html} text={msg.body} />
+                  {(() => {
+                    const thread = threadMsgs[msg.thread_id];
+                    const siblings = thread ? thread.filter(m => m.id !== msg.id) : [];
+                    if (siblings.length > 0) {
+                      const all = [...siblings, msg].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+                      return (
+                        <div className="space-y-1.5">
+                          <div className="text-[10px] font-medium" style={{ color: 'var(--ds-text-muted)' }}>
+                            {t('inbox:message.conversationCount', { count: all.length })}
+                          </div>
+                          {all.map(m => <ThreadMiniRow key={m.id} msg={m} isActive={m.id === msg.id} i18n={i18n} />)}
+                        </div>
+                      );
+                    }
+                    if (threadLoadingId === msg.id) {
+                      return <div className="text-[11px] flex items-center gap-1.5" style={{ color: 'var(--ds-text-muted)' }}><Loader2 className="w-3.5 h-3.5 animate-spin" />{t('inbox:message.loadingConversation')}</div>;
+                    }
+                    return <EmailBodyView html={msg.body_html} text={msg.body} />;
+                  })()}
                   {attachments.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {attachments.map((att, i) => (

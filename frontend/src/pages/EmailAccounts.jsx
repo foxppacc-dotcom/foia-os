@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api, getApiBase, getCurrentUser } from '../api';
-import { Mail, Plus, Trash2, RefreshCw, Send, Power, PowerOff, Loader2, X, CheckCircle, AlertCircle, Pencil } from 'lucide-react';
+import { Mail, Plus, Trash2, RefreshCw, Send, Power, PowerOff, Loader2, X, CheckCircle, AlertCircle, Pencil, Users } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -10,6 +10,7 @@ import Badge from '../components/ui/Badge';
 import EmptyState from '../components/ui/EmptyState';
 import Spinner from '../components/ui/Spinner';
 import { TableShell, Thead, Th, Td, Tr } from '../components/ui/Table';
+import { formatArabicDate } from '../utils/formatDate';
 
 const GMAIL_DEFAULTS = {
   smtp_host: 'smtp.gmail.com', smtp_port: '587', imap_host: 'imap.gmail.com', imap_port: '993',
@@ -38,6 +39,21 @@ export default function EmailAccounts() {
   const BASE = getApiBase();
   const tok = () => localStorage.getItem('foia_token');
   const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
+
+  // Every mutating route here (create/edit/delete/assign) requires
+  // email_accounts:manage server-side -- these buttons used to render for
+  // ANY authenticated user who could reach this page (sidebar visibility is
+  // a separate, independently-defaulted-open nav toggle), so a role without
+  // `manage` saw full edit/delete/assign controls that all 403'd instead of
+  // simply not being shown.
+  const [canManage, setCanManage] = useState(false);
+  useEffect(() => {
+    if (getCurrentUser()?.role === 'admin') { setCanManage(true); return; }
+    fetch(`${BASE}/permissions/mine`, { headers: hdrs() })
+      .then(r => r.json())
+      .then(d => setCanManage((d.permissions || []).some(p => p.resource === 'email_accounts' && p.action === 'manage')))
+      .catch(() => setCanManage(false));
+  }, []);
 
   const fetchAccounts = async () => {
     try {
@@ -97,6 +113,71 @@ export default function EmailAccounts() {
 
   const [editingAccount, setEditingAccount] = useState(null);
   const [editForm, setEditForm] = useState(null);
+
+  // Per-employee mailbox access: which specific employees may see/use each
+  // account (independent of role) -- see backend/src/services/emailAccountAccess.js.
+  const [allUsers, setAllUsers] = useState([]);
+  const [assigningAccount, setAssigningAccount] = useState(null);
+  const [assignedUserIds, setAssignedUserIds] = useState(new Set());
+  const [loadingAssignees, setLoadingAssignees] = useState(false);
+  const [savingAssignees, setSavingAssignees] = useState(false);
+  // Guards against opening the modal for one account, then quickly switching
+  // to another before the first account's fetch resolves -- without this, a
+  // slow first response landing AFTER the second account's fetch would
+  // silently overwrite assignedUserIds with the WRONG account's list while
+  // the modal header still shows the second account, so "حفظ" could save one
+  // account's mailbox access under a completely different account's name.
+  const assignRequestId = useRef(0);
+
+  useEffect(() => {
+    fetch(`${BASE}/users/list`, { headers: hdrs() })
+      .then(r => r.json()).then(d => setAllUsers(d.data || []))
+      .catch(() => {});
+  }, []);
+
+  const openAssignModal = async (acc) => {
+    const requestId = ++assignRequestId.current;
+    setAssigningAccount(acc);
+    setAssignedUserIds(new Set());
+    setLoadingAssignees(true);
+    clearFeedback();
+    try {
+      const r = await fetch(`${BASE}/email-accounts/${acc.id}/assignees`, { headers: hdrs() });
+      const d = await r.json().catch(() => ({}));
+      if (requestId !== assignRequestId.current) return; // a newer open() superseded this one
+      if (!r.ok) { setError(d.error || 'فشل تحميل قائمة الموظفين المخصصين'); setLoadingAssignees(false); return; }
+      setAssignedUserIds(new Set((d.data || []).map(a => a.user_id)));
+    } catch {
+      if (requestId !== assignRequestId.current) return;
+      setError('فشل تحميل قائمة الموظفين المخصصين');
+    }
+    if (requestId === assignRequestId.current) setLoadingAssignees(false);
+  };
+
+  const toggleAssignedUser = (userId) => {
+    setAssignedUserIds(prev => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId); else next.add(userId);
+      return next;
+    });
+  };
+
+  const saveAssignees = async () => {
+    if (!assigningAccount) return;
+    setSavingAssignees(true);
+    try {
+      const r = await fetch(`${BASE}/email-accounts/${assigningAccount.id}/assignees`, {
+        method: 'POST', headers: hdrs(),
+        body: JSON.stringify({ user_ids: [...assignedUserIds] }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setError(d.error || 'فشل حفظ التخصيص'); setSavingAssignees(false); return; }
+      setSuccess('تم حفظ الموظفين المخصصين لهذا الحساب');
+      setTimeout(() => setSuccess(''), 3000);
+      setAssigningAccount(null);
+    } catch (e) { setError('خطأ في الاتصال: ' + (e.message || '')); }
+    setSavingAssignees(false);
+  };
 
   // Credentials (smtp_pass/imap_pass) were only ever settable when creating
   // a brand-new account -- updating a wrong or expired password (e.g. after
@@ -279,7 +360,7 @@ export default function EmailAccounts() {
               {backfillingAttachments ? 'جارٍ الاسترجاع...' : 'استرجاع مرفقات الإيميلات القديمة'}
             </Button>
           )}
-          <Button icon={Plus} onClick={() => { setShowForm(true); clearFeedback(); }}>إضافة حساب</Button>
+          {canManage && <Button icon={Plus} onClick={() => { setShowForm(true); clearFeedback(); }}>إضافة حساب</Button>}
         </>} />
 
       {error && (
@@ -301,15 +382,21 @@ export default function EmailAccounts() {
             {accounts.map((acc) => (
               <Tr key={acc.id}>
                 <Td>
-                  <button onClick={() => toggleActive(acc)}>
+                  {canManage ? (
+                    <button onClick={() => toggleActive(acc)}>
+                      <Badge variant={acc.is_active ? 'success' : 'danger'} dot>{acc.is_active ? 'نشط' : 'غير نشط'}</Badge>
+                    </button>
+                  ) : (
                     <Badge variant={acc.is_active ? 'success' : 'danger'} dot>{acc.is_active ? 'نشط' : 'غير نشط'}</Badge>
-                  </button>
+                  )}
                 </Td>
                 <Td className="font-medium" style={{ color: 'var(--text-primary)' }}>{acc.email}</Td>
                 <Td>{acc.name}</Td>
                 <Td>{acc.provider || '—'}</Td>
                 <Td>
-                  {editingLimitId === acc.id ? (
+                  {!canManage ? (
+                    <span style={{ color: 'var(--text-primary)' }}>{acc.daily_limit ?? '—'}</span>
+                  ) : editingLimitId === acc.id ? (
                     <input type="number" min="1" autoFocus value={editingLimitValue}
                       onChange={e => setEditingLimitValue(e.target.value)}
                       onBlur={() => saveDailyLimit(acc.id)}
@@ -326,24 +413,38 @@ export default function EmailAccounts() {
                 <Td>
                   <span className="font-medium" style={{ color: (acc.sent_today || 0) >= (acc.daily_limit || 100) ? 'var(--danger)' : 'var(--success)' }}>{acc.sent_today ?? 0}</span>
                 </Td>
-                <Td className="text-xs" style={{ color: 'var(--text-muted)' }}>{acc.created_at ? new Date(acc.created_at).toLocaleDateString('ar-SA') : '—'}</Td>
+                <Td className="text-xs" style={{ color: 'var(--text-muted)' }}>{acc.created_at ? formatArabicDate(acc.created_at) : '—'}</Td>
                 <Td align="center">
-                  <div className="flex items-center justify-center gap-1">
-                    <button onClick={() => startEditAccount(acc)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
-                      onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}
-                      title="تعديل الإعدادات وكلمات المرور">
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => toggleActive(acc)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
-                      onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}
-                      title={acc.is_active ? 'تعطيل' : 'تفعيل'}>
-                      {acc.is_active ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}
-                    </button>
-                    <button onClick={() => deleteAccount(acc.id)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
-                      onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                  {canManage ? (
+                    <div className="flex items-center justify-center gap-1">
+                      {/* Assignment is deliberately admin-only server-side (email.js) --
+                          'manage' alone would let a manager-level role grant ITSELF
+                          access to any mailbox, defeating whatever restriction an
+                          admin just set up for that same role. Gated separately from
+                          canManage here to match. */}
+                      {getCurrentUser()?.role === 'admin' && (
+                        <button onClick={() => openAssignModal(acc)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                          onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}
+                          title="تخصيص الموظفين المسموح لهم برؤية/استخدام هذا الحساب">
+                          <Users className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button onClick={() => startEditAccount(acc)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                        onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}
+                        title="تعديل الإعدادات وكلمات المرور">
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button onClick={() => toggleActive(acc)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                        onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}
+                        title={acc.is_active ? 'تعطيل' : 'تفعيل'}>
+                        {acc.is_active ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}
+                      </button>
+                      <button onClick={() => deleteAccount(acc.id)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                        onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : <span className="text-xs" style={{ color: 'var(--text-muted)' }}>—</span>}
                 </Td>
               </Tr>
             ))}
@@ -444,6 +545,48 @@ export default function EmailAccounts() {
               <Button variant="secondary" onClick={() => setEditingAccount(null)} disabled={saving}>إلغاء</Button>
               <Button onClick={saveEditedAccount} disabled={saving}>
                 {saving ? <><Loader2 className="w-4 h-4 animate-spin" />جارٍ الحفظ...</> : 'حفظ التعديلات'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign Employees Modal -- who may see/use this specific mailbox.
+          Doesn't gate anything on its own: a role must ALSO have
+          email_accounts.view_all=false (set from فريق العمل → الصلاحيات) for
+          this list to actually restrict anyone -- until then every account
+          stays visible to everyone exactly as before, same opt-in convention
+          as the cases.view_all restriction. */}
+      {assigningAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fadeIn" style={{ background: 'var(--bg-overlay)' }} onClick={() => !savingAssignees && setAssigningAccount(null)}>
+          <div className="w-full max-w-md rounded-2xl border p-6 animate-scaleIn max-h-[85vh] overflow-y-auto"
+            style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', boxShadow: 'var(--shadow-lg)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>الموظفون المخصصون: {assigningAccount.email}</h3>
+              <button onClick={() => !savingAssignees && setAssigningAccount(null)} className="p-1 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+            </div>
+            <p className="text-[11px] mb-3" style={{ color: 'var(--text-muted)' }}>
+              يسري هذا فقط على الأدوار التي تم تقييدها من "فريق العمل ← الصلاحيات ← حسابات البريد ← view_all". أي دور آخر يرى كل الحسابات كالمعتاد.
+            </p>
+            {loadingAssignees ? (
+              <div className="flex items-center justify-center py-8"><Loader2 className="w-5 h-5 animate-spin" style={{ color: 'var(--text-muted)' }} /></div>
+            ) : (
+              <div className="space-y-1.5">
+                {allUsers.map(u => (
+                  <label key={u.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors"
+                    style={{ background: assignedUserIds.has(u.id) ? 'var(--bg-tertiary)' : 'transparent' }}>
+                    <input type="checkbox" checked={assignedUserIds.has(u.id)} onChange={() => toggleAssignedUser(u.id)} />
+                    <span className="text-xs" style={{ color: 'var(--text-primary)' }}>{u.name}</span>
+                    <span className="text-[10px] mr-auto" style={{ color: 'var(--text-muted)' }}>{u.email}</span>
+                  </label>
+                ))}
+                {allUsers.length === 0 && <div className="text-xs text-center py-4" style={{ color: 'var(--text-muted)' }}>لا يوجد موظفون</div>}
+              </div>
+            )}
+            <div className="flex gap-2 justify-end mt-4">
+              <Button variant="secondary" onClick={() => setAssigningAccount(null)} disabled={savingAssignees}>إلغاء</Button>
+              <Button onClick={saveAssignees} disabled={savingAssignees || loadingAssignees}>
+                {savingAssignees ? <><Loader2 className="w-4 h-4 animate-spin" />جارٍ الحفظ...</> : 'حفظ'}
               </Button>
             </div>
           </div>

@@ -14,18 +14,49 @@ function generateToken(user) {
   );
 }
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized — missing token' });
   }
   const token = authHeader.split(' ')[1];
+  let decoded;
   try {
-    const decoded = jwt.verify(token, CONFIG.jwt.secret);
-    req.user = decoded;
-    next();
+    decoded = jwt.verify(token, CONFIG.jwt.secret);
   } catch (e) {
     return res.status(401).json({ error: 'Unauthorized — invalid token' });
+  }
+  // Re-read the user's CURRENT role/active status on every request instead
+  // of trusting the JWT's claims for its full 24h lifetime -- previously an
+  // admin demoting a role or deactivating an account had no effect until
+  // that user's existing token expired (up to 24h later), since every
+  // permission check downstream reads req.user.role straight off the token.
+  // requirePermission() already pays an equivalent per-request DB lookup for
+  // non-admin roles, so this isn't a new class of cost, just closing the gap
+  // for requests that never happened to hit that check.
+  try {
+    const { getSupabase } = require('../supabase');
+    const sup = getSupabase();
+    const { data: user, error: userErr } = await sup.from('users').select('id, name, email, role, is_active, deleted_at, password_changed_at').eq('id', decoded.id).maybeSingle();
+    // A DB hiccup is NOT "invalid session": answering 401 made the frontend wipe
+    // the token and reload, signing every active employee out over one blip.
+    if (userErr) return res.status(503).json({ error: 'الخدمة غير متاحة مؤقتًا -- حاول مرة أخرى' });
+    if (!user || user.is_active === false || user.deleted_at) {
+      return res.status(401).json({ error: 'Unauthorized — الحساب غير نشط، يرجى تسجيل الدخول مجددًا' });
+    }
+    // A token issued BEFORE the account's most recent password change is a
+    // token an incident-response password reset was specifically meant to
+    // kill -- without this, a stolen JWT kept working for up to its full
+    // 24h lifetime even after the compromised password was changed.
+    // decoded.iat is seconds since epoch (JWT standard); password_changed_at
+    // is a real timestamp -- compare in the same unit.
+    if (user.password_changed_at && decoded.iat && Math.floor(new Date(user.password_changed_at).getTime() / 1000) > decoded.iat) {
+      return res.status(401).json({ error: 'Unauthorized — تم تغيير كلمة المرور، يرجى تسجيل الدخول مجددًا' });
+    }
+    req.user = { id: user.id, name: user.name, email: user.email, role: user.role };
+    next();
+  } catch (e) {
+    return res.status(503).json({ error: 'الخدمة غير متاحة مؤقتًا -- حاول مرة أخرى' });
   }
 }
 

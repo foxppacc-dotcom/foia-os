@@ -108,7 +108,12 @@ function MultiSelectPopover({ label, icon, options, selectedIds, onChange, getId
   const filtered = options.filter(o => !search || getLabel(o).toLowerCase().includes(search.toLowerCase()));
   const toggle = (id) => onChange(selectedIds.includes(id) ? selectedIds.filter(x => x !== id) : [...selectedIds, id]);
   const summary = selectedIds.length === 0 ? null
-    : selectedIds.length === 1 ? (getLabel(options.find(o => getId(o) === selectedIds[0])) || '1')
+    : selectedIds.length === 1 ? (() => {
+        // loose compare + fallback: ids from the URL (e.g. the AI's navigate_to_page) can be
+        // strings while option ids are numbers, or refer to something not in the loaded options.
+        const o = options.find(x => String(getId(x)) === String(selectedIds[0]));
+        return (o ? getLabel(o) : '') || '1';
+      })()
     : t('cases:filterPanel.selectedCount', { count: selectedIds.length });
 
   return (
@@ -182,6 +187,7 @@ export default function Cases() {
   // be typed. This one is only ever true before the FIRST fetch resolves.
   const [initialLoading, setInitialLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [creatingCase, setCreatingCase] = useState(false);
   const [agencies, setAgencies] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [canViewAllCases, setCanViewAllCases] = useState(true);
@@ -358,7 +364,8 @@ export default function Cases() {
   };
 
   const createCase = async () => {
-    if (!form.defendant_name.trim()) return;
+    if (!form.defendant_name.trim() || creatingCase) return;
+    setCreatingCase(true);
     try {
       // معلومات تسجيل القضية replaced the old عنوان/وصف/عميل fields entirely --
       // اسم المتهم is now the case's effective title (everything downstream --
@@ -392,6 +399,7 @@ export default function Cases() {
     } catch (e) {
       alert(t('cases:errors.createFailed', { message: e.message }));
     }
+    setCreatingCase(false);
   };
 
   const handleDelete = async (caseId) => {
@@ -444,8 +452,8 @@ export default function Cases() {
         <div>
           <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{t('cases:title')}</h1>
           <p style={{ color: 'var(--text-muted)' }}>
-            {t('cases:count', { count: cases.length })}
-            {!canViewAllCases && <span className="mr-2 text-xs px-2 py-0.5 rounded-lg" style={{ background: 'var(--accent-subtle, rgba(212,168,67,0.12))', color: 'var(--accent)' }}>{t('cases:assignedOnlyBadge')}</span>}
+            {t('cases:count', { count: total })}
+            {!canViewAllCases && <span className="ms-2 text-xs px-2 py-0.5 rounded-lg" style={{ background: 'var(--accent-subtle, rgba(212,168,67,0.12))', color: 'var(--accent)' }}>{t('cases:assignedOnlyBadge')}</span>}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -674,10 +682,10 @@ export default function Cases() {
               style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
               {t('cases:form.cancel')}
             </button>
-            <button onClick={createCase}
-              className="px-5 py-2.5 rounded-xl font-semibold"
+            <button onClick={createCase} disabled={creatingCase}
+              className="px-5 py-2.5 rounded-xl font-semibold disabled:opacity-60"
               style={{ background: 'var(--accent)', color: '#1A1A2E' }}>
-              {t('cases:form.create')}
+              {creatingCase ? t('cases:form.creating') : t('cases:form.create')}
             </button>
           </div>
         </div>
@@ -713,12 +721,12 @@ export default function Cases() {
           <table className="w-full">
             <thead>
               <tr style={{ background: 'var(--bg-tertiary)' }}>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.id')}</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.titleClassification')}</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.agencies')}</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.status')}</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.priority')}</th>
-                <th className="px-4 py-3.5 text-right font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.date')}</th>
+                <th className="px-4 py-3.5 text-start font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.id')}</th>
+                <th className="px-4 py-3.5 text-start font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.titleClassification')}</th>
+                <th className="px-4 py-3.5 text-start font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.agencies')}</th>
+                <th className="px-4 py-3.5 text-start font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.status')}</th>
+                <th className="px-4 py-3.5 text-start font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.priority')}</th>
+                <th className="px-4 py-3.5 text-start font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.date')}</th>
                 <th className="px-4 py-3.5 text-center font-medium" style={{ color: 'var(--text-muted)' }}>{t('cases:table.actions')}</th>
               </tr>
             </thead>
@@ -774,7 +782,7 @@ export default function Cases() {
                               </button>
                             )}
                             {activityPopoverCaseId === c.id && (
-                              <div className="absolute z-30 top-full mt-1 w-64 rounded-xl p-2 text-right" dir={i18n.dir()}
+                              <div className="absolute z-30 top-full mt-1 w-64 rounded-xl p-2 text-start" dir={i18n.dir()}
                                 style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}>
                                 <div className="space-y-1 max-h-56 overflow-y-auto">
                                   {activityPopoverNotifications.map((n, i) => (
@@ -865,7 +873,7 @@ export default function Cases() {
             style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
             {t('cases:pagination.next')}
           </button>
-          <div className="flex items-center gap-1.5 mr-2">
+          <div className="flex items-center gap-1.5 ms-2">
             <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{t('cases:pagination.goToPage')}</span>
             <input value={pageInput} onChange={e => setPageInput(e.target.value.replace(/[^0-9]/g, ''))}
               onKeyDown={e => { if (e.key === 'Enter') goToPage(); }}

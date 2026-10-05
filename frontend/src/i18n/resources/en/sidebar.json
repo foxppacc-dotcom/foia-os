@@ -11,6 +11,7 @@
     "portals": "Portals",
     "inbox": "Inbox",
     "forum": "Forum",
+    "messages": "Internal Messages",
     "email_accounts": "Email Accounts",
     "teams": "Teams",
     "permissions": "Team & Permissions",
@@ -19,6 +20,8 @@
     "mail_logs": "Physical Mail",
     "production_lists": "Production Lists",
     "theme_settings": "Colors & Theme",
+    "trash": "Trash",
+    "ai_tasks": "Assistant Tasks",
     "settings": "Settings"
   },
   "collapse": {

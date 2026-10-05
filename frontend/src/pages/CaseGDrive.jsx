@@ -5,6 +5,15 @@ import { Plus, FolderOpen, FileText, Trash2, CloudCog, CheckCircle2, XCircle, Li
 import AppButton from '../components/ds/AppButton';
 import AppCard from '../components/ds/AppCard';
 
+// Backend now rejects a non-http(s) web_link at write time (see gdrive.js's
+// POST /gdrive/link), but this still guards render-time too -- against any
+// row written before that validation existed -- since rendering it as a real
+// <a href> would execute it in this origin the moment anyone clicks (same
+// established pattern as Portals.jsx/Agencies.jsx/Forum.jsx).
+function isSafeHref(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+}
+
 export default function CaseGDrive() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [status, setStatus] = useState({ configured: false, connected: false, email: null });
@@ -215,7 +224,7 @@ export default function CaseGDrive() {
                         <FileText className="w-4 h-4 shrink-0" style={{ color: 'var(--accent)' }} />
                         <div className="min-w-0">
                           <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{f.original_name || f.filename}</p>
-                          {f.drive_url && (
+                          {isSafeHref(f.drive_url) && (
                             <a href={f.drive_url} target="_blank" rel="noopener noreferrer" className="text-[10px] hover:underline"
                               style={{ color: 'var(--accent)' }}>
                               فتح في Drive

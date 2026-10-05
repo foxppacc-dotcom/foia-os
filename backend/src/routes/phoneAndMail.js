@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { requireCaseAccess, canAccessCase } = require('../services/caseAccess');
+const trash = require('../services/trash');
 
 // Every route in this file previously had ZERO per-case access check (only
 // requireAuth) -- a role restricted to its own assigned cases could
@@ -21,6 +22,7 @@ router.get('/cases/:caseId/phone-logs', requireAuth, caseGate, async (req, res) 
     const { data, error } = await sup.from('phone_logs')
       .select('*, users!phone_logs_created_by_fkey(name)')
       .eq('case_id', parseInt(req.params.caseId))
+      .is('deleted_at', null)
       .order('created_at', { ascending: false });
     if (error) throw error;
     const logs = (data || []).map(l => ({ ...l, created_by_name: l.users?.name || null, users: undefined }));
@@ -36,7 +38,7 @@ router.post('/cases/:caseId/phone-logs', requireAuth, caseGate, async (req, res)
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
     const { direction, caller_name, caller_number, duration_seconds, summary, notes, recording_path } = req.body;
-    if (!direction) return res.status(400).json({ error: 'direction (inbound/outbound) مطلوب' });
+    if (!['inbound', 'outbound'].includes(direction)) return res.status(400).json({ error: 'direction يجب أن يكون inbound أو outbound' });
 
     const { data: created, error } = await sup.from('phone_logs').insert({
       case_id: caseId, direction, caller_name: caller_name || null, caller_number: caller_number || null,
@@ -45,12 +47,18 @@ router.post('/cases/:caseId/phone-logs', requireAuth, caseGate, async (req, res)
     }).select().single();
     if (error) throw error;
 
-    // Also add as communication entry for unified inbox
-    await sup.from('communications').insert({
+    // Also add as communication entry for unified inbox -- best-effort: the
+    // phone_logs row above already succeeded, so a failure here shouldn't
+    // fail the whole response, but it must be LOGGED. Previously this
+    // result wasn't even checked, so a failed insert here silently meant
+    // "logged the call but it never shows up in the case's unified inbox",
+    // with nothing in any log to explain why.
+    const { error: commErr } = await sup.from('communications').insert({
       case_id: caseId, type: 'phone', direction,
       subject: direction === 'inbound' ? `📞 مكالمة واردة من ${caller_name || caller_number || 'مجهول'}` : `📞 مكالمة صادرة إلى ${caller_name || caller_number || 'مجهول'}`,
       body: summary || notes || 'مكالمة هاتفية',
     });
+    if (commErr) console.error(`[phone-logs] communications mirror insert failed for log ${created.id}:`, commErr.message);
 
     res.status(201).json({ success: true, data: { ...created, created_by_name: req.user.name || null } });
   } catch (err) {
@@ -98,7 +106,7 @@ router.delete('/phone-logs/:id', requireAuth, async (req, res) => {
     if (!(await canAccessCase(sup, req.user, existing.case_id))) {
       return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
     }
-    const { error } = await sup.from('phone_logs').delete().eq('id', logId);
+    const { error } = await trash.softDelete(sup, { table: 'phone_logs', id: logId, userId: req.user?.id });
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -115,6 +123,7 @@ router.get('/cases/:caseId/mail-logs', requireAuth, caseGate, async (req, res) =
     const { data, error } = await sup.from('mail_logs')
       .select('*, users!mail_logs_created_by_fkey(name)')
       .eq('case_id', parseInt(req.params.caseId))
+      .is('deleted_at', null)
       .order('created_at', { ascending: false });
     if (error) throw error;
     const logs = (data || []).map(l => ({ ...l, created_by_name: l.users?.name || null, users: undefined }));
@@ -130,7 +139,7 @@ router.post('/cases/:caseId/mail-logs', requireAuth, caseGate, async (req, res) 
     const sup = getSupabase();
     const caseId = parseInt(req.params.caseId);
     const { direction, mail_type, tracking_number, courier, sender_name, recipient_name, sent_date, received_date, notes, scanned_path } = req.body;
-    if (!direction) return res.status(400).json({ error: 'direction مطلوب' });
+    if (!['inbound', 'outbound'].includes(direction)) return res.status(400).json({ error: 'direction يجب أن يكون inbound أو outbound' });
 
     const { data: created, error } = await sup.from('mail_logs').insert({
       case_id: caseId, direction, mail_type: mail_type || 'letter', tracking_number: tracking_number || null,
@@ -140,14 +149,16 @@ router.post('/cases/:caseId/mail-logs', requireAuth, caseGate, async (req, res) 
     }).select().single();
     if (error) throw error;
 
-    // Add as communication entry
+    // Add as communication entry -- best-effort (see phone-logs' identical
+    // comment above), but logged on failure instead of silently swallowed.
     const mailLabel = mail_type === 'package' ? '📦' : '✉️';
-    await sup.from('communications').insert({
+    const { error: commErr } = await sup.from('communications').insert({
       case_id: caseId, type: 'mail', direction,
       subject: `${mailLabel} ${direction === 'inbound' ? 'بريد وارد' : 'بريد صادر'} ${tracking_number ? `(${tracking_number})` : ''} - ${sender_name || recipient_name || ''}`,
       body: notes || '',
       metadata: JSON.stringify({ tracking_number, courier, mail_type }),
     });
+    if (commErr) console.error(`[mail-logs] communications mirror insert failed for log ${created.id}:`, commErr.message);
 
     res.status(201).json({ success: true, data: { ...created, created_by_name: req.user.name || null } });
   } catch (err) {
@@ -197,7 +208,7 @@ router.delete('/mail-logs/:id', requireAuth, async (req, res) => {
     if (!(await canAccessCase(sup, req.user, existing.case_id))) {
       return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
     }
-    const { error } = await sup.from('mail_logs').delete().eq('id', logId);
+    const { error } = await trash.softDelete(sup, { table: 'mail_logs', id: logId, userId: req.user?.id });
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {

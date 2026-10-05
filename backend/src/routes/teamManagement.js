@@ -3,11 +3,16 @@ const router = express.Router();
 const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { canAccessCase } = require('../services/caseAccess');
+const trash = require('../services/trash');
 
 // ═══════════════════════════════════════════════
 // WORKLOAD DASHBOARD
 // ═══════════════════════════════════════════════
-router.get('/users/workload', requireAuth, async (req, res) => {
+// Was requireAuth-only -- any authenticated employee (any role) could see
+// which named colleagues are flagged idle/overloaded/late system-wide, with
+// no employee_performance:view permission check, unlike every equivalent
+// per-employee performance endpoint (team.routes.js's /profile/:id, /kpi/:userId).
+router.get('/users/workload', requireAuth, requirePermission('employee_performance', 'view'), async (req, res) => {
   try {
     const sup = getSupabase();
     const { data: users, error } = await sup.from('workload_view').select('*').order('active_investigations', { ascending: false });
@@ -28,58 +33,74 @@ router.get('/users/workload', requireAuth, async (req, res) => {
 // ROLES — Complete CRUD
 // ═══════════════════════════════════════════════
 router.get('/roles', requireAuth, async (req, res) => {
-  const sup = getSupabase();
-  const { data } = await sup.from('roles').select('*').order('sort_order');
-  res.json({ roles: data || [] });
+  try {
+    const sup = getSupabase();
+    const { data } = await sup.from('roles').select('*').is('deleted_at', null).order('sort_order');
+    res.json({ roles: data || [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// No global error middleware/uncaughtException handler exists in this app
+// (index.js) -- every route below previously destructured req.body with no
+// try/catch, so a request sent with no/wrong Content-Type (req.body left
+// undefined by express.json()) threw a synchronous, uncaught TypeError that
+// crashed the entire Node process for every concurrent user, not just a 500
+// for that one caller. Wrapped uniformly rather than case-by-case.
 router.post('/roles', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { name, label, permissions } = req.body;
-  if (!name) return res.status(400).json({ error: 'Name required' });
-  const { data, error } = await sup.from('roles').insert({
-    name: name.toLowerCase().replace(/\s+/g, '_'), label: label || name,
-    permissions: permissions || { view_investigation: true }, sort_order: 99
-  }).select().single();
-  if (error) return res.status(500).json({ error: error.message.includes('duplicate key') ? 'يوجد دور بهذا الاسم بالفعل' : error.message });
-  res.json({ success: true, role: data });
+  try {
+    const sup = getSupabase();
+    const { name, label, permissions } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Name required' });
+    const { data, error } = await sup.from('roles').insert({
+      name: name.toLowerCase().replace(/\s+/g, '_'), label: label || name,
+      permissions: permissions || { view_investigation: true }, sort_order: 99
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message.includes('duplicate key') ? 'يوجد دور بهذا الاسم بالفعل' : error.message });
+    res.json({ success: true, role: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.put('/roles/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { label, permissions, name } = req.body;
-  const updates = {};
-  if (label !== undefined) updates.label = label;
-  if (name !== undefined) updates.name = name;
-  if (permissions !== undefined) updates.permissions = permissions;
-  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields' });
-  const { data, error } = await sup.from('roles').update(updates).eq('id', parseInt(req.params.id)).select().single();
-  if (error) return res.status(500).json({ error: error.message.includes('duplicate key') ? 'يوجد دور بهذا الاسم بالفعل' : error.message });
-  res.json({ success: true, role: data });
+  try {
+    const sup = getSupabase();
+    const { label, permissions, name } = req.body || {};
+    const updates = {};
+    if (label !== undefined) updates.label = label;
+    if (name !== undefined) updates.name = name;
+    if (permissions !== undefined) updates.permissions = permissions;
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields' });
+    const { data, error } = await sup.from('roles').update(updates).eq('id', parseInt(req.params.id)).select().single();
+    if (error) return res.status(500).json({ error: error.message.includes('duplicate key') ? 'يوجد دور بهذا الاسم بالفعل' : error.message });
+    res.json({ success: true, role: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.delete('/roles/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { data: role } = await sup.from('roles').select('name').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (role) {
-    const { count } = await sup.from('users').select('id', { count: 'exact', head: true }).eq('role', role.name);
-    if (count > 0) return res.status(409).json({ error: `لا يمكن حذف هذا الدور — ${count} مستخدم لا يزال مسندًا إليه` });
-  }
-  const { error } = await sup.from('roles').delete().eq('id', parseInt(req.params.id));
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ success: true });
+  try {
+    const sup = getSupabase();
+    const { data: role } = await sup.from('roles').select('name').eq('id', parseInt(req.params.id)).maybeSingle();
+    if (role) {
+      const { count } = await sup.from('users').select('id', { count: 'exact', head: true }).eq('role', role.name).is('deleted_at', null);
+      if (count > 0) return res.status(409).json({ error: `لا يمكن حذف هذا الدور — ${count} مستخدم لا يزال مسندًا إليه` });
+    }
+    const { error } = await trash.softDelete(sup, { table: 'roles', id: parseInt(req.params.id), userId: req.user.id });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/roles/:id/duplicate', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { data: original } = await sup.from('roles').select('*').eq('id', parseInt(req.params.id)).single();
-  if (!original) return res.status(404).json({ error: 'Role not found' });
-  const { data, error } = await sup.from('roles').insert({
-    name: `${original.name}_copy`, label: `${original.label} (نسخة)`,
-    permissions: original.permissions, sort_order: 99
-  }).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ success: true, role: data });
+  try {
+    const sup = getSupabase();
+    const { data: original } = await sup.from('roles').select('*').eq('id', parseInt(req.params.id)).single();
+    if (!original) return res.status(404).json({ error: 'Role not found' });
+    const { data, error } = await sup.from('roles').insert({
+      name: `${original.name}_copy`, label: `${original.label} (نسخة)`,
+      permissions: original.permissions, sort_order: 99
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, role: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ═══════════════════════════════════════════════
@@ -87,99 +108,117 @@ router.post('/roles/:id/duplicate', requireAuth, requireRole('admin'), async (re
 // case's investigation team (case_assignees.role). Complete CRUD.
 // ═══════════════════════════════════════════════
 router.get('/case-team-roles', requireAuth, async (req, res) => {
-  const sup = getSupabase();
-  const { data, error } = await sup.from('case_team_roles').select('*').order('sort_order');
-  if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (case_team_roles)' : error.message });
-  res.json({ success: true, data: data || [] });
+  try {
+    const sup = getSupabase();
+    const { data, error } = await sup.from('case_team_roles').select('*').is('deleted_at', null).order('sort_order');
+    if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (case_team_roles)' : error.message });
+    res.json({ success: true, data: data || [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/case-team-roles', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { value, label, color } = req.body;
-  if (!value || !label) return res.status(400).json({ error: 'القيمة والاسم المعروض مطلوبان' });
-  const { data: maxRow } = await sup.from('case_team_roles').select('sort_order').order('sort_order', { ascending: false }).limit(1).maybeSingle();
-  const { data, error } = await sup.from('case_team_roles').insert({
-    value: value.toLowerCase().trim().replace(/\s+/g, '_'),
-    label, color: color || '#636366',
-    sort_order: (maxRow?.sort_order || 0) + 1,
-  }).select().single();
-  if (error) return res.status(400).json({ error: error.message.includes('duplicate key') ? 'يوجد مسمى وظيفي بهذه القيمة بالفعل' : error.message });
-  res.json({ success: true, data });
+  try {
+    const sup = getSupabase();
+    const { value, label, color } = req.body || {};
+    if (!value || !label) return res.status(400).json({ error: 'القيمة والاسم المعروض مطلوبان' });
+    const { data: maxRow } = await sup.from('case_team_roles').select('sort_order').order('sort_order', { ascending: false }).limit(1).maybeSingle();
+    const { data, error } = await sup.from('case_team_roles').insert({
+      value: value.toLowerCase().trim().replace(/\s+/g, '_'),
+      label, color: color || '#636366',
+      sort_order: (maxRow?.sort_order || 0) + 1,
+    }).select().single();
+    if (error) return res.status(400).json({ error: error.message.includes('duplicate key') ? 'يوجد مسمى وظيفي بهذه القيمة بالفعل' : error.message });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Only label/color/sort_order are editable -- `value` is what's stored on
 // every existing case_assignees.role row, so renaming it would silently
 // orphan every past assignment made under the old value.
 router.put('/case-team-roles/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { label, color, sort_order } = req.body;
-  const updates = { updated_at: new Date().toISOString() };
-  if (label !== undefined) updates.label = label;
-  if (color !== undefined) updates.color = color;
-  if (sort_order !== undefined) updates.sort_order = sort_order;
-  if (Object.keys(updates).length === 1) return res.status(400).json({ error: 'No fields' });
-  const { data, error } = await sup.from('case_team_roles').update(updates).eq('id', parseInt(req.params.id)).select().single();
-  if (error) return res.status(400).json({ error: error.message });
-  res.json({ success: true, data });
+  try {
+    const sup = getSupabase();
+    const { label, color, sort_order } = req.body || {};
+    const updates = { updated_at: new Date().toISOString() };
+    if (label !== undefined) updates.label = label;
+    if (color !== undefined) updates.color = color;
+    if (sort_order !== undefined) updates.sort_order = sort_order;
+    if (Object.keys(updates).length === 1) return res.status(400).json({ error: 'No fields' });
+    const { data, error } = await sup.from('case_team_roles').update(updates).eq('id', parseInt(req.params.id)).select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.delete('/case-team-roles/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { data: role } = await sup.from('case_team_roles').select('value').eq('id', parseInt(req.params.id)).maybeSingle();
-  if (role) {
-    const { count } = await sup.from('case_assignees').select('id', { count: 'exact', head: true }).eq('role', role.value);
-    if (count > 0) return res.status(409).json({ error: `لا يمكن حذف هذا المسمى — مستخدم في ${count} تعيين حالي ضمن فرق القضايا` });
-  }
-  const { error } = await sup.from('case_team_roles').delete().eq('id', parseInt(req.params.id));
-  if (error) return res.status(400).json({ error: error.message });
-  res.json({ success: true });
+  try {
+    const sup = getSupabase();
+    const { data: role } = await sup.from('case_team_roles').select('value').eq('id', parseInt(req.params.id)).maybeSingle();
+    if (role) {
+      const { count } = await sup.from('case_assignees').select('id', { count: 'exact', head: true }).eq('role', role.value).is('deleted_at', null);
+      if (count > 0) return res.status(409).json({ error: `لا يمكن حذف هذا المسمى — مستخدم في ${count} تعيين حالي ضمن فرق القضايا` });
+    }
+    const { error } = await trash.softDelete(sup, { table: 'case_team_roles', id: parseInt(req.params.id), userId: req.user.id });
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ═══════════════════════════════════════════════
 // DEPARTMENTS — Complete CRUD
 // ═══════════════════════════════════════════════
 router.get('/departments', requireAuth, async (req, res) => {
-  const sup = getSupabase();
-  const { data } = await sup.from('departments').select('*').order('name');
-  res.json({ departments: data || [] });
+  try {
+    const sup = getSupabase();
+    const { data } = await sup.from('departments').select('*').is('deleted_at', null).order('name');
+    res.json({ departments: data || [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.post('/departments', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { name, description, manager_id } = req.body;
-  if (!name) return res.status(400).json({ error: 'Name required' });
-  const { data, error } = await sup.from('departments').insert({ name, description, manager_id }).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ success: true, department: data });
+  try {
+    const sup = getSupabase();
+    const { name, description, manager_id } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Name required' });
+    const { data, error } = await sup.from('departments').insert({ name, description, manager_id }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, department: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.put('/departments/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { name, description, manager_id, archived } = req.body;
-  const updates = {};
-  if (name !== undefined) updates.name = name;
-  if (description !== undefined) updates.description = description;
-  if (manager_id !== undefined) updates.manager_id = manager_id;
-  if (archived !== undefined) updates.archived = archived;
-  const { data, error } = await sup.from('departments').update(updates).eq('id', parseInt(req.params.id)).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ success: true, department: data });
+  try {
+    const sup = getSupabase();
+    const { name, description, manager_id, archived } = req.body || {};
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (description !== undefined) updates.description = description;
+    if (manager_id !== undefined) updates.manager_id = manager_id;
+    if (archived !== undefined) updates.archived = archived;
+    const { data, error } = await sup.from('departments').update(updates).eq('id', parseInt(req.params.id)).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, department: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.delete('/departments/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const { error } = await sup.from('departments').delete().eq('id', parseInt(req.params.id));
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ success: true });
+  try {
+    const sup = getSupabase();
+    const { error } = await trash.softDelete(sup, { table: 'departments', id: parseInt(req.params.id), userId: req.user.id });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ═══════════════════════════════════════════════
 // ORGANIZATION SETTINGS
 // ═══════════════════════════════════════════════
 router.get('/organization', requireAuth, async (req, res) => {
-  const sup = getSupabase();
-  const { data } = await sup.from('organization_settings').select('*').limit(1).single();
-  res.json({ organization: data || {} });
+  try {
+    const sup = getSupabase();
+    const { data } = await sup.from('organization_settings').select('*').limit(1).single();
+    res.json({ organization: data || {} });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Every sibling admin action in this file (departments/roles/case-team-roles
@@ -187,14 +226,16 @@ router.get('/organization', requireAuth, async (req, res) => {
 // authenticated user, regardless of role, could rewrite company-wide
 // settings (company name, numbering scheme, email footer...).
 router.put('/organization', requireAuth, requireRole('admin'), async (req, res) => {
-  const sup = getSupabase();
-  const allowed = ['company_name', 'timezone', 'working_days', 'business_hours', 'default_language', 'logo_url', 'email_footer', 'investigation_numbering', 'case_numbering'];
-  const updates = {};
-  for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
-  updates.updated_at = new Date().toISOString();
-  const { data, error } = await sup.from('organization_settings').update(updates).eq('id', 1).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ success: true, organization: data });
+  try {
+    const sup = getSupabase();
+    const allowed = ['company_name', 'timezone', 'working_days', 'business_hours', 'default_language', 'logo_url', 'email_footer', 'investigation_numbering', 'case_numbering'];
+    const updates = {};
+    for (const k of allowed) if ((req.body || {})[k] !== undefined) updates[k] = req.body[k];
+    updates.updated_at = new Date().toISOString();
+    const { data, error } = await sup.from('organization_settings').update(updates).eq('id', 1).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, organization: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ═══════════════════════════════════════════════
@@ -209,16 +250,18 @@ router.put('/organization', requireAuth, requireRole('admin'), async (req, res) 
 // PUT below is the one case where NO other router defines this exact path,
 // so it's live -- but had no permission or case-access check at all.
 router.put('/cases/:id/assignees/:userId', requireAuth, requirePermission('cases', 'edit'), async (req, res) => {
-  const sup = getSupabase();
-  const caseId = parseInt(req.params.id);
-  const { role } = req.body;
-  if (!role) return res.status(400).json({ error: 'Role required' });
-  if (!(await canAccessCase(sup, req.user, caseId))) {
-    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-  }
-  const { data, error } = await sup.from('case_assignees').update({ role }).eq('case_id', caseId).eq('user_id', parseInt(req.params.userId)).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ success: true, assignee: data });
+  try {
+    const sup = getSupabase();
+    const caseId = parseInt(req.params.id);
+    const { role } = req.body || {};
+    if (!role) return res.status(400).json({ error: 'Role required' });
+    if (!(await canAccessCase(sup, req.user, caseId))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
+    const { data, error } = await sup.from('case_assignees').update({ role }).eq('case_id', caseId).eq('user_id', parseInt(req.params.userId)).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, assignee: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Transfer ownership -- actively used by TeamTab.jsx/CaseHeader.jsx, and
@@ -226,16 +269,18 @@ router.put('/cases/:id/assignees/:userId', requireAuth, requirePermission('cases
 // authenticated user could transfer ANY case's ownership to anyone, with no
 // requirement they could even see that case in the first place.
 router.put('/cases/:id/transfer', requireAuth, requirePermission('cases', 'edit'), async (req, res) => {
-  const sup = getSupabase();
-  const caseId = parseInt(req.params.id);
-  const { owner_id } = req.body;
-  if (!owner_id) return res.status(400).json({ error: 'owner_id required' });
-  if (!(await canAccessCase(sup, req.user, caseId))) {
-    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-  }
-  const { data, error } = await sup.from('cases').update({ owner_id }).eq('id', caseId).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ success: true, case: data });
+  try {
+    const sup = getSupabase();
+    const caseId = parseInt(req.params.id);
+    const { owner_id } = req.body || {};
+    if (!owner_id) return res.status(400).json({ error: 'owner_id required' });
+    if (!(await canAccessCase(sup, req.user, caseId))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
+    const { data, error } = await sup.from('cases').update({ owner_id }).eq('id', caseId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, case: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // NOTE: PUT /agencies/:id used to be duplicated here (primary_email,

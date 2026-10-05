@@ -5,11 +5,13 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { getSupabase } = require('../supabase');
+const { addCreatorToTeam } = require('../services/caseTeam');
 const { processDocument, extractText, extractMetadata, detectDuplicates } = require('../services/aiIntake');
 const { classifyIntakeText, blankAnswers } = require('../services/aiClassifier');
 const caseFileStorage = require('../services/caseFileStorage');
 const { requireAuth, requirePermission, hasPermission } = require('../middleware/auth');
 const { canAccessCase } = require('../services/caseAccess');
+const trash = require('../services/trash');
 router.use(requireAuth);
 
 // The OCR step shells out to a Python script that needs a real file path on
@@ -145,6 +147,7 @@ router.post('/intake/upload', requirePermission('intake', 'create'), upload.sing
     }).select().single();
     if (caseErr) throw caseErr;
     const caseId = created.id;
+    await addCreatorToTeam(sup, caseId, req.user?.id);
 
     // Add a note about AI extraction
     try {
@@ -183,8 +186,6 @@ router.post('/intake/upload', requirePermission('intake', 'create'), upload.sing
       });
     } catch (archiveErr) {
       console.error('[intake] failed to archive source document to Drive:', archiveErr.message);
-    } finally {
-      fs.unlink(filePath, () => {});
     }
 
     res.json({
@@ -210,6 +211,14 @@ router.post('/intake/upload', requirePermission('intake', 'create'), upload.sing
   } catch (err) {
     console.error('Intake error:', err);
     res.status(500).json({ error: err.message });
+  } finally {
+    // Previously only unlinked on the success path, past the Drive-archive
+    // step -- the "not enough OCR text" early return and every thrown error
+    // above it (bad metadata extraction, a failed case insert, ...) left the
+    // uploaded file sitting in the shared OS temp directory forever. A
+    // finally on the outer try covers every exit path with one line instead
+    // of trying to unlink from each one individually.
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
   }
 });
 
@@ -240,6 +249,7 @@ router.post('/intake/text', requirePermission('intake', 'create'), async (req, r
     }).select().single();
     if (caseErr) throw caseErr;
     const caseId = created.id;
+    await addCreatorToTeam(sup, caseId, req.user?.id);
 
     for (const agency of metadata.agencies.slice(0, 5)) {
       await sup.from('requests').insert({
@@ -288,6 +298,7 @@ router.post('/intake/manual', requirePermission('intake', 'create'), async (req,
     }).select().single();
     if (caseErr) throw caseErr;
     const caseId = created.id;
+    await addCreatorToTeam(sup, caseId, req.user?.id);
 
     if (Array.isArray(agencies)) {
       for (const a of agencies.slice(0, 20)) {
@@ -387,7 +398,7 @@ router.get('/intake/criteria-definitions', async (req, res) => {
   try {
     const sup = getSupabase();
     const canManage = await hasPermission(sup, req.user, 'intake', 'manage_criteria');
-    let query = sup.from('intake_criteria_definitions').select('*').order('sort_order', { ascending: true });
+    let query = sup.from('intake_criteria_definitions').select('*').is('deleted_at', null).order('sort_order', { ascending: true });
     if (!canManage) query = query.eq('is_active', true);
     const { data, error } = await query;
     if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (intake_criteria_definitions)' : error.message });
@@ -429,7 +440,7 @@ router.put('/intake/criteria-definitions/:id', requirePermission('intake', 'mana
 router.delete('/intake/criteria-definitions/:id', requirePermission('intake', 'manage_criteria'), async (req, res) => {
   try {
     const sup = getSupabase();
-    const { error } = await sup.from('intake_criteria_definitions').delete().eq('id', parseInt(req.params.id));
+    const { error } = await trash.softDelete(sup, { table: 'intake_criteria_definitions', id: parseInt(req.params.id), userId: req.user?.id });
     if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }

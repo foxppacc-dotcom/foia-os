@@ -169,12 +169,17 @@ export default function ProductionListsAdmin() {
                   {users.length === 0 ? (
                     <p style={{ color: 'var(--text-muted)' }}>لا يوجد مستخدمين</p>
                   ) : users.map(u => {
-                    const isAssigned = (listAssignees[list.id] || []).some(a => a.id === u.id);
+                    // list_assignees rows carry their OWN join-row id in `a.id` --
+                    // the actual user is `a.user_id`. Comparing `a.id === u.id`
+                    // checked/collected the wrong id entirely, showing bogus
+                    // "assigned" state and posting the wrong ids to the backend,
+                    // corrupting the list's real team assignments.
+                    const isAssigned = (listAssignees[list.id] || []).some(a => a.user_id === u.id);
                     return (
                       <label key={u.id} className="flex items-center gap-2 py-1 cursor-pointer">
                         <input type="checkbox" checked={isAssigned}
                           onChange={() => {
-                            const curr = (listAssignees[list.id] || []).map(a => a.id);
+                            const curr = (listAssignees[list.id] || []).map(a => a.user_id);
                             const next = isAssigned ? curr.filter(id => id !== u.id) : [...curr, u.id];
                             updateListAssignees(list.id, next);
                           }}

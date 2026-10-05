@@ -37,6 +37,8 @@
   "message": {
     "idTooltip": "رقم الإيميل",
     "unknownSender": "مجهول",
+    "conversationCount": "{{count}} رسائل في هذه المحادثة",
+    "loadingConversation": "جارِ تحميل المحادثة...",
     "inbound": "وارد", "outbound": "صادر",
     "linked": "مرتبط (#{{id}})",
     "archived": "مؤرشف",
@@ -65,7 +67,7 @@
   "confirm": {
     "unlink": "فك ارتباط هذه الرسالة بالقضية؟",
     "rejectMatch": "هذا الربط غير صحيح -- فك الارتباط وتسجيل الملاحظة؟",
-    "delete": "حذف هذه الرسالة نهائيًا؟"
+    "delete": "سيتم نقل هذه الرسالة إلى سلة المحذوفات -- يمكن استعادتها لاحقًا من هناك. هل تريد المتابعة؟"
   },
   "actionErrors": {
     "linkFailed": "❌ {{message}}",

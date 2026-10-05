@@ -2,6 +2,18 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole, requirePermission, bcrypt } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
+const trash = require('../services/trash');
+
+// Applied consistently across create/update/reset below -- previously only
+// the reset-password route checked anything at all (a weak 6-char minimum),
+// while account creation and PUT /users/:id's own password field accepted
+// literally any non-empty string, including a single character. Combined
+// with the login rate limiter's 20-attempts/15-min budget, a short password
+// is guessable well within the allowed attempts.
+const MIN_PASSWORD_LENGTH = 8;
+function isPasswordStrongEnough(password) {
+  return typeof password === 'string' && password.length >= MIN_PASSWORD_LENGTH;
+}
 
 // All routes require auth; mutating routes additionally require admin
 // (applied per-route below) -- GETs stay open to any authenticated staff
@@ -15,7 +27,8 @@ router.get('/users', async (req, res) => {
   const sup = getSupabase();
   const { data: users } = await sup
     .from('users')
-    .select(`id, name, email, role, team_id, teams!left(name), created_at`)
+    .select(`id, name, email, role, team_id, teams!team_id!left(name), created_at`)
+    .is('deleted_at', null)
     .order('created_at', { ascending: false });
 
   // Users.jsx's "التخصصات" column reads u.specialties as an array of
@@ -43,42 +56,62 @@ router.get('/users', async (req, res) => {
 // than a fixed list here -- falls back to the legacy hardcoded set only if
 // the roles table is empty/unreachable, so user creation never hard-fails.
 async function getValidRoleNames(sup) {
-  const { data } = await sup.from('roles').select('name');
+  const { data } = await sup.from('roles').select('name').is('deleted_at', null);
   const names = (data || []).map(r => r.name);
   return names.length ? names : ['admin', 'manager', 'member'];
 }
 
 // POST /api/users — create user
 router.post('/users', requirePermission('users', 'invite'), async (req, res) => {
-  const { name, email, password, role, team_id, specialties } = req.body;
-  if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, password required' });
+  try {
+    const { name, email, password, role, team_id, specialties } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, password required' });
+    if (!isPasswordStrongEnough(password)) return res.status(400).json({ error: `كلمة المرور يجب ألا تقل عن ${MIN_PASSWORD_LENGTH} أحرف` });
 
-  const sup = getSupabase();
-  const validRoles = await getValidRoleNames(sup);
-  if (role && !validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
+    const sup = getSupabase();
+    const validRoles = await getValidRoleNames(sup);
+    if (role && !validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
+    // users:invite is granted to non-admin roles (managers by default). Without
+    // this, a manager could create an account with role 'admin' (or any role more
+    // privileged than their own) and log in as it. PUT /users/:id already blocks
+    // non-admins from setting a role -- create was missed.
+    if (req.user.role !== 'admin' && role && role !== 'member' && role !== req.user.role) {
+      return res.status(403).json({ error: 'Forbidden — لا يمكنك إنشاء مستخدم بدور أعلى من صلاحياتك' });
+    }
 
-  const { data: existing } = await sup.from('users').select('id').eq('email', email).maybeSingle();
-  if (existing) return res.status(409).json({ error: 'Email already exists' });
+    const { data: existing } = await sup.from('users').select('id').eq('email', email).is('deleted_at', null).maybeSingle();
+    if (existing) return res.status(409).json({ error: 'Email already exists' });
 
-  const hash = bcrypt.hashSync(password, 10);
-  const { data: created, error } = await sup
-    .from('users')
-    .insert({ name, email, password_hash: hash, role: role || 'member', team_id: team_id || null })
-    .select()
-    .single();
+    const hash = bcrypt.hashSync(password, 10);
+    const { data: created, error } = await sup
+      .from('users')
+      .insert({ name, email, password_hash: hash, role: role || 'member', team_id: team_id || null, password_changed_at: new Date().toISOString() })
+      .select()
+      .single();
 
-  if (error) throw error;
+    // The `existing` check above is a check-then-insert race: two
+    // near-simultaneous submissions for the same email can both pass it, and
+    // the second then hits the DB's own unique constraint on `users.email`.
+    // Reported as the same clean 409 the pre-check normally produces, not a
+    // raw 500 -- and either way, this now returns instead of throwing
+    // unhandled (an uncaught rejection here previously could crash the whole
+    // process, not just this one request).
+    if (error) {
+      if (/duplicate key|already exists/i.test(error.message)) return res.status(409).json({ error: 'Email already exists' });
+      return res.status(400).json({ error: error.message });
+    }
 
-  // Users.jsx's create-user form lets an admin pick specialties up front,
-  // but this was silently dropped -- the checkboxes did nothing.
-  if (Array.isArray(specialties) && specialties.length) {
-    const { error: specErr } = await sup.from('user_specialties').insert(
-      specialties.map(specialty_id => ({ user_id: created.id, specialty_id }))
-    );
-    if (specErr) console.error(`[users] user_specialties insert failed for user ${created.id}:`, specErr.message);
-  }
+    // Users.jsx's create-user form lets an admin pick specialties up front,
+    // but this was silently dropped -- the checkboxes did nothing.
+    if (Array.isArray(specialties) && specialties.length) {
+      const { error: specErr } = await sup.from('user_specialties').insert(
+        specialties.map(specialty_id => ({ user_id: created.id, specialty_id }))
+      );
+      if (specErr) console.error(`[users] user_specialties insert failed for user ${created.id}:`, specErr.message);
+    }
 
-  res.json({ success: true, id: created.id, message: `✅ تم إضافة ${name}` });
+    res.json({ success: true, id: created.id, message: `✅ تم إضافة ${name}` });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // PUT /api/users/:id — update user
@@ -98,6 +131,9 @@ router.put('/users/:id', requirePermission('users', 'edit'), async (req, res) =>
   if (password && user.role === 'admin' && req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Forbidden — تغيير كلمة مرور حساب مسؤول متاح فقط للمسؤول (admin)' });
   }
+  if (password && !isPasswordStrongEnough(password)) {
+    return res.status(400).json({ error: `كلمة المرور يجب ألا تقل عن ${MIN_PASSWORD_LENGTH} أحرف` });
+  }
 
   if (role) {
     // `users:edit` is grantable to any custom role for ordinary
@@ -113,8 +149,14 @@ router.put('/users/:id', requirePermission('users', 'edit'), async (req, res) =>
 
   const updates = {};
   if (name) updates.name = name;
-  if (email) updates.email = email;
-  if (password) updates.password_hash = bcrypt.hashSync(password, 10);
+  if (email) {
+    const clean = String(email).trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) return res.status(400).json({ error: 'صيغة البريد الإلكتروني غير صحيحة' });
+    const { data: taken } = await sup.from('users').select('id').eq('email', clean).is('deleted_at', null).neq('id', parseInt(req.params.id)).maybeSingle();
+    if (taken) return res.status(409).json({ error: 'هذا البريد مستخدم لحساب آخر' });
+    updates.email = clean;
+  }
+  if (password) { updates.password_hash = bcrypt.hashSync(password, 10); updates.password_changed_at = new Date().toISOString(); }
   if (role) updates.role = role;
   if (team_id !== undefined) updates.team_id = team_id || null;
   if (is_active !== undefined) updates.is_active = !!is_active;
@@ -136,7 +178,7 @@ router.put('/users/:id', requirePermission('users', 'edit'), async (req, res) =>
 // POST /api/users/:id/reset-password — admin sets a new password directly
 router.post('/users/:id/reset-password', requirePermission('users', 'edit'), async (req, res) => {
   const { password } = req.body;
-  if (!password || password.length < 6) return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 6 أحرف' });
+  if (!isPasswordStrongEnough(password)) return res.status(400).json({ error: `كلمة المرور يجب ألا تقل عن ${MIN_PASSWORD_LENGTH} أحرف` });
   const sup = getSupabase();
   const { data: user } = await sup.from('users').select('id, role').eq('id', parseInt(req.params.id)).maybeSingle();
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -147,7 +189,7 @@ router.post('/users/:id/reset-password', requirePermission('users', 'edit'), asy
     return res.status(403).json({ error: 'Forbidden — تغيير كلمة مرور حساب مسؤول متاح فقط للمسؤول (admin)' });
   }
   const hash = bcrypt.hashSync(password, 10);
-  const { error } = await sup.from('users').update({ password_hash: hash }).eq('id', parseInt(req.params.id));
+  const { error } = await sup.from('users').update({ password_hash: hash, password_changed_at: new Date().toISOString() }).eq('id', parseInt(req.params.id));
   if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true, message: '✅ تم إعادة تعيين كلمة المرور' });
 });
@@ -158,7 +200,7 @@ router.delete('/users/:id', requirePermission('users', 'delete'), async (req, re
   const id = parseInt(req.params.id);
   if (id === req.user.id) return res.status(400).json({ error: 'لا يمكن حذف نفسك' });
 
-  const { error } = await sup.from('users').delete().eq('id', id);
+  const { error } = await trash.softDelete(sup, { table: 'users', id, userId: req.user.id });
   if (error) return res.status(404).json({ error: 'User not found' });
 
   res.json({ success: true, message: '✅ تم حذف المستخدم' });
@@ -180,7 +222,7 @@ router.get('/users/specialized', async (req, res) => {
     // Users + ALL their specialty links + the specialty catalog, in 3 fixed
     // queries total instead of 2 extra ones per user (was O(N) round trips).
     const [{ data: users }, { data: allLinks }] = await Promise.all([
-      sup.from('users').select('id, name, email, role').in('id', userIds).order('name'),
+      sup.from('users').select('id, name, email, role').in('id', userIds).is('deleted_at', null).order('name'),
       sup.from('user_specialties').select('user_id, specialty_id').in('user_id', userIds),
     ]);
 

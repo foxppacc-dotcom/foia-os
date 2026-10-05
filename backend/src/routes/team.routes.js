@@ -28,7 +28,11 @@ router.get('/profile/:id', async (req, res) => {
     const sup = getSupabase();
     const id = parseInt(req.params.id);
     if (!(await canViewOtherProfile(req, res, id))) return;
-    const { data: user } = await sup.from('users').select('id, name, email, role, team_id, created_at').eq('id', id).single();
+    // phone/job_title/department/bio were all missing here even though the
+    // frontend's own edit form (Profile.jsx) has fields for all four -- they
+    // silently never populated on load, so a saved value never showed up
+    // even when the PUT below succeeded.
+    const { data: user } = await sup.from('users').select('id, name, email, role, team_id, created_at, phone, job_title, department, bio').eq('id', id).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const { data: tasks } = await sup.from('case_tasks').select('id, title, status, priority, due_date, created_at').eq('assigned_to', id).order('created_at', { ascending: false }).limit(20);
@@ -46,8 +50,8 @@ router.get('/profile/:id', async (req, res) => {
       // in this codebase (see portals.js); batch-fetch by id instead, same
       // defensive pattern used throughout case_detail.routes.js.
       const [{ data: viaTeam }, { data: viaLegacy }, { data: viaCreated }] = await Promise.all([
-        sup.from('case_assignees').select('case_id, role').eq('user_id', id),
-        sup.from('cases').select('id, title, status').eq('assigned_to', id),
+        sup.from('case_assignees').select('case_id, role').eq('user_id', id).is('deleted_at', null),
+        sup.from('cases').select('id, title, status').eq('assigned_to', id).is('deleted_at', null),
         // Missing before -- a case someone CREATED but wasn't separately
         // added to case_assignees for (confirmed live: one employee had 177
         // created cases against only 161 case_assignees rows) never showed
@@ -125,11 +129,26 @@ router.get('/profile/:id', async (req, res) => {
 router.put('/profile/:id', async (req, res) => {
   try {
     const sup = getSupabase();
-    if (!(await canViewOtherProfile(req, res, parseInt(req.params.id)))) return;
-    const { name } = req.body;
-    // Only update columns that exist in the table
+    // canViewOtherProfile grants access with employee_performance:view --
+    // a permission meant for READING a colleague's performance data, wrongly
+    // reused here to authorize WRITING their profile fields too. The
+    // frontend's own edit button has no own-profile check either, so any
+    // manager holding just that view permission could rename another
+    // employee. Profile fields (name, job title, etc.) are self-editable
+    // only -- there is no legitimate "edit someone else's profile" feature.
+    if (parseInt(req.params.id) !== req.user?.id) {
+      return res.status(403).json({ error: 'Forbidden — يمكنك تعديل ملفك الشخصي فقط' });
+    }
+    // phone/job_title/department/bio were silently dropped here even though
+    // the frontend's edit form collects all four -- a user filling them in
+    // and saving saw no error, but nothing beyond `name` was ever persisted.
+    const { name, phone, job_title, department, bio } = req.body;
     const updates = {};
     if (name !== undefined) updates.name = name;
+    if (phone !== undefined) updates.phone = phone;
+    if (job_title !== undefined) updates.job_title = job_title;
+    if (department !== undefined) updates.department = department;
+    if (bio !== undefined) updates.bio = bio;
     const { error } = await sup.from('users').update(updates).eq('id', parseInt(req.params.id));
     if (error) throw error;
     res.json({ success: true });
@@ -250,12 +269,18 @@ router.put('/tasks/:id/status', async (req, res) => {
   try {
     const sup = getSupabase();
     const taskId = parseInt(req.params.id);
-    const { data: task } = await sup.from('case_tasks').select('assigned_to').eq('id', taskId).maybeSingle();
+    const { data: task } = await sup.from('case_tasks').select('assigned_to, created_by').eq('id', taskId).maybeSingle();
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    if (task.assigned_to !== req.user.id && req.user.role !== 'admin') {
+    // A case-wide reminder (aiTools.js's set_case_reminder) has no single
+    // assignee at all -- assigned_to stays null -- so the original
+    // assigned_to-only check locked its own creator out of ever marking it
+    // done. created_by is the same kind of "this is mine" claim assigned_to
+    // already was, just for a task nobody was personally assigned.
+    if (task.assigned_to !== req.user.id && task.created_by !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden — لا يمكنك تعديل مهمة موظف آخر' });
     }
     const { status } = req.body;
+    if (!status) return res.status(400).json({ error: 'status مطلوب' });
     const updates = { status };
     if (status === 'completed') updates.completed_at = new Date().toISOString();
     const { error } = await sup.from('case_tasks').update(updates).eq('id', taskId);

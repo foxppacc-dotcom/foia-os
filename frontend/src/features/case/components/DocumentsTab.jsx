@@ -7,6 +7,7 @@ import UploadZone from '../../drive/components/UploadZone';
 import AppBadge from '../../../components/ds/AppBadge';
 import Button from '../../../components/ui/Button';
 import FileFetchModal from './FileFetchModal';
+import { formatArabicDate } from '../../../utils/formatDate';
 
 const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
@@ -131,6 +132,63 @@ export default function DocumentsTab() {
     setSharingId(null);
   };
 
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportBlob, setExportBlob] = useState(null);
+
+  const exportPdfFileName = () => {
+    const safeTitle = String(c?.title || 'بدون عنوان').replace(/[\\/:*?"<>|]/g, '').trim();
+    return `${id} - ${safeTitle}.pdf`;
+  };
+
+  // One click fetches the PDF once, then offers a choice (download / share)
+  // instead of immediately forcing a download -- the fetched blob is reused
+  // for whichever the user picks so it's never fetched twice.
+  const openExportMenu = async () => {
+    setExportingPdf(true);
+    try {
+      const r = await fetch(`${API}/cases/${id}/export-pdf`, { headers: hdrs() });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر إنشاء الملف')); return; }
+      setExportBlob(await r.blob());
+      setExportMenuOpen(true);
+    } catch (e) { alert('❌ ' + e.message); }
+    setExportingPdf(false);
+  };
+
+  const downloadExportPdf = () => {
+    if (!exportBlob) return;
+    const url = URL.createObjectURL(exportBlob);
+    const a = document.createElement('a');
+    // A blob-URL download uses `a.download` for the file name -- the
+    // server's Content-Disposition header only applies to a direct browser
+    // navigation, not this fetch+blob flow -- so it has to be set here too.
+    a.href = url; a.download = exportPdfFileName();
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    setExportMenuOpen(false);
+  };
+
+  const shareExportPdf = async () => {
+    if (!exportBlob) return;
+    const file = new File([exportBlob], exportPdfFileName(), { type: 'application/pdf' });
+    // Web Share API with files: supported on Android/iOS browsers and
+    // desktop Chrome/Edge (hands off to the OS's own share sheet -- Mail,
+    // WhatsApp Desktop, Nearby Share, whatever's installed). No such API
+    // exists for "share to an arbitrary platform" otherwise, so this IS the
+    // real share option; anything unsupported just falls back to a download.
+    if (navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: exportPdfFileName(), text: `تقرير القضية #${id}` });
+      } catch (e) {
+        if (e.name !== 'AbortError') alert('❌ تعذرت المشاركة: ' + e.message);
+      }
+      setExportMenuOpen(false);
+    } else {
+      alert('⚠️ المشاركة غير مدعومة في هذا المتصفح، سيتم تحميل الملف بدلاً من ذلك');
+      downloadExportPdf();
+    }
+  };
+
   const copyLink = async () => {
     if (!shareResult?.url) return;
     try { await navigator.clipboard.writeText(shareResult.url); setCopied(true); setTimeout(() => setCopied(false), 1500); }
@@ -201,6 +259,28 @@ export default function DocumentsTab() {
         <Button variant="secondary" size="sm" onClick={() => setFileFetchOpen(true)}>
           <Link2 className="w-3 h-3" />FileFetch
         </Button>
+        <div className="relative">
+          <Button variant="secondary" size="sm" onClick={openExportMenu} disabled={exportingPdf}>
+            {exportingPdf ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
+            تصدير PDF
+          </Button>
+          {exportMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setExportMenuOpen(false)} />
+              <div className="absolute top-full mt-1 left-0 z-20 rounded-lg shadow-lg overflow-hidden min-w-[140px]"
+                style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
+                <button className="w-full flex items-center gap-2 px-3 py-2 text-xs text-right ds-transition-colors hover:opacity-80"
+                  style={{ color: 'var(--ds-text-primary)' }} onClick={downloadExportPdf}>
+                  <Download className="w-3.5 h-3.5" />تنزيل
+                </button>
+                <button className="w-full flex items-center gap-2 px-3 py-2 text-xs text-right ds-transition-colors hover:opacity-80"
+                  style={{ color: 'var(--ds-text-primary)', borderTop: '1px solid var(--ds-border)' }} onClick={shareExportPdf}>
+                  <Share2 className="w-3.5 h-3.5" />مشاركة
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Bulk actions */}
@@ -291,7 +371,7 @@ export default function DocumentsTab() {
                     <AppBadge variant={st.variant} size="sm">{st.label}</AppBadge>
                   </span>
                   <span className="text-[9px] w-16 hidden lg:block" style={{ color: 'var(--ds-text-muted)' }}>
-                    {doc.created_at ? new Date(doc.created_at).toLocaleDateString('ar-SA') : ''}
+                    {formatArabicDate(doc.created_at)}
                   </span>
                   <div className="w-24 flex items-center justify-end gap-0.5 shrink-0">
                     <button className="p-1.5 rounded-md ds-transition-colors" title="معاينة" style={{ color: 'var(--ds-text-muted)' }} onClick={() => setPreviewFile?.(doc)}>

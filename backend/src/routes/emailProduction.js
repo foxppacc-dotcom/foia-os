@@ -1,13 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
+const { logActivity } = require('../services/activityLogger');
 
 // SMTP test — lazy-load nodemailer so it doesn't crash serverless startup
-router.post('/email-accounts/:id/test-smtp', requireAuth, async (req, res) => {
+router.post('/email-accounts/:id/test-smtp', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.id)).single();
+    const { data: account } = await sup.from('email_accounts').select('*').eq('id', parseInt(req.params.id)).is('deleted_at', null).single();
     if (!account) return res.status(404).json({ error: 'Account not found' });
 
     // Lazy import to avoid Vercel serverless startup crash
@@ -29,7 +30,7 @@ router.post('/email-accounts/:id/test-smtp', requireAuth, async (req, res) => {
     });
 
     await transporter.verify();
-    await sup.from('email_accounts').update({ status: 'active', last_checked: new Date().toISOString() }).eq('id', account.id);
+    await sup.from('email_accounts').update({ status: 'active' }).eq('id', account.id);
     res.json({ success: true, status: 'connected', host: account.smtp_host, port: account.smtp_port });
   } catch (err) {
     const sup = getSupabase();
@@ -38,14 +39,20 @@ router.post('/email-accounts/:id/test-smtp', requireAuth, async (req, res) => {
   }
 });
 
-// Test compose — send a real email using a configured account (no case required)
-router.post('/email/test-compose', requireAuth, async (req, res) => {
+// Test compose — send a real email using a configured account (no case
+// required). This actually sends via the org's real SMTP account, so it
+// needs the same gate every other account-touching route already has --
+// previously requireAuth alone meant ANY authenticated employee could send
+// an arbitrary email, to any address, from the org's real domain, through
+// any account (ids are visible via GET /email-accounts), with zero record
+// anywhere in the app.
+router.post('/email/test-compose', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const { to, subject, body, account_id } = req.body;
     if (!to || !subject || !account_id) return res.status(400).json({ error: 'to, subject, and account_id are required' });
 
     const sup = getSupabase();
-    const { data: account, error: acctErr } = await sup.from('email_accounts').select('*').eq('id', parseInt(account_id)).single();
+    const { data: account, error: acctErr } = await sup.from('email_accounts').select('*').eq('id', parseInt(account_id)).is('deleted_at', null).single();
     if (acctErr || !account) return res.status(404).json({ error: 'Email account not found' });
 
     let nodemailer;
@@ -70,6 +77,14 @@ router.post('/email/test-compose', requireAuth, async (req, res) => {
       subject,
       text: body,
     });
+
+    try {
+      await logActivity({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'test_compose_email_sent', target_type: 'email_account', target_id: account.id,
+        target_title: `اختبار إرسال إلى ${to}`, details: `الموضوع: ${subject}`,
+      });
+    } catch (e) { console.error('[emailProduction] activity log failed:', e.message); }
 
     res.json({ success: true, messageId: info.messageId, accepted: info.accepted, rejected: info.rejected });
   } catch (ex) {

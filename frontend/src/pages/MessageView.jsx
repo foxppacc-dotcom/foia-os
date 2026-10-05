@@ -4,23 +4,40 @@ import { useTranslation } from 'react-i18next';
 import { getApiBase } from '../api';
 import { Mail, Reply, Forward, Download, Paperclip, ExternalLink, Loader2, X, Send } from 'lucide-react';
 import EmailBodyView from '../components/EmailBodyView';
+import { formatArabicDateTime } from '../utils/formatDate';
 
 const BASE = getApiBase();
 const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 const authHdrs = () => ({ 'Authorization': `Bearer ${tok()}` });
 
-function formatDateTime(dateStr) {
-  if (!dateStr) return '';
-  const d = new Date(dateStr);
-  return `${d.toLocaleDateString('ar-SA')} ${d.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}`;
-}
+const formatDateTime = formatArabicDateTime;
 
 function formatSize(bytes) {
   if (!bytes && bytes !== 0) return '';
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// One other message in the same conversation -- collapsed to a one-line
+// summary (sender/recipient + date) by default, tap to expand its body. The
+// message actually opened via this page's own URL keeps its full detailed
+// card below/among these (unchanged), so this is purely additive context.
+function ConversationSiblingRow({ msg }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)', borderInlineStart: msg.direction === 'inbound' ? '3px solid #22c55e' : '3px solid #3b82f6' }}>
+      <div className="p-2.5 flex items-center justify-between gap-2 cursor-pointer" onClick={() => setOpen(o => !o)}>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Mail className="w-3.5 h-3.5 shrink-0" style={{ color: msg.direction === 'inbound' ? '#22c55e' : '#3b82f6' }} />
+          <span className="text-xs truncate" style={{ color: 'var(--ds-text-primary)' }}>{msg.direction === 'inbound' ? msg.sender : msg.recipient}</span>
+        </div>
+        <span className="text-[10px] shrink-0" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(msg.created_at)}</span>
+      </div>
+      {open && <div className="px-2.5 pb-2.5"><EmailBodyView html={msg.body_html} text={msg.body} /></div>}
+    </div>
+  );
 }
 
 // Standalone, self-contained page for one message -- meant to be opened in
@@ -39,6 +56,12 @@ export default function MessageView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [accounts, setAccounts] = useState([]);
+  // The rest of this message's conversation (sent + received), fetched once
+  // the message itself loads -- this page is opened via "فتح في تاب جديد"
+  // from صندوق البريد or a case's الاتصالات tab specifically to review one
+  // message in full, but a lone message with no surrounding context was the
+  // same "which reply answered which message" gap those two other views had.
+  const [threadMsgs, setThreadMsgs] = useState([]);
 
   const [showComposer, setShowComposer] = useState(false);
   const [composerMode, setComposerMode] = useState('reply'); // 'reply' | 'forward'
@@ -52,7 +75,14 @@ export default function MessageView() {
     setLoading(true);
     fetch(`${BASE}/communications/${id}`, { headers: hdrs() })
       .then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'تعذر تحميل الرسالة'); return d.data; })
-      .then(d => { setMsg(d); setError(''); })
+      .then(d => {
+        setMsg(d); setError('');
+        setThreadMsgs([]);
+        if (d?.thread_id) {
+          fetch(`${BASE}/communications/thread/${encodeURIComponent(d.thread_id)}`, { headers: hdrs() })
+            .then(r => r.json()).then(td => { if (td.success) setThreadMsgs(td.data || []); }).catch(() => {});
+        }
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   };
@@ -110,9 +140,12 @@ export default function MessageView() {
   };
 
   const download = async (index) => {
-    const r = await fetch(`${BASE}/communications/${id}/attachments/${index}/download`, { headers: authHdrs() });
-    const d = await r.json().catch(() => ({}));
-    if (d.url) window.open(d.url, '_blank', 'noopener,noreferrer');
+    try {
+      const r = await fetch(`${BASE}/communications/${id}/attachments/${index}/download`, { headers: authHdrs() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.url) { alert('❌ فشل تحميل المرفق: ' + (d.error || '')); return; }
+      window.open(d.url, '_blank', 'noopener,noreferrer');
+    } catch (e) { alert('❌ فشل تحميل المرفق: ' + e.message); }
   };
 
   if (loading) return (
@@ -138,6 +171,17 @@ export default function MessageView() {
         {sendSuccess && (
           <div className="px-3 py-2 rounded-lg text-xs font-medium" style={{ background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
             {sendSuccess}
+          </div>
+        )}
+
+        {threadMsgs.filter(m => m.id !== msg.id).length > 0 && (
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium" style={{ color: 'var(--ds-text-muted)' }}>
+              باقي المحادثة ({threadMsgs.length} رسائل)
+            </div>
+            {threadMsgs.filter(m => m.id !== msg.id).map(m => (
+              <ConversationSiblingRow key={m.id} msg={m} />
+            ))}
           </div>
         )}
 

@@ -445,7 +445,7 @@ function CriteriaAdminPanel({ onChanged, toast }) {
         ))}
       </div>
       <ConfirmDialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} onConfirm={doDelete}
-        title="حذف المعيار" confirmLabel="حذف" message={`هل أنت متأكد من حذف "${confirmDelete?.label_ar}"؟ سيتم حذف إجابات هذا المعيار من كل القضايا نهائيًا.`} />
+        title="حذف المعيار" confirmLabel="حذف" message={`سيتم نقل معيار "${confirmDelete?.label_ar}" إلى سلة المحذوفات -- يمكن استعادته لاحقًا من هناك. هل تريد المتابعة؟`} />
     </div>
   );
 }

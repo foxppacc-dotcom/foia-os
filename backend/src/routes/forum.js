@@ -8,6 +8,7 @@ const multer = require('multer');
 const gdrive = require('../services/googleDriveService');
 const forumFileStorage = require('../services/forumFileStorage');
 const { isSafeLinkUrl } = require('../services/urlSafety');
+const trash = require('../services/trash');
 
 const forumUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
@@ -62,11 +63,11 @@ router.get('/forum/topics', requireForumVisible, async (req, res) => {
   try {
     const sup = getSupabase();
     const { data: topics, error } = await sup
-      .from('forum_topics').select('*')
+      .from('forum_topics').select('*').is('deleted_at', null)
       .order('is_pinned', { ascending: false }).order('created_at', { ascending: false });
     if (error) return res.status(400).json({ error: /does not exist|could not find the table/i.test(error.message) ? 'يجب تنفيذ ترحيل قاعدة البيانات أولاً (forum_topics)' : error.message });
 
-    const { data: comments } = await sup.from('forum_comments').select('topic_id');
+    const { data: comments } = await sup.from('forum_comments').select('topic_id').is('deleted_at', null);
     const counts = {};
     for (const c of comments || []) counts[c.topic_id] = (counts[c.topic_id] || 0) + 1;
 
@@ -82,10 +83,10 @@ router.get('/forum/topics/:id', requireForumVisible, async (req, res) => {
   try {
     const sup = getSupabase();
     const topicId = parseInt(req.params.id);
-    const { data: topic } = await sup.from('forum_topics').select('*').eq('id', topicId).maybeSingle();
+    const { data: topic } = await sup.from('forum_topics').select('*').eq('id', topicId).is('deleted_at', null).maybeSingle();
     if (!topic) return res.status(404).json({ error: 'الموضوع غير موجود' });
 
-    const { data: comments } = await sup.from('forum_comments').select('*').eq('topic_id', topicId).order('created_at', { ascending: true });
+    const { data: comments } = await sup.from('forum_comments').select('*').eq('topic_id', topicId).is('deleted_at', null).order('created_at', { ascending: true });
     const [topicWithName] = await withAuthorNames(sup, [topic]);
     const commentsWithNames = await withAuthorNames(sup, comments || []);
     const [[topicWithLikes], commentsWithLikes] = await Promise.all([
@@ -144,7 +145,7 @@ router.post('/forum/topics/:id/comments', requirePermission('forum', 'comment'),
   try {
     const sup = getSupabase();
     const topicId = parseInt(req.params.id);
-    const { data: topic } = await sup.from('forum_topics').select('id').eq('id', topicId).maybeSingle();
+    const { data: topic } = await sup.from('forum_topics').select('id').eq('id', topicId).is('deleted_at', null).maybeSingle();
     if (!topic) return res.status(404).json({ error: 'الموضوع غير موجود' });
 
     const { content, link_url, link_label } = req.body;
@@ -212,7 +213,7 @@ router.post('/forum/topics/:id/like', requirePermission('forum', 'comment'), asy
   try {
     const topicId = parseInt(req.params.id);
     const sup = getSupabase();
-    const { data: topic } = await sup.from('forum_topics').select('id').eq('id', topicId).maybeSingle();
+    const { data: topic } = await sup.from('forum_topics').select('id').eq('id', topicId).is('deleted_at', null).maybeSingle();
     if (!topic) return res.status(404).json({ error: 'الموضوع غير موجود' });
     await toggleLike(req, res, 'topic', topicId);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -249,7 +250,7 @@ router.delete('/forum/topics/:id', async (req, res) => {
   try {
     const sup = getSupabase();
     const topicId = parseInt(req.params.id);
-    const { data: topic } = await sup.from('forum_topics').select('id, created_by, created_at').eq('id', topicId).maybeSingle();
+    const { data: topic } = await sup.from('forum_topics').select('id, created_by, created_at').eq('id', topicId).is('deleted_at', null).maybeSingle();
     if (!topic) return res.status(404).json({ error: 'الموضوع غير موجود' });
 
     const isOwnWithinWindow = topic.created_by === req.user?.id && (Date.now() - new Date(topic.created_at).getTime()) <= 60 * 1000;
@@ -258,7 +259,7 @@ router.delete('/forum/topics/:id', async (req, res) => {
       return res.status(403).json({ error: 'لا يمكن حذف هذا الموضوع — يمكن حذف موضوعك خلال دقيقة واحدة من نشره فقط' });
     }
 
-    const { error } = await sup.from('forum_topics').delete().eq('id', topicId);
+    const { error } = await trash.softDelete(sup, { table: 'forum_topics', id: topicId, userId: req.user?.id });
     if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -269,7 +270,7 @@ router.delete('/forum/comments/:id', async (req, res) => {
   try {
     const sup = getSupabase();
     const commentId = parseInt(req.params.id);
-    const { data: comment } = await sup.from('forum_comments').select('id, created_by, created_at').eq('id', commentId).maybeSingle();
+    const { data: comment } = await sup.from('forum_comments').select('id, created_by, created_at').eq('id', commentId).is('deleted_at', null).maybeSingle();
     if (!comment) return res.status(404).json({ error: 'التعليق غير موجود' });
 
     const isOwnWithinWindow = comment.created_by === req.user?.id && (Date.now() - new Date(comment.created_at).getTime()) <= 60 * 1000;
@@ -278,7 +279,7 @@ router.delete('/forum/comments/:id', async (req, res) => {
       return res.status(403).json({ error: 'لا يمكن حذف هذا التعليق — يمكن حذف تعليقك خلال دقيقة واحدة من نشره فقط' });
     }
 
-    const { error } = await sup.from('forum_comments').delete().eq('id', commentId);
+    const { error } = await trash.softDelete(sup, { table: 'forum_comments', id: commentId, userId: req.user?.id });
     if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }

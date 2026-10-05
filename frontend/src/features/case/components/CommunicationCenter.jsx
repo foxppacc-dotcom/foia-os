@@ -4,17 +4,15 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Send, Reply, Forward, Paperclip, Search, Clock, AlertCircle, Inbox, FileText, Building2, User, Mail, Tag, ChevronDown, ExternalLink, X, Download, Trash2 } from 'lucide-react';
 import Button from '../../../components/ui/Button';
 import { formatAgencyLocation } from '../../request/utils';
+import { formatArabicDateTime } from '../../../utils/formatDate';
+import { splitQuotedHistory } from '../../../utils/emailQuote';
 
 const API = getApiBase();
 const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 const authHdrs = () => ({ 'Authorization': `Bearer ${tok()}` });
 
-function formatDateTime(dateStr) {
-  if (!dateStr) return '';
-  const d = new Date(dateStr);
-  return `${d.toLocaleDateString('ar-SA')} ${d.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}`;
-}
+const formatDateTime = formatArabicDateTime;
 
 function formatSize(bytes) {
   if (!bytes && bytes !== 0) return '';
@@ -29,17 +27,38 @@ const COMPOSER_TITLES = { new: 'رسالة جديدة', reply: 'رد', replyAll:
 
 function quoteOriginal(thread) {
   if (!thread) return '';
-  const date = thread.created_at ? new Date(thread.created_at).toLocaleString('ar-SA') : '';
+  const date = formatArabicDateTime(thread.created_at);
   return `\n\n---------- رسالة معاد توجيهها ----------\nمن: ${thread.sender || ''}\nبتاريخ: ${date}\nالموضوع: ${thread.subject || ''}\n\n${thread.body || ''}`;
 }
 
-function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'new', onSent }) {
+// Reply/Reply-All quoting, Gmail/Outlook-style: the new text sits above an
+// attribution line + "> "-quoted copy of the message being replied to.
+// Quoting only the parent's OWN fresh text (via splitQuotedHistory) --  not
+// its full raw body -- matters because that raw body already carries every
+// earlier generation's quote nested inside it (each reply's body includes
+// its own parent quoted the same way). Re-quoting the whole thing verbatim
+// used to send the entire accumulated chain back out on every single reply,
+// producing a dense, jumbled wall of "> "-prefixed text with a lot of detail
+// irrelevant to this specific reply -- confusing for the recipient, and
+// exactly the complaint that led to this fix. The recipient's own mail
+// client already has the full history via the thread's own
+// References/In-Reply-To headers, so nothing is actually lost by trimming
+// what gets re-quoted here to just the immediate message's new content.
+function quoteReply(thread) {
+  if (!thread) return '';
+  const date = formatArabicDateTime(thread.created_at);
+  const { fresh } = splitQuotedHistory(thread.body || '');
+  const quotedBody = fresh.split('\n').map(line => '> ' + line).join('\n');
+  return `في ${date}, كتب ${thread.sender || ''}:\n${quotedBody}`;
+}
+
+function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'new', onSent, initialDraft }) {
   const { requests } = useCaseContext();
   const isForward = mode === 'forward';
   // Default to the case's own agency (from its requests) when composing fresh --
   // the investigator shouldn't have to look up and re-select it every time.
   const defaultAgencyId = !replyTo ? (requests || []).find(r => r.agency_id)?.agency_id || '' : '';
-  const [to, setTo] = useState(isForward ? '' : (replyTo?.sender || (agencies || []).find(a => a.id === defaultAgencyId)?.email || ''));
+  const [to, setTo] = useState(isForward ? '' : (initialDraft?.to || replyTo?.sender || (agencies || []).find(a => a.id === defaultAgencyId)?.email || ''));
   const [cc, setCc] = useState(mode === 'replyAll' ? (replyTo?.metadata?.cc || '') : '');
   const [bcc, setBcc] = useState('');
   const [agencyId, setAgencyId] = useState(replyTo?.agency_id || defaultAgencyId);
@@ -108,9 +127,14 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
   };
   useEffect(() => { checkAllAccountLocks(); }, [agencyId]);
   const [subject, setSubject] = useState(
-    isForward ? `Fwd: ${replyTo?.subject || ''}` : replyTo ? `Re: ${replyTo.subject}` : ''
+    isForward ? `Fwd: ${replyTo?.subject || ''}` : replyTo ? `Re: ${replyTo.subject}` : (initialDraft?.subject || '')
   );
-  const [body, setBody] = useState(isForward ? quoteOriginal(replyTo).trim() : '');
+  const isReply = mode === 'reply' || mode === 'replyAll';
+  const [body, setBody] = useState(
+    isForward ? quoteOriginal(replyTo).trim()
+      : isReply && replyTo ? `\n\n${quoteReply(replyTo)}`
+      : (initialDraft?.body || '')
+  );
   const [sending, setSending] = useState(false);
   const [files, setFiles] = useState([]);
   const fileInputRef = useRef(null);
@@ -125,6 +149,13 @@ function EmailComposer({ caseId, onClose, accounts, agencies, replyTo, mode = 'n
     if (el) { el.style.height = 'auto'; el.style.height = Math.max(el.scrollHeight, 100) + 'px'; }
   };
   useEffect(() => { autoGrowBody(); }, [body]);
+  // Reply/Reply-All seed the body with the new-text area on top and the
+  // quoted original below (see quoteReply above) -- without this the cursor
+  // would land at the very end, inside the quote, forcing the user to
+  // manually scroll up before they can start typing their actual reply.
+  useEffect(() => {
+    if (isReply && bodyRef.current) { bodyRef.current.focus(); bodyRef.current.setSelectionRange(0, 0); }
+  }, []);
   const [expectedDays, setExpectedDays] = useState(!isForward && !replyTo ? '14' : '');
   const [customDays, setCustomDays] = useState('');
   const [sendError, setSendError] = useState('');
@@ -321,7 +352,7 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted,
 
   const deleteMessage = async (e) => {
     e.stopPropagation();
-    if (!confirm('حذف هذه الرسالة نهائيًا؟')) return;
+    if (!confirm('سيتم نقل هذه الرسالة إلى سلة المحذوفات -- يمكن استعادتها لاحقًا من هناك. هل تريد المتابعة؟')) return;
     try {
       const r = await fetch(`${API}/communications/${thread.id}`, { method: 'DELETE', headers: authHdrs() });
       if (!r.ok) { const d = await r.json().catch(() => ({})); alert('❌ ' + (d.error || 'تعذر حذف الرسالة')); return; }
@@ -400,6 +431,63 @@ function ThreadCard({ thread, accounts, onReply, onAttachmentDeleted, onDeleted,
   );
 }
 
+// Groups a flat message list into conversations by `thread_id` (falling back
+// to the row's own id for anything with none -- non-email communication
+// types never set one), each sorted oldest-first so a conversation reads
+// top-to-bottom like Gmail/Outlook.
+function groupByThread(list) {
+  const map = new Map();
+  (list || []).forEach(t => {
+    const key = t.thread_id || `single-${t.id}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(t);
+  });
+  return [...map.values()].map(msgs => [...msgs].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)));
+}
+
+// One conversation: collapsed to a one-line summary (subject, participants,
+// message count, latest date) like Gmail's inbox row; expanding it stacks
+// every message in the thread -- both sent and received -- so it's obvious
+// which reply answered which message. A single-message "thread" (the common
+// case: most correspondence never gets a reply) renders as a plain
+// ThreadCard, unchanged from before this feature existed.
+function ConversationGroup({ messages, accounts, onReply, onAttachmentDeleted, onDeleted, onRead }) {
+  const [expanded, setExpanded] = useState(false);
+  if (messages.length === 1) {
+    const t = messages[0];
+    return <ThreadCard thread={t} accounts={accounts} onReply={onReply} onAttachmentDeleted={onAttachmentDeleted}
+      onDeleted={() => onDeleted(t.id)} onRead={onRead} />;
+  }
+  const latest = messages[messages.length - 1];
+  const hasUnread = messages.some(m => m.direction === 'inbound' && m.is_read === false);
+  const participants = [...new Set(messages.map(m => m.direction === 'inbound' ? m.sender : m.recipient).filter(Boolean))];
+  return (
+    <div className="rounded-lg ds-transition-colors" style={{ background: 'var(--ds-bg-secondary)', border: '1px solid var(--ds-border)' }}>
+      <div className="p-3 cursor-pointer flex items-start justify-between gap-2" onClick={() => setExpanded(e => !e)}
+        style={expanded ? { borderBottom: '1px solid var(--ds-border)' } : undefined}>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <Mail className="w-3.5 h-3.5 shrink-0" style={{ color: '#3b82f6' }} />
+            <span className="text-sm font-semibold truncate" style={{ color: 'var(--ds-text-primary)' }}>{latest.subject}</span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded shrink-0" style={{ background: 'var(--ds-bg-tertiary)', color: 'var(--ds-text-muted)' }}>{messages.length} رسائل</span>
+            {hasUnread && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: '#3b82f6' }} />}
+          </div>
+          <div className="text-[10px] truncate" style={{ color: 'var(--ds-text-muted)' }}>{participants.join('، ')}</div>
+        </div>
+        <div className="text-[9px] shrink-0" style={{ color: 'var(--ds-text-muted)' }}>{formatDateTime(latest.created_at)}</div>
+      </div>
+      {expanded && (
+        <div className="p-2 space-y-1.5">
+          {messages.map(m => (
+            <ThreadCard key={m.id} thread={m} accounts={accounts} onReply={onReply} onAttachmentDeleted={onAttachmentDeleted}
+              onDeleted={() => onDeleted(m.id)} onRead={onRead} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CommunicationCenter({ caseId }) {
   const { requests } = useCaseContext();
   const [threads, setThreads] = useState([]);
@@ -407,6 +495,7 @@ export default function CommunicationCenter({ caseId }) {
   const [showComposer, setShowComposer] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
   const [composerMode, setComposerMode] = useState('new');
+  const [aiDraft, setAiDraft] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('date');
@@ -438,14 +527,41 @@ export default function CommunicationCenter({ caseId }) {
     fetch(`${API}/email-accounts`, { headers: hdrs() }).then(r => r.json()).then(d => setAccounts(d.data || d.accounts || [])).catch(() => {});
   }, [caseId]);
 
+  // Picks up a draft the AI assistant just composed (aiTools.js's
+  // compose_email, handed off via sessionStorage by useAIChat.js) and opens
+  // the composer pre-filled with it -- the assistant never sends anything
+  // itself, this only saves the human from retyping what it already wrote.
+  useEffect(() => {
+    if (!caseId) return;
+    const key = `ai_email_draft_${caseId}`;
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return;
+      sessionStorage.removeItem(key);
+      const draft = JSON.parse(raw);
+      setReplyTo(null); setComposerMode('new'); setAiDraft(draft); setShowComposer(true);
+    } catch {}
+  }, [caseId]);
+
+  // Filtering/searching applies at the CONVERSATION level, not per-message --
+  // a thread qualifies if ANY message in it matches, then every message in
+  // that thread still renders together once expanded. Otherwise filtering to
+  // "الصادر" would hide the very inbound replies the user wants to see
+  // alongside their own sent message, defeating the point of grouping at all.
   const filtered = useMemo(() => {
-    let list = [...threads];
-    if (search) list = list.filter(t => (t.subject || '').toLowerCase().includes(search.toLowerCase()) || (t.body || '').toLowerCase().includes(search.toLowerCase()) || (t.sender || '').toLowerCase().includes(search.toLowerCase()));
-    if (filter === 'inbox') list = list.filter(t => t.direction === 'inbound');
-    if (filter === 'sent') list = list.filter(t => t.direction === 'outbound');
-    if (filter === 'drafts') list = list.filter(t => t.draft);
-    list.sort((a, b) => sortBy === 'date' ? new Date(b.created_at || 0) - new Date(a.created_at || 0) : new Date(a.created_at || 0) - new Date(b.created_at || 0));
-    return list;
+    const matches = (t) => {
+      if (search && !((t.subject || '').toLowerCase().includes(search.toLowerCase()) || (t.body || '').toLowerCase().includes(search.toLowerCase()) || (t.sender || '').toLowerCase().includes(search.toLowerCase()))) return false;
+      if (filter === 'inbox' && t.direction !== 'inbound') return false;
+      if (filter === 'sent' && t.direction !== 'outbound') return false;
+      if (filter === 'drafts' && !t.draft) return false;
+      return true;
+    };
+    const groups = groupByThread(threads).filter(msgs => msgs.some(matches));
+    groups.sort((a, b) => {
+      const aLatest = new Date(a[a.length - 1].created_at || 0), bLatest = new Date(b[b.length - 1].created_at || 0);
+      return sortBy === 'date' ? bLatest - aLatest : aLatest - bLatest;
+    });
+    return groups;
   }, [threads, search, filter, sortBy]);
 
   const openComposer = (thread = null, mode = 'new') => { setReplyTo(thread); setComposerMode(thread ? mode : 'new'); setShowComposer(true); };
@@ -489,7 +605,17 @@ export default function CommunicationCenter({ caseId }) {
 
       {/* Composer */}
       {showComposer && (
-        <EmailComposer caseId={caseId} onClose={() => { setShowComposer(false); setReplyTo(null); }} accounts={accounts} agencies={agencies} replyTo={replyTo} mode={composerMode}
+        // Keyed on which message (if any) is being replied to/forwarded --
+        // EmailComposer's to/subject/body/account/agency are all seeded via
+        // useState(initialValueFromProps), mount-only. Without a key,
+        // clicking "رد" on a second message while a composer for a first
+        // message was still open reused the same component instance: the
+        // title updated (reads `mode` live) but every seeded field stayed
+        // stale from the first message while `replyTo.id` (used as
+        // reply_to_id at send time) silently pointed at the second one --
+        // a real misdirected/mis-threaded send. A key forces a fresh mount
+        // (fresh state) any time the reply target actually changes.
+        <EmailComposer key={`${replyTo?.id ?? (aiDraft ? 'ai-draft' : 'new')}:${composerMode}`} caseId={caseId} onClose={() => { setShowComposer(false); setReplyTo(null); setAiDraft(null); }} accounts={accounts} agencies={agencies} replyTo={replyTo} mode={composerMode} initialDraft={aiDraft}
           onSent={(sentData, subject) => {
             refetchThreads();
             const warningNote = sentData?.warnings?.length ? ` (تنبيه: ${sentData.warnings.join(' — ')})` : '';
@@ -508,9 +634,9 @@ export default function CommunicationCenter({ caseId }) {
         ) : (
           <>
             <div className="text-[10px] font-medium px-1 mb-1" style={{ color: 'var(--ds-text-muted)' }}>{filtered.length} محادثة</div>
-            {filtered.map(t => <ThreadCard key={t.id} thread={t} accounts={accounts} onReply={openComposer}
+            {filtered.map(msgs => <ConversationGroup key={msgs[0].thread_id || msgs[0].id} messages={msgs} accounts={accounts} onReply={openComposer}
               onAttachmentDeleted={refetchThreads}
-              onDeleted={() => setThreads(prev => prev.filter(x => x.id !== t.id))}
+              onDeleted={(id) => setThreads(prev => prev.filter(x => x.id !== id))}
               onRead={id => setThreads(prev => prev.map(x => x.id === id ? { ...x, is_read: true } : x))} />)}
           </>
         )}

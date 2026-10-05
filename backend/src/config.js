@@ -50,6 +50,16 @@ const CONFIG = {
   encryption: {
     secret: process.env.ENCRYPTION_KEY || '',
   },
+  // Comma-separated allowed origins (e.g. "https://zamhub.tech") -- was
+  // already present in the VPS .env but never actually read anywhere in the
+  // code, so the app ran with cors() wide open (reflects any Origin,
+  // allows credentialed cross-origin requests from anywhere) regardless of
+  // this value. Empty/unset falls back to reflecting the request's own
+  // origin (previous behavior) rather than breaking a deployment that
+  // hasn't set this yet.
+  cors: {
+    origins: (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean),
+  },
 };
 
 // Validate critical secrets at startup -- these three are load-bearing for

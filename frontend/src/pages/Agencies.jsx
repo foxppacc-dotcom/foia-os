@@ -1,9 +1,18 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { Plus, Search, Upload, Trash2, Edit3, Save, X, Users, ChevronDown } from 'lucide-react';
+import { REPLY_OUTCOME_OPTIONS } from '../features/request/utils';
 
 const BLANK_FORM = { name_en: '', name_ar: '', state: '', city: '', type: '', email: '', phone: '', portal_url: '', website: '', tracking_portal_url: '', notes: '' };
 const BLANK_CONTACT = { name: '', title: '', email: '', phone: '', extension: '', department: '', preferred_contact: 'email' };
+
+// One distinct color per reply outcome so a card's badges are scannable at a
+// glance -- kept as plain hex here (not AppBadge/ds tokens) to match this
+// page's own existing badge style (the "type" badge above uses the same
+// hex+'15'-background pattern).
+const OUTCOME_COLORS = {
+  pending: '#94A3B8', records_received: '#10B981', no_records: '#6B7280', rejected: '#EF4444', payment_requested: '#F59E0B',
+};
 
 // The backend now rejects a non-http(s) URL for these fields at write time,
 // but this still guards render-time too -- against any row written before
@@ -33,7 +42,8 @@ function ContactsSection({ agency, onChanged }) {
 
   const removeContact = async (contactId) => {
     if (!confirm('حذف جهة الاتصال؟')) return;
-    await api.delete(`/agencies/${agency.id}/contacts/${contactId}`);
+    try { await api.delete(`/agencies/${agency.id}/contacts/${contactId}`); }
+    catch (e) { alert('❌ ' + e.message); return; }
     onChanged();
   };
 
@@ -89,18 +99,20 @@ export default function Agencies() {
   const [agencies, setAgencies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [outcomeFilter, setOutcomeFilter] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(BLANK_FORM);
 
   const fetchAgencies = () => {
-    api.get('/agencies?limit=1000').then(d => {
+    const qs = outcomeFilter ? `&reply_outcome=${outcomeFilter}` : '';
+    api.get(`/agencies?limit=1000${qs}`).then(d => {
       setAgencies(d?.data || []);
       setLoading(false);
     }).catch(() => setLoading(false));
   };
 
-  useEffect(() => { fetchAgencies(); }, []);
+  useEffect(() => { fetchAgencies(); }, [outcomeFilter]);
 
   const filtered = agencies.filter(a =>
     !search || a.name_ar?.includes(search) || a.name_en?.toLowerCase().includes(search.toLowerCase()) ||
@@ -153,7 +165,8 @@ export default function Agencies() {
 
   const deleteAgency = async (id) => {
     if (!confirm('هل أنت متأكد من حذف هذه الجهة؟')) return;
-    await api.delete(`/agencies/${id}`);
+    try { await api.delete(`/agencies/${id}`); }
+    catch (e) { alert('❌ ' + e.message); return; }
     fetchAgencies();
   };
 
@@ -188,13 +201,22 @@ export default function Agencies() {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'var(--text-muted)' }} />
-        <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="بحث باسم الجهة، الولاية، أو المدينة..."
-          className="w-full px-10 py-2.5 pr-10 rounded-xl border text-sm focus:outline-none"
-          style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+      {/* Search + reply-outcome filter -- "مين رد / أرسل سجلات / طلب دفع / رفض"
+          at a glance across all agencies, not just inside one case. */}
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="بحث باسم الجهة، الولاية، أو المدينة..."
+            className="w-full px-10 py-2.5 pr-10 rounded-xl border text-sm focus:outline-none"
+            style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }} />
+        </div>
+        <select value={outcomeFilter} onChange={e => setOutcomeFilter(e.target.value)}
+          className="px-3 py-2.5 rounded-xl border text-sm focus:outline-none sm:w-56"
+          style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
+          <option value="">كل الجهات (بلا فلتر)</option>
+          {REPLY_OUTCOME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
       </div>
 
       {/* Add Form */}
@@ -271,6 +293,18 @@ export default function Agencies() {
                         style={{ background: (a.type === 'federal' ? '#3B82F6' : a.type === 'state' ? '#8B5CF6' : a.type === 'municipal' ? '#F59E0B' : '#10B981') + '15', color: a.type === 'federal' ? '#3B82F6' : a.type === 'state' ? '#8B5CF6' : a.type === 'municipal' ? '#F59E0B' : '#10B981' }}>
                         {a.type === 'federal' ? 'فيدرالي' : a.type === 'state' ? 'ولاية' : a.type === 'sheriff' ? 'شريف' : a.type === 'municipal' ? 'بلدية' : a.type || '—'}
                       </span>
+                      {/* Reply-outcome breakdown -- only non-zero buckets, so a
+                          card with no requests yet shows nothing extra. */}
+                      {a.reply_outcome_counts && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {REPLY_OUTCOME_OPTIONS.filter(o => a.reply_outcome_counts[o.value] > 0).map(o => (
+                            <span key={o.value} className="inline-block px-1.5 py-0.5 rounded text-[9px]"
+                              style={{ background: OUTCOME_COLORS[o.value] + '15', color: OUTCOME_COLORS[o.value] }}>
+                              {o.label}: {a.reply_outcome_counts[o.value]}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     {/* Action Buttons */}
                     <div className="flex gap-1 shrink-0">

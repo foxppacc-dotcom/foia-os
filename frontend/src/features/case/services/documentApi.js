@@ -21,5 +21,8 @@ export const deleteDocument = async (caseId, docId) => {
     method: 'DELETE',
     headers: { 'Authorization': 'Bearer ' + localStorage.getItem('foia_token') },
   });
-  return res.json();
+  const body = await res.json().catch(() => ({}));
+  // Used to return the error body as if it were a result, so a 403/404/500 looked like success.
+  if (!res.ok) throw new Error(body.error || 'فشل حذف المستند');
+  return body;
 };

@@ -62,15 +62,50 @@ router.get('/cron/deadline-check', async (req, res) => {
   }
 
   try {
-    const { checkOverdueDeadlines } = require('../services/deadlineChecker');
-    const result = await checkOverdueDeadlines();
-    res.json({ success: true, ...result, checkedAt: new Date().toISOString() });
+    const { checkOverdueDeadlines, checkDueCaseTasks } = require('../services/deadlineChecker');
+    // Folded into the SAME existing cron job/schedule rather than adding a
+    // new crontab entry on the VPS -- both are "scan due dates, notify the
+    // case team" checks, just against different tables (requests.expected_
+    // response_date vs case_tasks.due_date, the latter backing the AI
+    // assistant's set_case_reminder tool).
+    const [deadlines, tasks] = await Promise.all([checkOverdueDeadlines(), checkDueCaseTasks()]);
+    res.json({ success: true, deadlines, tasks, checkedAt: new Date().toISOString() });
   } catch (ex) {
     console.error('Cron deadline check error:', ex.message);
     // A silent failure here means overdue FOIA deadlines go completely
     // unnoticed instead of just unannounced -- worth alerting admins the
     // same way gdrive-check already does for its own failure mode.
     await notifyAdminsOfCronFailure('deadline_check_failed', '⚠️ فشل فحص المواعيد النهائية', `تعذر فحص القضايا المتأخرة: ${ex.message}`);
+    res.status(500).json({ success: false, error: ex.message });
+  }
+});
+
+// GET /api/cron/personal-reminders — same auth pattern as the others above,
+// but run every MINUTE (not daily like deadline-check) since this backs
+// minute-precision personal reminders (aiTools.js's set_reminder/
+// log_requested_task) -- see deadlineChecker.js's checkDuePersonalTasks for
+// why this needed its OWN cron entry rather than folding into deadline-check.
+router.get('/cron/personal-reminders', async (req, res) => {
+  const configuredSecret = process.env.CRON_SECRET;
+  if (configuredSecret) {
+    const auth = req.headers.authorization || '';
+    if (auth !== `Bearer ${configuredSecret}`) {
+      return res.status(401).json({ error: 'Unauthorized cron request' });
+    }
+  }
+
+  try {
+    const { checkDuePersonalTasks, sendDueScheduledMessages } = require('../services/deadlineChecker');
+    // Folded into this SAME per-minute tick rather than a new crontab entry
+    // -- both are "scan a due timestamp, act" checks at the same
+    // granularity (personal reminders vs the AI's scheduled-message sends).
+    const [reminders, messages] = await Promise.all([checkDuePersonalTasks(), sendDueScheduledMessages()]);
+    // The assistant's recurring tasks ride the same per-minute tick (fire-and-forget:
+    // a run can take minutes and must never hold this HTTP response open).
+    require('../services/aiTaskRunner').kickDueAiTasks();
+    res.json({ success: true, reminders, messages, checkedAt: new Date().toISOString() });
+  } catch (ex) {
+    console.error('Cron personal reminders error:', ex.message);
     res.status(500).json({ success: false, error: ex.message });
   }
 });

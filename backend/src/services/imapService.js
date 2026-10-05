@@ -95,6 +95,7 @@ class ImapService {
       logger: false,
       verifyConnection: true,
     });
+    client.on('error', (e) => console.error('[imap] connection error:', e && e.message));
 
     const detail = { success: false, errorCode: null, errorMessage: null, rawError: null, stage: null };
     const t0 = Date.now();
@@ -159,6 +160,7 @@ class ImapService {
       logger: false,
       verifyConnection: true,
     });
+    client.on('error', (e) => console.error('[imap] connection error:', e && e.message));
 
     let tStart = Date.now();
     try {
@@ -212,6 +214,7 @@ class ImapService {
       auth: { user: account.imap_user || account.email, pass: imapPass },
       logger: false,
     });
+    client.on('error', (e) => console.error('[imap] connection error:', e && e.message));
 
     const t0 = Date.now();
     try {
@@ -244,6 +247,7 @@ class ImapService {
       auth: { user: account.imap_user || account.email, pass: imapPass },
       logger: false,
     });
+    client.on('error', (e) => console.error('[imap] connection error:', e && e.message));
     const result = {};
     await client.connect();
 

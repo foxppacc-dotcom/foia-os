@@ -37,6 +37,8 @@
   "message": {
     "idTooltip": "Email number",
     "unknownSender": "Unknown",
+    "conversationCount": "{{count}} messages in this conversation",
+    "loadingConversation": "Loading conversation...",
     "inbound": "Inbound", "outbound": "Outbound",
     "linked": "Linked (#{{id}})",
     "archived": "Archived",
@@ -65,7 +67,7 @@
   "confirm": {
     "unlink": "Unlink this message from the case?",
     "rejectMatch": "This link is wrong -- unlink and record the note?",
-    "delete": "Permanently delete this message?"
+    "delete": "This message will be moved to Trash -- you can restore it from there later. Continue?"
   },
   "actionErrors": {
     "linkFailed": "❌ {{message}}",

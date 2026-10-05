@@ -12,8 +12,13 @@ export function useActiveProviderStatus() {
   const [checkFailed, setCheckFailed] = useState(false);
 
   const check = useCallback(() => {
-    api.get('/ai/providers')
-      .then(d => { setHasActiveProvider((d.data || []).some(p => p.is_active)); setCheckFailed(false); })
+    // /ai/providers is admin-only (it lists full provider configs) -- a role
+    // granted ai_assistant:use_chat but not admin got a 403 on every single
+    // check here, making the chat feature that permission exists to grant
+    // completely unreachable for them. /ai/status is gated by the SAME
+    // use_chat permission /ai/chat itself uses, and returns only a boolean.
+    api.get('/ai/status')
+      .then(d => { setHasActiveProvider(!!d.hasActiveProvider); setCheckFailed(false); })
       .catch(() => setCheckFailed(true));
   }, []);
 

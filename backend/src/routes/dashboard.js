@@ -28,11 +28,17 @@ router.get('/dashboard', async (req, res) => {
       { data: recentCases },
       { data: recentCommunications },
     ] = await Promise.all([
-      scopeCases(sup.from('cases').select('*', { count: 'exact', head: true })),
-      scopeCases(sup.from('cases').select('status')),
-      scopeCases(sup.from('cases').select('priority')),
-      scopeCases(sup.from('cases').select(`id, uuid, title, status, priority, created_at, agencies!left(name_en)`)).order('created_at', { ascending: false }).limit(10),
-      scopeCases(sup.from('communications').select(`*, cases!left(title)`), 'case_id').order('created_at', { ascending: false }).limit(10),
+      scopeCases(sup.from('cases').select('*', { count: 'exact', head: true }).is('deleted_at', null)),
+      scopeCases(sup.from('cases').select('status').is('deleted_at', null)),
+      scopeCases(sup.from('cases').select('priority').is('deleted_at', null)),
+      // agencies!left(...) here errored the WHOLE query (only `data` is
+      // destructured above, so this silently made "أحدث القضايا" always
+      // empty) -- cases has no direct FK to agencies at all (only reachable
+      // via requests), same dead embed already found and removed at line 79
+      // below. Dropped rather than "fixed": Dashboard.jsx's recent-cases
+      // widget never actually reads agency_name from this list anyway.
+      scopeCases(sup.from('cases').select(`id, uuid, title, status, priority, created_at`).is('deleted_at', null)).order('created_at', { ascending: false }).limit(10),
+      scopeCases(sup.from('communications').select(`*, cases!left(title)`).is('deleted_at', null), 'case_id').order('created_at', { ascending: false }).limit(10),
     ]);
 
     const byStatus = (() => {
@@ -47,12 +53,7 @@ router.get('/dashboard', async (req, res) => {
       return Object.entries(counts).map(([priority, count]) => ({ priority, count })).sort((a, b) => b.count - a.count);
     })();
 
-    // Normalize the joined field
-    const recentCasesMapped = (recentCases || []).map(c => ({
-      ...c,
-      agency_name: c.agencies?.name_en || null,
-      agencies: undefined
-    }));
+    const recentCasesMapped = recentCases || [];
 
     const recentCommunicationsMapped = (recentCommunications || []).map(c => ({
       ...c,
@@ -70,16 +71,22 @@ router.get('/dashboard', async (req, res) => {
       { data: pipelineLists },
       { data: overdueResponses },
     ] = await Promise.all([
-      scopeCases(sup.from('cases').select(`id, uuid, title, deadline, status, priority, agencies!left(name_en), users!left(name)`)).not('deadline', 'is', null).neq('status', 'closed').order('deadline', { ascending: true }).limit(10),
-      sup.from('agencies').select('*', { count: 'exact', head: true }),
-      scopeCases(sup.from('requests').select('*', { count: 'exact', head: true }), 'case_id'),
-      sup.from('pipeline_lists').select('id, name_ar, name_en, color, list_number').order('list_number', { ascending: true }),
+      // agencies!left(...) here used to error the WHOLE query (silently, since
+      // only `data` is destructured below) -- cases has no direct FK to
+      // agencies at all (a case reaches its agencies only via requests), so
+      // this embed could never have worked. Dropped rather than "fixed":
+      // a case can have multiple agencies via multiple requests, so a single
+      // agency_name per deadline row was never a well-defined value anyway.
+      scopeCases(sup.from('cases').select(`id, uuid, title, deadline, status, priority, users!assigned_to!left(name)`).is('deleted_at', null)).not('deadline', 'is', null).neq('status', 'closed').order('deadline', { ascending: true }).limit(10),
+      sup.from('agencies').select('*', { count: 'exact', head: true }).is('deleted_at', null),
+      scopeCases(sup.from('requests').select('*', { count: 'exact', head: true }).is('deleted_at', null), 'case_id'),
+      sup.from('pipeline_lists').select('id, name_ar, name_en, color, list_number').is('deleted_at', null).order('list_number', { ascending: true }),
       // Requests whose agency never responded by the expected date -- same
       // "تخطّى الموعد المتوقع للرد" concept the deadline-overdue notification
       // cron alerts on (services/deadlineChecker.js), surfaced here as its
       // own visible dashboard section instead of only a background alert.
       scopeCases(sup.from('requests')
-        .select(`id, case_id, expected_response_date, cases!left(title), agencies!left(name_ar, name_en)`), 'case_id')
+        .select(`id, case_id, expected_response_date, cases!left(title), agencies!left(name_ar, name_en)`).is('deleted_at', null), 'case_id')
         .lt('expected_response_date', todayStr).is('response_date', null).neq('status', 'closed')
         .is('overdue_ack_by', null)
         .order('expected_response_date', { ascending: true }),
@@ -87,9 +94,7 @@ router.get('/dashboard', async (req, res) => {
 
     const upcomingDeadlinesMapped = (upcomingDeadlines || []).map(c => ({
       ...c,
-      agency_name: c.agencies?.name_en || null,
       assigned_user_name: c.users?.name || null,
-      agencies: undefined,
       users: undefined,
       days_remaining: c.deadline ? Math.ceil((new Date(c.deadline) - new Date()) / (1000 * 60 * 60 * 24)) : null
     }));
@@ -108,9 +113,9 @@ router.get('/dashboard', async (req, res) => {
       // into "لم يبدأ بعد"'s count specifically.
       const [{ data: taskRows }, { data: requestRows }, { count: unclassifiedCount }] = await Promise.all([
         scopeCases(sup.from('case_tasks').select('list_id, case_id'), 'case_id').in('list_id', pipelineListIds),
-        scopeCases(sup.from('requests').select('classification_id, case_id'), 'case_id').in('classification_id', pipelineListIds),
+        scopeCases(sup.from('requests').select('classification_id, case_id').is('deleted_at', null), 'case_id').in('classification_id', pipelineListIds),
         notStartedListId != null
-          ? scopeCases(sup.from('requests').select('id', { count: 'exact', head: true }), 'case_id').is('classification_id', null)
+          ? scopeCases(sup.from('requests').select('id', { count: 'exact', head: true }).is('deleted_at', null), 'case_id').is('classification_id', null)
           : Promise.resolve({ count: 0 }),
       ]);
       for (const t of taskRows || []) taskCountByList[t.list_id] = (taskCountByList[t.list_id] || 0) + 1;

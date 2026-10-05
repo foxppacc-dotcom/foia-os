@@ -18,7 +18,11 @@ async function canViewAllCases(sup, role) {
 /** Case IDs a user is personally attached to — assigned (case_assignees), created, or the legacy single-assignee column. */
 async function getVisibleCaseIds(sup, userId) {
   const [{ data: assigned }, { data: created }, { data: legacy }] = await Promise.all([
-    sup.from('case_assignees').select('case_id').eq('user_id', userId),
+    // case_assignees rows are soft-deleted (سلة المحذوفات) now -- without
+    // this filter, removing someone from a case's team never actually
+    // revoked their access to it; the case stayed fully visible/editable
+    // to them forever since their row still existed, just marked trashed.
+    sup.from('case_assignees').select('case_id').eq('user_id', userId).is('deleted_at', null),
     sup.from('cases').select('id').eq('created_by', userId),
     sup.from('cases').select('id').eq('assigned_to', userId),
   ]);
@@ -27,7 +31,15 @@ async function getVisibleCaseIds(sup, userId) {
     ...(created || []).map(r => r.id),
     ...(legacy || []).map(r => r.id),
   ]);
-  return [...ids];
+  if (!ids.size) return [];
+  // None of the three sources above check the CASE's own deleted_at -- a
+  // still-active case_assignees row (or created_by/legacy assigned_to)
+  // kept full access to a case forever even after it was moved to سلة
+  // المحذوفات, letting its creator/assignee keep reading and editing
+  // (comments, requests, team, communications...) a case that's supposed to
+  // be frozen for everyone except through the dedicated restore flow.
+  const { data: active } = await sup.from('cases').select('id').in('id', [...ids]).is('deleted_at', null);
+  return (active || []).map(r => r.id);
 }
 
 /** Apply the visibility scope to a Supabase query builder for the cases list. Returns the (possibly narrowed) query, or null if the user has zero visible cases. */

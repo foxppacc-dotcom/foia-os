@@ -2,6 +2,7 @@ import { Clock, CalendarDays, Circle } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import AppSection from '../../../components/ds/AppSection';
 import AppEmptyState from '../../../components/ds/AppEmptyState';
+import { formatArabicDateWithOptions, formatArabicTime } from '../../../utils/formatDate';
 
 export default function TimelineTab() {
   const { timeline } = useCaseContext();
@@ -24,7 +25,7 @@ export default function TimelineTab() {
               <div className="flex items-center gap-2 mb-1.5 sticky top-0 py-1 z-10" style={{ background: 'var(--ds-bg-secondary)' }}>
                 <CalendarDays className="w-3.5 h-3.5" style={{ color: 'var(--ds-text-muted)' }} />
                 <span className="text-xs font-semibold" style={{ color: 'var(--ds-text-secondary)' }}>
-                  {new Date(date + 'T00:00:00').toLocaleDateString('ar-SA', { weekday: 'long', month: 'long', day: 'numeric' })}
+                  {formatArabicDateWithOptions(date + 'T00:00:00', { weekday: 'long', month: 'long', day: 'numeric' })}
                 </span>
                 <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>{groups[date].length}</span>
               </div>
@@ -38,7 +39,7 @@ export default function TimelineTab() {
                         <span>{log.user_name || 'System'}</span>
                         <span>·</span>
                         <Clock className="w-3 h-3" />
-                        <span>{log.created_at ? new Date(log.created_at).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                        <span>{formatArabicTime(log.created_at)}</span>
                       </div>
                     </div>
                   </div>

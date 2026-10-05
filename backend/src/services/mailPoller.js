@@ -169,6 +169,31 @@ function normalizeForMatch(s) {
   return (s || '').toLowerCase().replace(/[\s\-_]+/g, '');
 }
 
+// Guards against the exact mistake found live on case 785 (2026-09-30): a
+// human meant to register a request's own UNIQUE tracking code as a
+// case_agency_channels filter_keywords / email_matching_custom_keywords
+// entry (tiers 2c/2d above), but typed the portal's generic LABEL text
+// alongside or instead of it (e.g. "Request Number", "Request Key") --
+// every automated FOIA-portal confirmation email contains that exact label,
+// so the phrase silently mass-matched 102 completely unrelated agencies'
+// emails to that one case within two days. A length check alone doesn't
+// catch this (the label itself is often "long enough"); this is an
+// explicit blocklist of known generic portal/records-request label
+// phrases, checked case-insensitively, in addition to a bare minimum
+// length for anything not on the list.
+const GENERIC_FILTER_PHRASES = [
+  'request number', 'request key', 'request id', 'reference number', 'reference id',
+  'confirmation number', 'confirmation code', 'tracking number', 'tracking id',
+  'case number', 'control number', 'file number', 'ticket number',
+  'public records request', 'records request', 'record request', 'foia request',
+];
+function isGenericFilterPhrase(phrase) {
+  const p = (phrase || '').trim().toLowerCase();
+  if (!p) return false;
+  if (GENERIC_FILTER_PHRASES.includes(p)) return true;
+  return p.length < 6; // a single short/common word is its own risk even off the list
+}
+
 class MailPoller {
   constructor() {
     this.clients = new Map();
@@ -185,6 +210,14 @@ class MailPoller {
     // far more common case (a user click racing the cron in the same
     // instance).
     this.activeAccountPolls = new Set();
+    // activeAccountPolls above only prevents the SAME account being polled
+    // twice at once -- it does nothing for the same email landing in TWO
+    // different connected mailboxes (routine here: an agency reply CC'd to
+    // more than one monitored address), which pollAll() now processes fully
+    // concurrently across accounts. Without this, both accounts' calls can
+    // race the dedup check below and both insert, duplicating the message.
+    // Same single-process-only caveat as activeAccountPolls.
+    this.processingMessageIds = new Set();
   }
 
   async pollAccount(account, sinceOverride = null) {
@@ -235,6 +268,7 @@ class MailPoller {
       auth: { user: account.imap_user || account.email, pass: imapPass },
       logger: false,
     });
+    client.on('error', (e) => console.error('[imap] connection error:', e && e.message));
 
     try {
       await client.connect();
@@ -274,6 +308,20 @@ class MailPoller {
             // forever. Fall back to a synthetic ID keyed on account+UID, which
             // is stable across polls of the same mailbox.
             const messageId = parsed.messageId || msg.envelope.messageId || `imap-${account.id}-${msg.uid}`;
+            // Inbound email is UNTRUSTED, external content -- any sender (no
+            // auth required to reach a public FOIA-intake address) could
+            // otherwise attach arbitrarily large files, and every attachment
+            // in a batch gets base64-encoded and held in memory (~1.33x
+            // inflation) before any of it is uploaded anywhere. With no cap
+            // at all, one malicious/oversized message could exhaust the
+            // whole VPS process's memory and crash the app for every
+            // employee, not just the mailbox owner. Oversized attachments
+            // are still recorded (filename/size/type) so the team can see
+            // one existed, just not auto-downloaded into memory -- both
+            // downstream consumers of `.content` (lines ~755, ~802) already
+            // skip an attachment with no content gracefully.
+            const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB
+            const MAX_BODY_CHARS = 500_000; // ~500KB of text, generous for any real message
             messages.push({
               messageId,
               inReplyTo: parsed.inReplyTo || '',
@@ -282,12 +330,13 @@ class MailPoller {
               to: parsed.to?.value?.[0]?.address || '',
               cc: (parsed.cc?.value || []).map(v => v.address).join(', '),
               subject: parsed.subject || '(بدون موضوع)',
-              text: parsed.text || parsed.html || '',
-              html: parsed.html || '',
+              text: (parsed.text || parsed.html || '').slice(0, MAX_BODY_CHARS),
+              html: (parsed.html || '').slice(0, MAX_BODY_CHARS),
               date: parsed.date || new Date(),
               attachments: parsed.attachments?.map(a => ({
                 filename: a.filename, contentType: a.contentType, size: a.size,
-                content: a.content?.toString('base64') || '',
+                content: (a.size <= MAX_ATTACHMENT_BYTES && a.content) ? a.content.toString('base64') : '',
+                tooLarge: a.size > MAX_ATTACHMENT_BYTES,
               })) || [],
               uid: msg.uid,
               flags: msg.flags || [],
@@ -338,16 +387,25 @@ class MailPoller {
 
     // 1. By Message-ID (already sent from this system) -- structural, not a
     // heuristic, so never gated by criteria.criteriaMap (nothing to disable).
+    // Looked up by message_id, not thread_id: msg.inReplyTo is the raw
+    // In-Reply-To header -- i.e. the PARENT message's own message_id, which
+    // only equals the whole thread's shared thread_id when the parent
+    // happens to BE the thread's first message. Matching against thread_id
+    // directly silently missed every reply arriving past the second message
+    // of a conversation (confirmed live: a real 4-message thread lost its
+    // case link starting at message 3, since message 2's message_id !=
+    // message 2's thread_id, the same root cause fixed below for the actual
+    // thread_id this row gets stored with).
     if (!matchedCaseId && msg.inReplyTo) {
-      const { data: ref } = await sup.from('communications').select('case_id, agency_id').eq('thread_id', msg.inReplyTo).maybeSingle();
+      const { data: ref } = await sup.from('communications').select('case_id, agency_id').eq('message_id', msg.inReplyTo).maybeSingle();
       if (ref) { matchedCaseId = ref.case_id; matchedAgencyId = ref.agency_id; matchReason = { tier_key: 'thread_reply', label_ar: 'رد على رسالة سابقة من هذه القضية' }; }
     }
 
-    // 2. By References -- same as tier 1, structural.
+    // 2. By References -- same fix as tier 1, checked against message_id.
     if (!matchedCaseId && msg.references) {
       const refs = msg.references.split(/[,\s]+/).filter(Boolean);
       for (const ref of refs) {
-        const { data: refComm } = await sup.from('communications').select('case_id, agency_id').eq('thread_id', ref).maybeSingle();
+        const { data: refComm } = await sup.from('communications').select('case_id, agency_id').eq('message_id', ref).maybeSingle();
         if (refComm) { matchedCaseId = refComm.case_id; matchedAgencyId = refComm.agency_id; matchReason = { tier_key: 'thread_references', label_ar: 'جزء من محادثة سابقة لهذه القضية' }; break; }
       }
     }
@@ -469,12 +527,29 @@ class MailPoller {
       if (reqByRef) { matchedCaseId = reqByRef.case_id; matchedAgencyId = reqByRef.agency_id; matchedRequestId = reqByRef.id; matchReason = { tier_key: 'reference_number', label_ar: `يحتوي رقم مرجع مسجل لطلب في هذه القضية: ${extractedRefNumber}` }; }
     }
 
-    // 5. By case number in subject
+    // 5. By case number in subject -- deliberately SUGGEST-only, never
+    // auto-link. Unlike every other tier above, this one requires zero
+    // correlation with the sender at all: it fires for ANY inbound message
+    // from ANY address that happens to contain "#<n>"/"Case: <n>" anywhere
+    // in the subject or body, with no need to spoof a From address or know
+    // a real reference number. Auto-linking on this alone let an outside
+    // party (including an anonymous submitter to a public FOIA-intake
+    // address) get arbitrary content injected into an active case's real
+    // correspondence record just by mentioning its (often small, sequential,
+    // and UI-visible) case id -- confirmed via security audit. Every other
+    // tier that can't fully disambiguate on its own (see the agency_email
+    // tier above, `distinctCaseIds.length > 1`) already downgrades to a
+    // human-reviewed suggestion instead of guessing; this tier now does the
+    // same unconditionally, regardless of whether the case number was
+    // otherwise the only signal available.
     if (!matchedCaseId && tierActive(criteria, 'case_number_subject')) {
       const caseMatch = (msg.subject || '').match(/#(\d+)|Case[:\s]*(\d+)/i) || msg.text?.match(/#(\d+)|Case[:\s]*(\d+)/i);
       if (caseMatch) {
         const cid = parseInt(caseMatch[1] || caseMatch[2]);
-        if (cid) { const { data: c } = await sup.from('cases').select('id').eq('id', cid).maybeSingle(); if (c) { matchedCaseId = c.id; matchReason = { tier_key: 'case_number_subject', label_ar: `رقم القضية #${cid} مذكور في الرسالة` }; } }
+        if (cid) {
+          const { data: c } = await sup.from('cases').select('id').eq('id', cid).maybeSingle();
+          if (c) possibleMatches.push({ caseId: c.id, reasons: [`رقم القضية #${cid} مذكور في الرسالة (يحتاج تأكيد يدوي -- لا يوجد ما يربطه بالمرسل)`] });
+        }
       }
     }
 
@@ -689,6 +764,15 @@ class MailPoller {
   // array, since mapWithConcurrency above needs each call's result back
   // rather than a shared side effect multiple messages could race on.
   async _processOneMessage(sup, accountId, msg, forceCaseId, criteria) {
+     // Cross-account dedup lock -- see processingMessageIds' definition in
+     // the constructor. If another account's poll is already mid-flight for
+     // this exact message_id, this IS the same email (Message-ID is globally
+     // unique per RFC 5322), so the other call already owns storing it.
+     if (this.processingMessageIds.has(msg.messageId)) {
+       console.warn(`[mailPoller] skipping message ${msg.messageId} -- already being processed by a concurrent account poll`);
+       return { inserted: false };
+     }
+     this.processingMessageIds.add(msg.messageId);
      try {
       // Check for duplicate via messageId. Body-html backfill piggybacks on
       // this same dedup check: a message that's already stored (from before
@@ -746,6 +830,24 @@ class MailPoller {
 
       const { matchedCaseId, matchedAgencyId, matchedRequestId, possibleMatches, matchReason } = await this.matchToCase(sup, msg, forceCaseId, criteria);
 
+      // Resolve the thread_id this row should actually share: msg.inReplyTo
+      // is the raw In-Reply-To header (the PARENT message's own message_id),
+      // which only equals the whole thread's shared thread_id when the
+      // parent happens to BE the thread's first message -- using it directly
+      // as this row's thread_id (as before) silently forked a brand new
+      // "thread of one" the moment a reply arrived past the second message
+      // of a real conversation, disconnecting it from the earlier messages
+      // for both this app's own thread-grouping UI and the outbound
+      // References-header chain a later reply would build. Look up the
+      // parent BY its message_id and inherit ITS thread_id instead --
+      // exactly the same `threadId = original.thread_id || original.message_id`
+      // resolution the outbound compose routes already use.
+      let resolvedThreadId = msg.inReplyTo || msg.messageId;
+      if (msg.inReplyTo) {
+        const { data: parent } = await sup.from('communications').select('thread_id').eq('message_id', msg.inReplyTo).maybeSingle();
+        if (parent) resolvedThreadId = parent.thread_id || msg.inReplyTo;
+      }
+
       // Persist attachment content to Google Drive (was previously uploaded
       // to Supabase Storage), and -- when the email matched a case -- also
       // register each one as a real Case Document so users find it in the
@@ -772,7 +874,7 @@ class MailPoller {
         sender: msg.from, recipient: msg.to,
         subject: msg.subject, body: msg.text || msg.html, body_html: msg.html || null,
         message_id: msg.messageId,
-        thread_id: msg.inReplyTo || msg.messageId,
+        thread_id: resolvedThreadId,
         created_at: msg.date.toISOString(),
         is_read: false,
         // Which of our connected accounts this arrived through -- never set
@@ -837,6 +939,8 @@ class MailPoller {
        // One bad message must not abort the rest of the batch.
        console.error(`[mailPoller] failed to process message "${msg.subject}":`, e.message);
        return { inserted: false, error: { subject: msg.subject, messageId: msg.messageId, stage: 'process', error: e.message } };
+     } finally {
+       this.processingMessageIds.delete(msg.messageId);
      }
   }
 
@@ -865,7 +969,7 @@ class MailPoller {
     // Emails" was clicked. Filtering in JS avoids the fragile type match.
     const { data: allAccounts, error: acctError } = await sup.from('email_accounts').select('*');
     if (acctError) console.error('[mailPoller] failed to load email_accounts:', acctError.message);
-    const accounts = (allAccounts || []).filter(a => a.is_active === true || a.is_active === 1);
+    const accounts = (allAccounts || []).filter(a => !a.deleted_at && (a.is_active === true || a.is_active === 1));
     // Each account is its own independent IMAP session (activeAccountPolls
     // already guards same-account reentrancy, not cross-account) -- polling
     // them one at a time meant N configured accounts took N times as long
@@ -962,7 +1066,7 @@ class MailPoller {
   async backfillHtmlBodies() {
     const sup = getSupabase();
     const { data: allAccounts } = await sup.from('email_accounts').select('*');
-    const accounts = (allAccounts || []).filter(a => a.is_active === true || a.is_active === 1);
+    const accounts = (allAccounts || []).filter(a => !a.deleted_at && (a.is_active === true || a.is_active === 1));
     const results = [];
 
     for (const acct of accounts) {
@@ -998,7 +1102,7 @@ class MailPoller {
   async backfillMissingAttachments() {
     const sup = getSupabase();
     const { data: allAccounts } = await sup.from('email_accounts').select('*');
-    const accounts = (allAccounts || []).filter(a => a.is_active === true || a.is_active === 1);
+    const accounts = (allAccounts || []).filter(a => !a.deleted_at && (a.is_active === true || a.is_active === 1));
     const results = [];
     const pendingFilter = (q) => q.eq('direction', 'inbound').ilike('metadata', '%"unmatched":true%');
 
@@ -1022,3 +1126,4 @@ class MailPoller {
 }
 
 module.exports = new MailPoller();
+module.exports.isGenericFilterPhrase = isGenericFilterPhrase;

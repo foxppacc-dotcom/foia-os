@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { api } from '../api';
+import { api, getCurrentUser } from '../api';
 import { Phone, IdCard, Edit3, Save, X, LogIn, LogOut, ListTodo, Clock, Bell, BarChart3, Briefcase } from 'lucide-react';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -9,6 +9,7 @@ import Badge from '../components/ui/Badge';
 import Tabs from '../components/ui/Tabs';
 import Spinner from '../components/ui/Spinner';
 import EmptyState from '../components/ui/EmptyState';
+import { formatArabicDate, formatArabicTime } from '../utils/formatDate';
 
 const PROFILE_TABS = [
   { key: 'cases', label: 'القضايا' },
@@ -116,10 +117,16 @@ export default function Profile() {
                 <div className="flex items-center gap-3 flex-wrap">
                   <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{u.name}</h1>
                   <Badge variant="accent">{u.job_title || '—'}</Badge>
-                  <button onClick={() => setEditing(true)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
-                    onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
-                    <Edit3 className="w-4 h-4" />
-                  </button>
+                  {/* Editing is self-only now (backend enforces this too) --
+                      the button used to show regardless of whose profile
+                      this is, silently 403ing for a manager viewing a
+                      colleague's profile via employee_performance:view. */}
+                  {u.id === getCurrentUser()?.id && (
+                    <button onClick={() => setEditing(true)} className="p-1.5 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}
+                      onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-muted)'}>
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
                 <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>{u.department || '—'} · {u.email}</p>
                 <div className="flex items-center gap-3 text-sm mt-1.5 flex-wrap" style={{ color: 'var(--text-muted)' }}>
@@ -227,10 +234,10 @@ export default function Profile() {
           }>
           {todayAttendance && (
             <div className="p-3 rounded-xl mb-4" style={{ background: 'var(--bg-tertiary)' }}>
-              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>اليوم: {new Date().toLocaleDateString('ar-SA')}</p>
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>اليوم: {formatArabicDate(new Date())}</p>
               <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                دخول: {todayAttendance.check_in ? new Date(todayAttendance.check_in).toLocaleTimeString('ar-SA') : '—'}
-                {todayAttendance.check_out ? ` | خروج: ${new Date(todayAttendance.check_out).toLocaleTimeString('ar-SA')}` : ' | لم يتم تسجيل الخروج بعد'}
+                دخول: {todayAttendance.check_in ? formatArabicTime(todayAttendance.check_in) : '—'}
+                {todayAttendance.check_out ? ` | خروج: ${formatArabicTime(todayAttendance.check_out)}` : ' | لم يتم تسجيل الخروج بعد'}
               </p>
             </div>
           )}

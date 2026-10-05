@@ -1,21 +1,25 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
-import { Bot, Plus, Trash2, CheckCircle2, Power, GraduationCap, ChevronDown, ChevronUp, Save, Eye, EyeOff } from 'lucide-react';
+import { Bot, Plus, Trash2, CheckCircle2, Power, GraduationCap, ChevronDown, ChevronUp, Save, Eye, EyeOff, Clock, Wrench } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Spinner from '../components/ui/Spinner';
+import PasswordInput from '../components/ui/PasswordInput';
 import { useToast } from '../components/ui/Toast';
 import { DASHBOARD_BUTTON_HIDDEN_KEY, DASHBOARD_BUTTON_VISIBILITY_EVENT } from '../aiWidgetVisibility';
+import { formatArabicDateTime } from '../utils/formatDate';
 
-const PROVIDER_LABEL = { anthropic: 'Claude (Anthropic)', openai: 'ChatGPT (OpenAI)', deepseek: 'DeepSeek', gemini: 'Gemini (Google)' };
+const PROVIDER_LABEL = { anthropic: 'Claude (Anthropic)', openai: 'ChatGPT (OpenAI)', deepseek: 'DeepSeek', gemini: 'Gemini (Google)', ollama: 'Ollama (خادم محلي ذاتي الاستضافة)' };
+const OLLAMA_DEFAULT_BASE_URL = 'http://127.0.0.1:11434/v1';
 
 function ProviderSettings({ toast }) {
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ provider: 'anthropic', api_key: '', model: '' });
+  const [form, setForm] = useState({ provider: 'anthropic', api_key: '', model: '', base_url: '' });
   const [saving, setSaving] = useState(false);
+  const isOllama = form.provider === 'ollama';
 
   const fetchProviders = () => {
     api.get('/ai/providers').then(d => setProviders(d.data || [])).catch(e => toast.error(e.message)).finally(() => setLoading(false));
@@ -23,12 +27,13 @@ function ProviderSettings({ toast }) {
   useEffect(() => { fetchProviders(); }, []);
 
   const addProvider = async () => {
-    if (!form.api_key.trim() || !form.model.trim()) return toast.error('المفتاح واسم النموذج مطلوبان');
+    if (!form.model.trim()) return toast.error('اسم النموذج مطلوب');
+    if (!isOllama && !form.api_key.trim()) return toast.error('المفتاح مطلوب لهذا المزود');
     setSaving(true);
     try {
-      await api.post('/ai/providers', form);
+      await api.post('/ai/providers', { ...form, base_url: isOllama ? (form.base_url.trim() || OLLAMA_DEFAULT_BASE_URL) : undefined });
       toast.success('تم ربط المزود بنجاح');
-      setForm({ provider: 'anthropic', api_key: '', model: '' });
+      setForm({ provider: 'anthropic', api_key: '', model: '', base_url: '' });
       setShowAdd(false);
       fetchProviders();
     } catch (e) { toast.error(e.message); }
@@ -62,7 +67,7 @@ function ProviderSettings({ toast }) {
                     <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{PROVIDER_LABEL[p.provider] || p.provider}</span>
                     {p.is_active && <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}><CheckCircle2 className="w-2.5 h-2.5" />مفعّل</span>}
                   </div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{p.model} · {p.daily_request_count || 0} طلب اليوم</div>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{p.model} · {p.daily_request_count || 0} طلب اليوم{p.base_url ? ` · ${p.base_url}` : ''}</div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {!p.is_active && <Button size="sm" variant="secondary" icon={Power} onClick={() => activate(p.id)}>تفعيل</Button>}
@@ -81,10 +86,15 @@ function ProviderSettings({ toast }) {
               className="w-full px-3 py-2 rounded-lg text-sm" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
               {Object.entries(PROVIDER_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
-            <input value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} placeholder="اسم النموذج (مثال: claude-sonnet-5)"
+            <input value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} placeholder={isOllama ? 'اسم النموذج (مثال: llama3.1)' : 'اسم النموذج (مثال: claude-sonnet-5)'}
               className="w-full px-3 py-2 rounded-lg text-sm" dir="ltr" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
-            <input value={form.api_key} onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))} placeholder="مفتاح الـ API" type="password"
-              className="w-full px-3 py-2 rounded-lg text-sm" dir="ltr" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+            {isOllama ? (
+              <input value={form.base_url} onChange={e => setForm(f => ({ ...f, base_url: e.target.value }))} placeholder={`رابط الخادم (افتراضي: ${OLLAMA_DEFAULT_BASE_URL})`}
+                className="w-full px-3 py-2 rounded-lg text-sm" dir="ltr" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+            ) : (
+              <PasswordInput value={form.api_key} onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))} placeholder="مفتاح الـ API"
+                className="px-3 py-2 rounded-lg text-sm" dir="ltr" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+            )}
             <div className="flex gap-1.5 justify-end">
               <Button size="sm" variant="secondary" onClick={() => setShowAdd(false)}>إلغاء</Button>
               <Button size="sm" disabled={saving} onClick={addProvider}>{saving ? 'جارٍ الاختبار والحفظ...' : 'اختبار وحفظ'}</Button>
@@ -145,6 +155,16 @@ function CapabilityToggles({ toast }) {
 // time via record_capability_learning. Deliberately independent of any one
 // provider config: switching from one AI provider to another carries this
 // same accumulated knowledge forward, instead of starting cold.
+//
+// Not a real ai_capabilities-gated tool -- a pseudo-bucket for knowledge
+// that isn't about any ONE specific tool (the actual business/domain model,
+// team workflow, standing preferences). Kept OUT of permissions.js's
+// AI_CAPABILITY_ACTIONS (which also drives CapabilityToggles' on/off
+// switches) specifically so it never gets a toggle checkbox of its own --
+// it isn't a capability to enable/disable, it's always folded into the
+// system prompt. Prepended locally here instead.
+const GENERAL_KNOWLEDGE_ITEM = { key: 'general_knowledge', label: 'معرفة عامة عن طبيعة العمل وسير الفريق (غير مرتبطة بأداة واحدة -- تصل للمساعد دائمًا بغض النظر عن أي قدرة مفعّلة)' };
+
 function KnowledgeCenter({ toast }) {
   const [actions, setActions] = useState([]);
   const [knowledge, setKnowledge] = useState({});
@@ -156,9 +176,10 @@ function KnowledgeCenter({ toast }) {
   const fetchAll = () => {
     Promise.all([api.get('/permissions/schema'), api.get('/ai/knowledge')])
       .then(([schema, kn]) => {
-        setActions(schema.aiCapabilityActions || []);
+        const allActions = [GENERAL_KNOWLEDGE_ITEM, ...(schema.aiCapabilityActions || [])];
+        setActions(allActions);
         setKnowledge(kn.data || {});
-        setDrafts(Object.fromEntries((schema.aiCapabilityActions || []).map(a => {
+        setDrafts(Object.fromEntries(allActions.map(a => {
           const k = (kn.data || {})[a.key] || {};
           return [a.key, { instructions: k.instructions || '', learned_notes: k.learned_notes || '' }];
         })));
@@ -255,6 +276,85 @@ function DashboardButtonVisibilityToggle() {
   );
 }
 
+// Per-employee timeline of the assistant's own behavior -- what a specific
+// team member asked it, which tools it used answering, and how it replied.
+// Deliberately separate from the app's general activity timeline
+// (activity_logs: case/team/document events) which has no visibility into
+// AI conversations at all. "الكل" shows every employee's interactions
+// together, newest first, instead of requiring one to be picked first.
+function ActivityTimeline({ toast }) {
+  const [users, setUsers] = useState([]);
+  const [userId, setUserId] = useState('');
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(null);
+
+  useEffect(() => { api.get('/users').then(d => setUsers(d.data || [])).catch(() => {}); }, []);
+
+  const fetchEvents = () => {
+    setLoading(true);
+    const qs = userId ? `?user_id=${userId}` : '';
+    api.get(`/ai/activity${qs}`).then(d => setEvents(d.events || [])).catch(e => toast.error(e.message)).finally(() => setLoading(false));
+  };
+  useEffect(() => { fetchEvents(); }, [userId]);
+
+  return (
+    <Card title="تايم لاين المساعد الذكي" icon={<Clock className="w-4 h-4" style={{ color: 'var(--accent)' }} />}>
+      <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+        سجل زمني لتعاملات المساعد الذكي مع فريق العمل -- ما سُئل، وما استخدمه من أدوات ليجيب، ومحصلة رده. مستقل عن التايم لاين العام للنظام.
+      </p>
+      <select value={userId} onChange={e => setUserId(e.target.value)}
+        className="w-full px-3 py-2 rounded-lg text-sm mb-3" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
+        <option value="">كل الموظفين</option>
+        {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+      </select>
+
+      {loading ? <Spinner /> : events.length === 0 ? (
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>لا توجد أي تعاملات مسجّلة بعد.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {events.map((ev, i) => {
+            const isOpen = expanded === i;
+            return (
+              <div key={i} className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+                <button onClick={() => setExpanded(isOpen ? null : i)} className="w-full flex items-center justify-between gap-2 p-2.5 text-right" style={{ background: 'var(--bg-secondary)' }}>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {!userId && ev.user_name && <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style={{ background: 'var(--accent)20', color: 'var(--accent)' }}>{ev.user_name}</span>}
+                      <span className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{ev.question || '(بدون سؤال نصي)'}</span>
+                    </div>
+                    <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{formatArabicDateTime(ev.created_at)}</div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {ev.tools_used.length > 0 && (
+                      <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
+                        <Wrench className="w-2.5 h-2.5" />{ev.tools_used.length}
+                      </span>
+                    )}
+                    {isOpen ? <ChevronUp className="w-4 h-4" style={{ color: 'var(--text-muted)' }} /> : <ChevronDown className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />}
+                  </div>
+                </button>
+                {isOpen && (
+                  <div className="p-3 space-y-2 text-sm" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
+                    {ev.tools_used.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {ev.tools_used.map((t, ti) => (
+                          <span key={ti} className="text-[10px] px-1.5 py-0.5 rounded-full font-mono" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>{t}</span>
+                        ))}
+                      </div>
+                    )}
+                    <p className="whitespace-pre-wrap">{ev.answer || 'لم يُسجَّل رد نهائي لهذا التبادل.'}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function AIAssistantSettings() {
   const toast = useToast();
   return (
@@ -264,6 +364,7 @@ export default function AIAssistantSettings() {
       <ProviderSettings toast={toast} />
       <CapabilityToggles toast={toast} />
       <KnowledgeCenter toast={toast} />
+      <ActivityTimeline toast={toast} />
     </div>
   );
 }

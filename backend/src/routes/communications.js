@@ -18,12 +18,15 @@ router.get('/cases/:caseId/communications', caseGate, async (req, res) => {
       .from('communications')
       .select('*')
       .eq('case_id', caseId)
+      .is('deleted_at', null)
       .order('created_at', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
+    // one malformed JSON row must not 500 the whole correspondence list
+    const safeParse = (v, fallback) => { if (!v) return fallback; if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch { return fallback; } };
     const parsed = (communications || []).map(c => ({
       ...c,
-      file_paths: c.file_paths ? (typeof c.file_paths === 'string' ? JSON.parse(c.file_paths) : c.file_paths) : [],
-      metadata: c.metadata ? (typeof c.metadata === 'string' ? JSON.parse(c.metadata) : c.metadata) : {}
+      file_paths: safeParse(c.file_paths, []),
+      metadata: safeParse(c.metadata, {})
     }));
     res.json(parsed);
   } catch (err) {
@@ -59,7 +62,11 @@ router.post('/cases/:caseId/communications', caseGate, async (req, res) => {
         subject: subject || null, body: body || null,
         sender: sender || null, recipient: recipient || null,
         file_paths: file_paths ? JSON.stringify(file_paths) : null,
-        metadata: metadata ? JSON.stringify(metadata) : null
+        // Attachment entries are server-written only: a client-supplied
+        // storageKey/driveFileId would later be signed/deleted by the attachment
+        // routes (arbitrary file read / delete across cases).
+        metadata: metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+          ? JSON.stringify((({ attachments, ...rest }) => rest)(metadata)) : null
       })
       .select('*')
       .maybeSingle();
@@ -78,7 +85,7 @@ router.post('/cases/:caseId/communications', caseGate, async (req, res) => {
 // GET /api/cases/:caseId/threads - alias for case communications (frontend expects this)
 router.get('/cases/:caseId/threads', caseGate, async (req, res) => {
   const sup = getSupabase();
-  const { data, error } = await sup.from('communications').select('*').eq('case_id', parseInt(req.params.caseId)).order('created_at', { ascending: false });
+  const { data, error } = await sup.from('communications').select('*').eq('case_id', parseInt(req.params.caseId)).is('deleted_at', null).order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   const threads = (data || []).map(c => {
     let metadata = {};

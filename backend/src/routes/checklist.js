@@ -3,12 +3,13 @@ const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 const { logActivity } = require('../services/activityLogger');
+const trash = require('../services/trash');
 
 // GET /api/checklist/templates — list all templates
 router.get('/templates', requireAuth, async (req, res) => {
   try {
     const sup = getSupabase();
-    const { data, error } = await sup.from('checklist_templates').select('*').order('sort_order');
+    const { data, error } = await sup.from('checklist_templates').select('*').is('deleted_at', null).order('sort_order');
     if (error) return res.status(500).json({ error: error.message });
     res.json({ data });
   } catch (err) {
@@ -60,8 +61,11 @@ router.delete('/templates/:id', requireAuth, requireRole('admin'), async (req, r
   try {
     const sup = getSupabase();
     const id = parseInt(req.params.id);
-    // Soft delete: disable the template so old cases keep their data
-    const { error } = await sup.from('checklist_templates').update({ enabled: false, updated_at: new Date().toISOString() }).eq('id', id);
+    // Soft delete: disable the template (old cases keep their data) AND mark
+    // it trashed so it shows up in / can be restored from سلة المحذوفات.
+    const { error } = await sup.from('checklist_templates')
+      .update({ enabled: false, updated_at: new Date().toISOString(), deleted_at: new Date().toISOString(), deleted_by: req.user.id })
+      .eq('id', id);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, message: 'Template disabled' });
   } catch (err) {

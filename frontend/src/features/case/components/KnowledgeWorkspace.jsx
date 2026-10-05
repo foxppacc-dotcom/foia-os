@@ -5,6 +5,7 @@ import { KNOWLEDGE_TYPES, createKnowledgeNote, decodeNotes, computeCrossReferenc
 import AppBadge from '../../../components/ds/AppBadge';
 import AppButton from '../../../components/ds/AppButton';
 import { Lightbulb, Eye, AlertTriangle, MessageSquare, HelpCircle, CheckCircle, FileText, Building2, Link2, Clock, TrendingUp } from 'lucide-react';
+import { formatArabicDate } from '../../../utils/formatDate';
 
 const INVESTIGATION_V2 = import.meta.env.VITE_INVESTIGATION_V2 === 'true' || localStorage.getItem('INVESTIGATION_V2') === 'true';
 
@@ -123,7 +124,7 @@ export default function KnowledgeWorkspace() {
                     {note.source && <span className="text-[10px]" style={{ color: 'var(--ds-text-muted)' }}>{note.source}</span>}
                   </div>
                   <div className="text-sm" style={{ color: 'var(--ds-text-primary)' }}>{note.content}</div>
-                  <div className="text-[10px] mt-1" style={{ color: 'var(--ds-text-muted)' }}>{note.investigatorName} · {new Date(note.createdAt).toLocaleDateString('ar-SA')}</div>
+                  <div className="text-[10px] mt-1" style={{ color: 'var(--ds-text-muted)' }}>{note.investigatorName} · {formatArabicDate(note.createdAt)}</div>
                 </div>
               </div>
             );

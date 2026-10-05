@@ -4,13 +4,24 @@ import { useNavigate } from 'react-router-dom';
 import { Building2, Plus, Trash2, Mail, Phone, Globe, MapPin, UserPlus, XCircle, CheckCircle, AlertTriangle, CalendarClock, History, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import { useRequests } from '../../request/hooks/useRequests';
-import { classifyRequest } from '../../request/services/requestApi';
-import { getStatusBadge, filterUnusedAgencies, formatAgencyLocation } from '../../request/utils';
+import { classifyRequest, setReplyOutcome } from '../../request/services/requestApi';
+import { getStatusBadge, getReplyOutcomeBadge, filterUnusedAgencies, formatAgencyLocation, REPLY_OUTCOME_OPTIONS } from '../../request/utils';
 import AppSection from '../../../components/ds/AppSection';
 import AppButton from '../../../components/ds/AppButton';
 import AppSelect from '../../../components/ds/AppSelect';
 import AppBadge from '../../../components/ds/AppBadge';
 import AppEmptyState from '../../../components/ds/AppEmptyState';
+import { formatArabicDateTime } from '../../../utils/formatDate';
+
+// Backend already rejects a non-http(s) link at write time for agencies.*
+// and case_agency_channels.portal_link, but this still guards render-time
+// too -- against any row written before that validation existed -- since
+// rendering it as a real <a href> would execute it in this origin the
+// moment anyone clicks (see Portals.jsx/Agencies.jsx/Production.jsx's
+// identical isSafeHref, applied here for the same fields this tab renders).
+function isSafeHref(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url.trim());
+}
 
 const AGENCY_TYPES = [
   { value: '', label: 'اختر النوع' },
@@ -28,11 +39,7 @@ const CLASS_OPTIONS = [
   { value: 'both', label: 'قبض وتحقيق' },
 ];
 
-function formatDateTime(dateStr) {
-  if (!dateStr) return '';
-  const d = new Date(dateStr);
-  return `${d.toLocaleDateString('ar-SA')} ${d.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}`;
-}
+const formatDateTime = formatArabicDateTime;
 
 // One agency's full card: basic info + channels + requests + a SINGLE unified
 // correspondence feed for everything ever sent/received/logged with this
@@ -43,8 +50,8 @@ function formatDateTime(dateStr) {
 function AgencyCard({
   agency, reqs, channels, emailAccounts, agencyLog,
   showChannelForm, newChannel, setNewChannel, setShowChannelForm, addChannel, removeChannel,
-  showPortalForm, setShowPortalForm, portalForm, setPortalForm, logPortalSubmission,
-  setClassification, acknowledgeOverdue, handleRemove, navigate,
+  showPortalForm, setShowPortalForm, portalForm, setPortalForm, logPortalSubmission, submittingPortal,
+  setClassification, setOutcome, acknowledgeOverdue, handleRemove, navigate,
 }) {
   const firstReq = reqs[0];
   const key = agency?.id || firstReq.agency_id || firstReq.id;
@@ -86,9 +93,9 @@ function AgencyCard({
           {agency?.phone && <span><Phone className="w-3 h-3 inline" /> {agency.phone}</span>}
           {agency?.email && <span><Mail className="w-3 h-3 inline" /> {agency.email}</span>}
           {agency?.address && <span><MapPin className="w-3 h-3 inline" /> {agency.address}</span>}
-          {agency?.portal_url && <a href={agency.portal_url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> بوابة الطلبات</a>}
-          {agency?.website && <a href={agency.website} target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> الموقع الرسمي</a>}
-          {agency?.tracking_portal_url && <a href={agency.tracking_portal_url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> متابعة الطلب</a>}
+          {isSafeHref(agency?.portal_url) && <a href={agency.portal_url} target="_blank" rel="noopener noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> بوابة الطلبات</a>}
+          {isSafeHref(agency?.website) && <a href={agency.website} target="_blank" rel="noopener noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> الموقع الرسمي</a>}
+          {isSafeHref(agency?.tracking_portal_url) && <a href={agency.tracking_portal_url} target="_blank" rel="noopener noreferrer" style={{ color: '#3b82f6' }}><Globe className="w-3 h-3 inline" /> متابعة الطلب</a>}
           {agency?.reply_to && <span>الرد على: {agency.reply_to}</span>}
           {defaultAccount && <span><Mail className="w-3 h-3 inline" /> حساب الإرسال: {defaultAccount.email}</span>}
         </div>
@@ -122,7 +129,7 @@ function AgencyCard({
                 <Mail className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--ds-text-muted)' }} />
                 <div className="flex-1 min-w-0">
                   {ch.email && <span className="font-medium" style={{ color: 'var(--ds-text-primary)' }}>{ch.email}</span>}
-                  {ch.portal_link && <a href={ch.portal_link} target="_blank" rel="noreferrer" className="mr-1" style={{ color: '#3b82f6' }}>· رابط البوابة</a>}
+                  {isSafeHref(ch.portal_link) && <a href={ch.portal_link} target="_blank" rel="noopener noreferrer" className="mr-1" style={{ color: '#3b82f6' }}>· رابط البوابة</a>}
                   {ch.filter_keywords && <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--ds-text-muted)' }}>كلمات الفلترة: {ch.filter_keywords}</div>}
                 </div>
                 <button onClick={() => removeChannel(agency.id, ch.id)} className="p-0.5 shrink-0" style={{ color: 'var(--ds-text-muted)' }}>
@@ -140,6 +147,7 @@ function AgencyCard({
           <div className="space-y-1.5">
             {reqs.map(req => {
               const rBadge = getStatusBadge(req.status);
+              const oBadge = getReplyOutcomeBadge(req.reply_outcome);
               const isLate = !!(req.expected_response_date && req.expected_response_date < todayStr && !req.response_date);
               const isAcked = isLate && !!req.overdue_ack_by;
               const isPortalFormOpen = showPortalForm[req.id];
@@ -149,12 +157,21 @@ function AgencyCard({
                     <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0" style={{ background: 'var(--ds-accent)', color: 'white' }}>#{req.id}</div>
                     {req.reference_number && <span className="text-[10px] truncate" style={{ color: 'var(--ds-text-muted)' }}>مرجع: {req.reference_number}</span>}
                     <AppBadge variant={rBadge.variant}>{rBadge.text}</AppBadge>
+                    <AppBadge variant={oBadge.variant}>{oBadge.text}</AppBadge>
                     {isLate && !isAcked && <AlertTriangle className="w-3.5 h-3.5" style={{ color: '#ef4444' }} />}
                   </div>
                   <select value={req.agency_classification || ''} onChange={e => setClassification(req.id, e.target.value || null)}
                     className="w-full px-2 py-1 rounded text-[11px] font-medium mb-1.5" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
                     <option value="">— غير محدد —</option>
                     {CLASS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  {/* Reply outcome -- what the agency actually did (sent
+                      records / no records / rejected / requested payment),
+                      separate from the role classification above. Powers
+                      the AI assistant's search_requests_by_outcome tool. */}
+                  <select value={req.reply_outcome || 'pending'} onChange={e => setOutcome(req.id, e.target.value)}
+                    className="w-full px-2 py-1 rounded text-[11px] font-medium mb-1.5" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }}>
+                    {REPLY_OUTCOME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                   {isLate && !isAcked && (
                     <div className="flex items-center justify-between gap-1.5 mb-1.5 text-[10px] px-2 py-1 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
@@ -189,7 +206,7 @@ function AgencyCard({
                         className="w-full px-2 py-1 rounded text-[11px]" style={{ background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-border)', color: 'var(--ds-text-primary)' }} />
                       <div className="flex gap-1.5 justify-end pt-0.5">
                         <AppButton size="sm" variant="secondary" onClick={() => setShowPortalForm(p => ({ ...p, [req.id]: false }))}>إلغاء</AppButton>
-                        <AppButton size="sm" onClick={() => logPortalSubmission(req.id, agency?.id)}><CheckCircle className="w-3.5 h-3.5" />تسجيل</AppButton>
+                        <AppButton size="sm" disabled={submittingPortal.has(req.id)} onClick={() => logPortalSubmission(req.id, agency?.id)}><CheckCircle className="w-3.5 h-3.5" />{submittingPortal.has(req.id) ? 'جارٍ التسجيل...' : 'تسجيل'}</AppButton>
                       </div>
                     </div>
                   )}
@@ -334,11 +351,17 @@ export default function AgenciesTab() {
     catch (e) { alert('❌ ' + e.message); }
   };
 
+  const setOutcome = async (reqId, value) => {
+    try { await setReplyOutcome(id, reqId, value); refetch?.(true); }
+    catch (e) { alert('❌ ' + e.message); }
+  };
+
   const acknowledgeOverdue = async (reqId) => {
     try { await api.post(`/requests/${reqId}/acknowledge-overdue`); refetch?.(true); }
     catch (e) { alert('❌ فشل تسجيل الاطلاع: ' + e.message); }
   };
 
+  const [submittingPortal, setSubmittingPortal] = useState(new Set());
   const [rescanning, setRescanning] = useState(false);
   const runRescan = async () => {
     setRescanning(true);
@@ -351,6 +374,8 @@ export default function AgenciesTab() {
   };
 
   const logPortalSubmission = async (reqId, agencyId) => {
+    if (submittingPortal.has(reqId)) return;
+    setSubmittingPortal(s => new Set(s).add(reqId));
     const form = portalForm[reqId] || {};
     const days = Math.min(30, Math.max(1, parseInt(form.expected_response_days) || 20));
     try {
@@ -363,6 +388,7 @@ export default function AgenciesTab() {
       setShowPortalForm(p => ({ ...p, [reqId]: false }));
       refetch?.(true);
     } catch (e) { alert('❌ ' + e.message); }
+    setSubmittingPortal(s => { const next = new Set(s); next.delete(reqId); return next; });
   };
 
   const scrollBy = (dx) => scrollRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
@@ -448,8 +474,8 @@ export default function AgenciesTab() {
                   showChannelForm={showChannelForm} newChannel={newChannel} setNewChannel={setNewChannel} setShowChannelForm={setShowChannelForm}
                   addChannel={addChannel} removeChannel={removeChannel}
                   showPortalForm={showPortalForm} setShowPortalForm={setShowPortalForm} portalForm={portalForm} setPortalForm={setPortalForm}
-                  logPortalSubmission={logPortalSubmission}
-                  setClassification={setClassification} acknowledgeOverdue={acknowledgeOverdue}
+                  logPortalSubmission={logPortalSubmission} submittingPortal={submittingPortal}
+                  setClassification={setClassification} setOutcome={setOutcome} acknowledgeOverdue={acknowledgeOverdue}
                   handleRemove={handleRemove} navigate={navigate}
                 />
               </div>

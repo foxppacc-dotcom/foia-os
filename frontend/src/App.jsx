@@ -49,6 +49,9 @@ const MessageView = lazy(() => import('./pages/MessageView'));
 const PublicUpload = lazy(() => import('./pages/PublicUpload'));
 const TeamPermissions = lazy(() => import('./components/TeamPermissions'));
 const Forum = lazy(() => import('./pages/Forum'));
+const Messages = lazy(() => import('./pages/Messages'));
+const Trash = lazy(() => import('./pages/Trash'));
+const AITasks = lazy(() => import('./pages/AITasks'));
 
 function AppFallback() { return <div style={{padding:"20px",color:"var(--ds-text-muted)"}}>جاري التحميل...</div>; }
 
@@ -91,7 +94,9 @@ function App() {
         if (u && u.user) setUser(u.user);
         setLoading(false);
       }).catch(() => {
-        localStorage.removeItem('foia_token');
+        // A rejected session (401) is already cleared + reloaded by api.js. Any other
+        // failure (network drop, 5xx) must NOT throw away a valid token -- just stop
+        // loading; the next reload retries /auth/me.
         setLoading(false);
       });
     } else {
@@ -206,13 +211,26 @@ function App() {
             <Route path="/email-accounts" element={<EmailAccounts />} />
             <Route path="/inbox" element={<Inbox />} />
             <Route path="/forum" element={<Forum />} />
+            <Route path="/messages" element={<Messages />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/production-lists" element={<ProductionListsAdmin />} />
             <Route path="/theme-settings" element={<ThemeSettings />} />
             <Route path="/pipeline/lists/:id" element={<ListDetail />} />
             <Route path="/profile/:id" element={<Profile />} />
             <Route path="/profile" element={<Profile />} />
-            {user.role === 'admin' && <Route path="/teams" element={<Teams />} />}
+            {/* Previously hardcoded to user.role === 'admin', contradicting
+                the actual permission system: an admin can grant a non-admin
+                role visibility into "الفرق"/"سلة المحذوفات" from فريق العمل
+                (Sidebar.jsx's isNavVisible reads this from /permissions/mine,
+                no role check at all) -- the link would then show, but
+                clicking it hit no matching route here and landed on a blank
+                page. Every other route in this list (/permissions, /gdrive,
+                /phone-logs, /users...) already renders unconditionally and
+                relies on its own page's backend calls for real enforcement;
+                these two now match that same, already-established pattern. */}
+            <Route path="/teams" element={<Teams />} />
+            <Route path="/trash" element={<Trash />} />
+            <Route path="/ai-tasks" element={<AITasks />} />
             <Route path="/gdrive" element={<CaseGDrive />} />
             <Route path="/phone-logs" element={<PhoneLogs />} />
             <Route path="/mail-logs" element={<MailLogs />} />

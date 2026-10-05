@@ -18,9 +18,33 @@
     "logout": "Log out",
     "member": "Member"
   },
+  "globalSearch": {
+    "placeholder": "Search the system...",
+    "searching": "Searching...",
+    "noResults": "No results",
+    "noSubject": "(No subject)",
+    "unlinkedDocument": "Not linked to a case",
+    "sections": {
+      "cases": "Cases",
+      "documents": "Documents",
+      "communications": "Correspondence",
+      "agencies": "Agencies"
+    }
+  },
   "pageMeta": {
     "dashboard": { "eyebrow": "Overview", "title": "Dashboard" },
     "intake": { "eyebrow": "Smart tools", "title": "Smart Intake" },
+    "aiAssistantChat": { "eyebrow": "Smart tools", "title": "AI Assistant" },
+    "aiAssistant": { "eyebrow": "Smart tools", "title": "AI Connections" },
+    "inbox": { "eyebrow": "Correspondence", "title": "Inbox" },
+    "forum": { "eyebrow": "Correspondence", "title": "Forum" },
+    "messages": { "eyebrow": "Internal", "title": "Internal Messages" },
+    "permissions": { "eyebrow": "Management", "title": "Team & Permissions" },
+    "gdrive": { "eyebrow": "Storage", "title": "Google Drive" },
+    "phoneLogs": { "eyebrow": "Logs", "title": "Call Log" },
+    "mailLogs": { "eyebrow": "Logs", "title": "Physical Mail" },
+    "trash": { "eyebrow": "System", "title": "Trash" },
+    "aiTasks": { "eyebrow": "AI", "title": "Recurring Assistant Tasks" },
     "caseDetail": { "eyebrow": "Cases", "title": "Case Details" },
     "cases": { "eyebrow": "Management", "title": "Cases" },
     "pipeline": { "eyebrow": "Workflow", "title": "Pipeline" },

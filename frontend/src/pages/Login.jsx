@@ -57,7 +57,19 @@ export default function Login({ onLogin }) {
       }
     } catch (err) {
       const msg = err.message || '';
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network request failed'))
+      // api.js's request() throws new Error(err.error || ...) for EVERY
+      // non-ok response, including a perfectly normal wrong-password 401 --
+      // whose body is exactly {error: "Invalid credentials"} (auth.js). That
+      // text matched none of the branches below (they only checked for the
+      // literal words "401"/"Unauthorized"), so a simple typo'd password
+      // fell through to the generic "تعذر الاتصال بالخادم" (server
+      // unreachable) message -- confirmed live: a real employee's wrong-
+      // password attempt was misread as a connectivity problem instead of
+      // "check your email/password", which is actively misleading on a
+      // login page (there's nothing to "reconnect" to).
+      if (msg.includes('Invalid credentials'))
+        setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
+      else if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network request failed'))
         setError('تعذر الاتصال بالخادم. تحقق من اتصال الإنترنت وحاول مجدداً');
       else if (msg.includes('401') || msg.includes('Unauthorized'))
         setError('انتهت صلاحية الجلسة. يرجى تحديث الصفحة');

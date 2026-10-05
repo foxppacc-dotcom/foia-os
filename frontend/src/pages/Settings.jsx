@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api';
+import { api, getCurrentUser } from '../api';
 import { Save, ArrowUpDown, ExternalLink } from 'lucide-react';
 import { NAV_CATALOG } from '../navCatalog';
 
@@ -54,18 +54,30 @@ export default function Settings() {
   };
 
   const hiddenItems = navLayout.filter(i => i.location === 'settings');
+  // PUT /nav-layout is admin-only server-side (this order is GLOBAL, shared
+  // by every user, unlike per-role visibility which lives in "الصلاحيات") --
+  // a non-admin with settings.view could otherwise drag-reorder the whole
+  // sidebar, then only discover on save that none of it could ever persist.
+  const canEditLayout = getCurrentUser()?.role === 'admin';
 
   return (
     <div className="space-y-6 animate-fadeIn max-w-6xl mx-auto">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>🧭 ترتيب القائمة الجانبية</h1>
-        <button onClick={saveNavLayout} disabled={savingLayout || layoutLoading}
-          className="flex items-center gap-2 px-5 py-2 rounded-xl font-semibold"
-          style={{ background: 'var(--accent)', color: '#1A1A2E' }}>
-          <Save className="w-4 h-4" />
-          {savingLayout ? 'جاري...' : 'حفظ الترتيب'}
-        </button>
+        {canEditLayout && (
+          <button onClick={saveNavLayout} disabled={savingLayout || layoutLoading}
+            className="flex items-center gap-2 px-5 py-2 rounded-xl font-semibold"
+            style={{ background: 'var(--accent)', color: '#1A1A2E' }}>
+            <Save className="w-4 h-4" />
+            {savingLayout ? 'جاري...' : 'حفظ الترتيب'}
+          </button>
+        )}
       </div>
+      {!canEditLayout && (
+        <p className="text-xs px-3 py-2 rounded-lg" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+          🔒 هذا الترتيب لا يمكن تعديله إلا من حساب مدير النظام — معروض هنا للاطلاع فقط.
+        </p>
+      )}
       <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
         رتّب عناصر القائمة الجانبية بالأسهم، وحدد لكل عنصر إن كان يظهر في القائمة الجانبية أو يبقى داخل الإعدادات فقط (يظهر وقتها كرابط سريع بجانب هذه القائمة). هذا الترتيب عام لكل المستخدمين — لا علاقة له بمن يملك صلاحية رؤية كل عنصر (يُضبط من تبويب "الصلاحيات").
       </p>
@@ -79,21 +91,21 @@ export default function Settings() {
             {navLayout.map((item, index) => (
               <div key={item.nav_key} className="flex items-center gap-3 p-3 rounded-xl border" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}>
                 <div className="flex flex-col gap-0.5">
-                  <button onClick={() => moveLayoutItem(index, -1)} disabled={index === 0}
+                  <button onClick={() => moveLayoutItem(index, -1)} disabled={index === 0 || !canEditLayout}
                     className="p-0.5 hover:opacity-70 disabled:opacity-20" style={{ color: 'var(--text-muted)' }}>▲</button>
-                  <button onClick={() => moveLayoutItem(index, 1)} disabled={index === navLayout.length - 1}
+                  <button onClick={() => moveLayoutItem(index, 1)} disabled={index === navLayout.length - 1 || !canEditLayout}
                     className="p-0.5 hover:opacity-70 disabled:opacity-20" style={{ color: 'var(--text-muted)' }}>▼</button>
                 </div>
                 <ArrowUpDown className="w-4 h-4 shrink-0" style={{ color: 'var(--text-muted)' }} />
                 <span className="flex-1 font-medium" style={{ color: 'var(--text-primary)' }}>{layoutLabel(item.nav_key)}</span>
                 <div className="flex items-center gap-1 p-0.5 rounded-lg" style={{ background: 'var(--bg-tertiary)' }}>
-                  <button onClick={() => item.location !== 'sidebar' && toggleLayoutLocation(item.nav_key)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                  <button onClick={() => canEditLayout && item.location !== 'sidebar' && toggleLayoutLocation(item.nav_key)} disabled={!canEditLayout}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-60"
                     style={{ background: item.location === 'sidebar' ? 'var(--accent)' : 'transparent', color: item.location === 'sidebar' ? '#1A1A2E' : 'var(--text-muted)' }}>
                     القائمة الجانبية
                   </button>
-                  <button onClick={() => item.location !== 'settings' && toggleLayoutLocation(item.nav_key)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                  <button onClick={() => canEditLayout && item.location !== 'settings' && toggleLayoutLocation(item.nav_key)} disabled={!canEditLayout}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-60"
                     style={{ background: item.location === 'settings' ? 'var(--accent)' : 'transparent', color: item.location === 'settings' ? '#1A1A2E' : 'var(--text-muted)' }}>
                     الإعدادات فقط
                   </button>

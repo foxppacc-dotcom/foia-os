@@ -5,6 +5,8 @@ const { getSupabase } = require('../supabase');
 const gdrive = require('../services/googleDriveService');
 const { canAccessCase } = require('../services/caseAccess');
 const { notifyUsers, getCaseRecipients, getCaseActivityRecipients } = require('../services/notificationService');
+const trash = require('../services/trash');
+const { isSafeLinkUrl } = require('../services/urlSafety');
 
 // Every case-scoped route below previously had NO case-ownership check at
 // all -- any authenticated user (including a role restricted to only their
@@ -27,17 +29,19 @@ async function assertCaseAccess(req, res, caseId) {
 // Google auto-expiring it after 7 days for an app still in "Testing"
 // publishing status) used to still report "متصل" until upload time.
 router.get('/gdrive/status', requireAuth, async (req, res) => {
-  const hasToken = await gdrive.isConnected();
-  if (!hasToken) return res.json({ configured: gdrive.configured, connected: false, email: null });
-  const check = await gdrive.verifyConnection();
-  const storedEmail = await gdrive.getConnectedEmail();
-  res.json({
-    configured: gdrive.configured,
-    connected: check.ok,
-    email: check.ok ? (check.email || storedEmail) : storedEmail,
-    needsReconnect: !check.ok,
-    reason: check.ok ? null : check.reason,
-  });
+  try {
+    const hasToken = await gdrive.isConnected();
+    if (!hasToken) return res.json({ configured: gdrive.configured, connected: false, email: null });
+    const check = await gdrive.verifyConnection();
+    const storedEmail = await gdrive.getConnectedEmail();
+    res.json({
+      configured: gdrive.configured,
+      connected: check.ok,
+      email: check.ok ? (check.email || storedEmail) : storedEmail,
+      needsReconnect: !check.ok,
+      reason: check.ok ? null : check.reason,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/gdrive/image/:fileId — proxy an image's bytes through our own
@@ -53,20 +57,32 @@ router.get('/gdrive/status', requireAuth, async (req, res) => {
 // request that reaches it first, and an <img> tag can never carry our
 // Bearer token, so this route 401'd before ever reaching this router at all
 // when only registered here.
+// Exact allowlist of raster image types, not a "block SVG" blocklist -- the
+// mimetype recorded at upload time is 100% client-controlled (multer trusts
+// whatever Content-Type the uploader declared, never sniffed from the real
+// bytes) and this is the one place that decides what's safe to serve
+// same-origin/inline. A blocklist checking `=== 'image/svg+xml'` was
+// bypassable by any case/whitespace/parameter variant (e.g.
+// "Image/SVG+XML", "image/svg+xml;charset=utf-8") -- since `startsWith
+// ('image/')` still matched, an attacker (including an unauthenticated
+// FileFetch link holder) could get an SVG containing <script> served with
+// its own real content-type and executed same-origin the moment anyone
+// opened this URL directly. An allowlist of exact, known-inert raster
+// types can't be bypassed by a mimetype variant the same way.
+const SAFE_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/avif']);
 async function imageProxyHandler(req, res) {
   try {
     const { fileId } = req.params;
     const meta = await gdrive.getFileMetadata(fileId);
-    // SVG excluded even though it's technically 'image/*' -- it can embed
-    // <script>, and serving it same-origin with its own content-type lets
-    // that script run if the URL is ever opened directly (not just used as
-    // an <img src>, which wouldn't execute it). Checked here regardless of
-    // whatever mimetype was recorded at upload time, so this is the one
-    // place that actually decides what's safe to serve inline.
-    if (!meta.mimeType || !meta.mimeType.startsWith('image/') || meta.mimeType === 'image/svg+xml') {
+    const normalizedType = String(meta.mimeType || '').split(';')[0].trim().toLowerCase();
+    if (!SAFE_IMAGE_MIME_TYPES.has(normalizedType)) {
       return res.status(400).json({ error: 'This endpoint only serves image files' });
     }
-    res.setHeader('Content-Type', meta.mimeType);
+    res.setHeader('Content-Type', normalizedType);
+    // Defense in depth alongside the allowlist above -- stops the browser
+    // from ever re-interpreting the served bytes as something other than
+    // the declared (now allowlisted) image type.
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'public, max-age=86400');
     const stream = await gdrive.getFileStream(fileId);
     stream.on('error', () => { if (!res.headersSent) res.status(500).end(); });
@@ -137,8 +153,10 @@ router.get('/gdrive/oauth-callback', oauthCallbackHandler);
 
 // POST /api/gdrive/disconnect — remove the stored connection (admin only)
 router.post('/gdrive/disconnect', requireAuth, requireRole('admin'), async (req, res) => {
-  await gdrive.clearConnection();
-  res.json({ success: true });
+  try {
+    await gdrive.clearConnection();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/gdrive/share-root — one-time (idempotent) setup: makes the root
@@ -163,36 +181,38 @@ router.post('/gdrive/share-root', requireAuth, requireRole('admin'), async (req,
 // Google Drive, now that Drive is the primary storage backend. Runs here
 // (not as a local script) because it needs the Vercel-only Drive env vars.
 router.post('/gdrive/migrate-legacy', requireAuth, requireRole('admin'), async (req, res) => {
-  const storage = require('../services/storage');
-  const caseFileStorage = require('../services/caseFileStorage');
-  if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
+  try {
+    const storage = require('../services/storage');
+    const caseFileStorage = require('../services/caseFileStorage');
+    if (!(await gdrive.isConnected())) return res.status(503).json({ error: 'Google Drive غير متصل' });
 
-  const { data: rows, error } = await getSupabase().from('case_documents')
-    .select('id, case_id, original_name, mime_type, storage_key')
-    .neq('storage_provider', 'google_drive')
-    .not('storage_key', 'is', null);
-  if (error) return res.status(500).json({ error: error.message });
+    const { data: rows, error } = await getSupabase().from('case_documents')
+      .select('id, case_id, original_name, mime_type, storage_key')
+      .neq('storage_provider', 'google_drive')
+      .not('storage_key', 'is', null);
+    if (error) return res.status(500).json({ error: error.message });
 
-  const results = [];
-  for (const row of rows || []) {
-    try {
-      const sup = getSupabase();
-      const [bucket, ...pathParts] = row.storage_key.split('/');
-      const { data: blob, error: dlErr } = await sup.storage.from(bucket).download(pathParts.join('/'));
-      if (dlErr) throw dlErr;
-      const buffer = Buffer.from(await blob.arrayBuffer());
+    const results = [];
+    for (const row of rows || []) {
+      try {
+        const sup = getSupabase();
+        const [bucket, ...pathParts] = row.storage_key.split('/');
+        const { data: blob, error: dlErr } = await sup.storage.from(bucket).download(pathParts.join('/'));
+        if (dlErr) throw dlErr;
+        const buffer = Buffer.from(await blob.arrayBuffer());
 
-      const driveFields = await caseFileStorage.saveCaseFile({
-        caseId: row.case_id, buffer, fileName: row.original_name, mimeType: row.mime_type, category: 'attachments',
-      });
-      await sup.from('case_documents').update({ ...driveFields, url: driveFields.file_path }).eq('id', row.id);
-      await storage.deleteByKey(row.storage_key).catch(() => {});
-      results.push({ id: row.id, original_name: row.original_name, success: true });
-    } catch (e) {
-      results.push({ id: row.id, original_name: row.original_name, success: false, error: e.message });
+        const driveFields = await caseFileStorage.saveCaseFile({
+          caseId: row.case_id, buffer, fileName: row.original_name, mimeType: row.mime_type, category: 'attachments',
+        });
+        await sup.from('case_documents').update({ ...driveFields, url: driveFields.file_path }).eq('id', row.id);
+        await storage.deleteByKey(row.storage_key).catch(() => {});
+        results.push({ id: row.id, original_name: row.original_name, success: true });
+      } catch (e) {
+        results.push({ id: row.id, original_name: row.original_name, success: false, error: e.message });
+      }
     }
-  }
-  res.json({ success: true, migrated: results.filter(r => r.success).length, failed: results.filter(r => !r.success).length, results });
+    res.json({ success: true, migrated: results.filter(r => r.success).length, failed: results.filter(r => !r.success).length, results });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 const CATEGORY_SUBFOLDER = { attachments: 'Attachments', incoming: 'Incoming', outgoing: 'Outgoing' };
@@ -200,6 +220,88 @@ const CATEGORY_SUBFOLDER = { attachments: 'Attachments', incoming: 'Incoming', o
 // route had no cap at all, letting any authenticated user open a resumable
 // session for an arbitrary declared size with no application-level limit.
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024 * 1024;
+
+// POST /api/gdrive/upload-file — receives the whole file directly (multer
+// disk storage, never buffered in memory), uploads it to Drive server-to-
+// server, deletes the local temp copy the moment Drive confirms success (or
+// on any failure), and registers it as a case_documents row. Exists because
+// having the BROWSER PUT chunks directly to Drive's own resumable endpoint
+// (the previous design) turned out to fail unpredictably for real senders --
+// confirmed live, a genuine upload attempt got a generic cross-origin
+// `net::ERR_FAILED` reaching googleapis.com straight from the browser, on a
+// session that a direct server-to-server PUT of the same bytes completed
+// instantly. This removes that dependency entirely: the browser only ever
+// has to reach our own domain (already proven reliable), never Google
+// directly. Safe on disk space -- confirmed VPS has 100+ GB free, and the
+// temp file is deleted within moments of the Drive upload finishing either
+// way.
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const crypto = require('crypto');
+const UPLOAD_TMP_DIR = '/tmp/foia-uploads';
+fs.mkdirSync(UPLOAD_TMP_DIR, { recursive: true });
+const uploadToDisk = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOAD_TMP_DIR),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}`),
+  }),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+});
+
+router.post('/gdrive/upload-file', requireAuth, uploadToDisk.single('file'), async (req, res) => {
+  const tempPath = req.file && req.file.path;
+  const cleanup = () => { if (tempPath) fs.unlink(tempPath, () => {}); };
+  try {
+    const { case_id, file_type, description, category } = req.body;
+    const original_name = req.body.original_name || (req.file && req.file.originalname);
+    if (!case_id || !req.file) { cleanup(); return res.status(400).json({ error: 'case_id والملف مطلوبان' }); }
+    if (!(await assertCaseAccess(req, res, parseInt(case_id)))) { cleanup(); return; }
+    if (!(await gdrive.isConnected())) { cleanup(); return res.status(503).json({ error: 'Google Drive غير متصل' }); }
+
+    const sup = getSupabase();
+    const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[category] || 'Attachments');
+    const meta = await gdrive.uploadFileFromPath(tempPath, original_name, req.file.mimetype, folderId, req.file.size);
+    cleanup(); // Drive has confirmed the upload (or already had this exact file) -- the local copy has no reason to exist anymore.
+
+    const { data: existingByDrive } = await sup.from('case_documents').select('id').eq('case_id', parseInt(case_id)).eq('drive_file_id', meta.id).maybeSingle();
+    if (existingByDrive) return res.status(200).json({ success: true, data: { ...existingByDrive, duplicate: true } });
+
+    const insertData = {
+      case_id: parseInt(case_id),
+      filename: meta.name, original_name: original_name || meta.name,
+      mime_type: meta.mimeType, size: parseInt(meta.size) || req.file.size,
+      file_type: file_type || 'document', description: description || '',
+      uploaded_by: req.user.id,
+      drive_file_id: meta.id, storage_provider: 'google_drive',
+      file_path: meta.webViewLink, url: meta.webViewLink,
+      file_hash: meta.md5Checksum || null,
+    };
+    let { data, error } = await sup.from('case_documents').insert(insertData).select().single();
+    while (error && /column .* does not exist|Could not find the '(\w+)' column/.test(error.message)) {
+      const m = error.message.match(/'(\w+)' column|column "(\w+)"/);
+      const badCol = m && (m[1] || m[2]);
+      if (!badCol || !(badCol in insertData)) break;
+      delete insertData[badCol];
+      ({ data, error } = await sup.from('case_documents').insert(insertData).select().single());
+    }
+    if (error) throw error;
+
+    try {
+      const recipients = await getCaseActivityRecipients(sup, parseInt(case_id), { excludeUserId: req.user?.id });
+      await notifyUsers(sup, recipients, {
+        type: 'document_uploaded', title: '📎 مستند جديد',
+        body: `${req.user?.name || 'أحد الموظفين'} رفع "${insertData.original_name}" على القضية`,
+        target_type: 'case', target_id: parseInt(case_id),
+      });
+    } catch (e) { console.error('[gdrive] upload-file notification failed:', e.message); }
+
+    res.status(201).json({ success: true, data });
+  } catch (err) {
+    cleanup();
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // POST /api/gdrive/upload-session — open a Drive resumable-upload session for
 // a large file. The browser then PUTs the bytes directly to the returned
@@ -240,7 +342,19 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
               resume_offset: parseInt(size), completed: true,
             });
           }
-          return res.json({ success: true, existing: true, resume_offset: parseInt(size), completed: true });
+          // Google reports this session as done, but no matching file actually
+          // exists in the case's folder -- confirmed live on a stale row left
+          // over from a much older attempt (a migrated/imported session row
+          // whose Drive session had long since expired, but whose *last known*
+          // state Google still echoes back as "completed" for a dead
+          // upload_id). Returning completed:true with neither a drive_file_id
+          // nor a session_url here left the client with nothing to act on at
+          // all -- `sessionData.existing && sessionData.drive_file_id` failed
+          // (no id), then `session_url ?? sessionUrl` was also empty, so it
+          // threw "couldn't start the upload session" for a file that was
+          // never actually uploaded. Treat this the same as an expired
+          // session: mark it and fall through to open a genuinely fresh one.
+          throw new Error('reported completed but file not found in folder');
         }
         // Keep the row fresh; report the resume offset.
         await sup.from('drive_upload_sessions')
@@ -252,8 +366,15 @@ router.post('/gdrive/upload-session', requireAuth, async (req, res) => {
           resume_offset: progress.offset, folder_id: folderId,
         });
       } catch (e) {
-        // Session expired or gone (404/410) — fall through and open a new one.
-        await sup.from('drive_upload_sessions').update({ status: 'expired' }).eq('id', existingSession.id).catch(() => {});
+        // Session expired or gone (404/410) — fall through and open a new
+        // one. Supabase's query builder only implements .then() (no
+        // .catch()/.finally()) -- chaining .catch() directly on it throws
+        // "not a function" instead of swallowing the error, turning every
+        // expired-session case into a hard 500 with the session never
+        // actually marked expired (so every retry hit the same dead end).
+        try {
+          await sup.from('drive_upload_sessions').update({ status: 'expired' }).eq('id', existingSession.id);
+        } catch (e2) { /* best-effort -- still falls through to open a new session below */ }
       }
     }
 
@@ -337,21 +458,23 @@ router.post('/gdrive/finalize', requireAuth, async (req, res) => {
     const sup = getSupabase();
 
     // If the browser didn't give us a drive_file_id (the final chunk of a
-    // resumable upload can legitimately answer 308 "resume incomplete"
-    // instead of the file metadata), resolve it ourselves: the file already
-    // landed in the case's Drive folder — find it by name + size and use it.
-    // This makes "upload finished but response lost" fully self-healing.
+    // resumable upload can legitimately answer 308 "resume incomplete", or its
+    // response may be unreadable due to Google's missing-CORS-header quirk on
+    // the last chunk), resolve it ourselves: the file already landed in the
+    // case's Drive folder — find it by name + size and use it. This makes
+    // "upload finished but response lost" fully self-healing.
     const folderId = await gdrive.ensureSubfolder(parseInt(case_id), CATEGORY_SUBFOLDER[req.body.category] || 'Attachments');
     if (!drive_file_id) {
       // Google Drive has eventual-consistency indexing: right after the last
       // resumable chunk lands (308), the file may not be visible to queries
-      // for a couple of seconds. Retry the lookup a few times before giving
-      // up — otherwise the client re-uploads the WHOLE file needlessly.
-      let existing = null;
-      for (let attempt = 0; attempt < 3 && !existing; attempt++) {
-        if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
-        existing = await gdrive.findExistingFile(folderId, original_name, req.body.size);
-      }
+      // for well over 10 seconds on occasion (confirmed live on a multi-GB
+      // transfer) -- this used to only retry for ~3s total (3 attempts, 1.5s
+      // apart), which was nowhere near enough margin and produced a false
+      // "file not found" (surfacing to the user as a visible retry/failure
+      // cycle) for a file that was actually sitting in Drive the whole time.
+      // Mirrors the same ~40s-patience fix already applied to the public
+      // FileFetch finalize handler.
+      const existing = await gdrive.findExistingFileRetrying(folderId, original_name, req.body.size);
       if (!existing) {
         return res.status(404).json({ error: 'تعذر العثور على الملف المرفوع على Google Drive — حاول مرة أخرى' });
       }
@@ -472,6 +595,7 @@ router.post('/gdrive/link', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'case_id, file_id, file_name مطلوبون' });
     }
     if (!(await assertCaseAccess(req, res, parseInt(case_id)))) return;
+    if (web_link && !isSafeLinkUrl(web_link)) return res.status(400).json({ error: 'رابط غير صالح -- يجب أن يبدأ بـ http:// أو https://' });
 
     const result = await gdrive.linkToCase(
       parseInt(case_id), file_id, file_name,
@@ -566,7 +690,7 @@ router.delete('/gdrive/file/:id', requireAuth, async (req, res) => {
     const sup = getSupabase();
     const { data: doc } = await sup.from('case_documents').select('case_id').eq('id', parseInt(req.params.id)).maybeSingle();
     if (doc && !(await assertCaseAccess(req, res, doc.case_id))) return;
-    const { error } = await sup.from('case_documents').delete().eq('id', parseInt(req.params.id)).eq('file_type', 'gdrive_link');
+    const { error } = await trash.softDelete(sup, { table: 'case_documents', id: parseInt(req.params.id), userId: req.user?.id, extraFilters: { file_type: 'gdrive_link' } });
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -586,6 +710,20 @@ router.delete('/gdrive/folder/:caseId', requireAuth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Multer errors (e.g. LIMIT_FILE_SIZE from /gdrive/upload-file) throw before
+// the route handler's own try/catch ever runs -- without this, an oversized
+// file crashed straight to an HTML error page instead of clean JSON (the
+// same bug class already fixed elsewhere in this codebase, e.g. forum.js).
+router.use((err, req, res, next) => {
+  if (err && err.name === 'MulterError') {
+    const message = err.code === 'LIMIT_FILE_SIZE' ? `الملف أكبر من الحد المسموح (${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024 / 1024)} جيجابايت)`
+      : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE' ? 'عدد الملفات أكبر من الحد المسموح'
+      : err.message;
+    return res.status(400).json({ error: message });
+  }
+  next(err);
 });
 
 module.exports = router;

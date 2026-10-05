@@ -18,9 +18,33 @@
     "logout": "تسجيل خروج",
     "member": "عضو"
   },
+  "globalSearch": {
+    "placeholder": "بحث في النظام...",
+    "searching": "جارِ البحث...",
+    "noResults": "لا توجد نتائج",
+    "noSubject": "(بدون موضوع)",
+    "unlinkedDocument": "غير مرتبط بقضية",
+    "sections": {
+      "cases": "القضايا",
+      "documents": "الملفات",
+      "communications": "المراسلات",
+      "agencies": "الجهات"
+    }
+  },
   "pageMeta": {
     "dashboard": { "eyebrow": "نظرة عامة", "title": "لوحة التحكم" },
     "intake": { "eyebrow": "أدوات ذكية", "title": "استقبال ذكي" },
+    "aiAssistantChat": { "eyebrow": "أدوات ذكية", "title": "المساعد الذكي" },
+    "aiAssistant": { "eyebrow": "أدوات ذكية", "title": "الربط الذكي" },
+    "inbox": { "eyebrow": "المراسلات", "title": "صندوق البريد" },
+    "forum": { "eyebrow": "المراسلات", "title": "المنتدى العام" },
+    "messages": { "eyebrow": "التواصل الداخلي", "title": "الرسائل الداخلية" },
+    "permissions": { "eyebrow": "إدارة", "title": "فريق العمل" },
+    "gdrive": { "eyebrow": "التخزين", "title": "Google Drive" },
+    "phoneLogs": { "eyebrow": "سجلات", "title": "سجل المكالمات" },
+    "mailLogs": { "eyebrow": "سجلات", "title": "البريد الفعلي" },
+    "trash": { "eyebrow": "النظام", "title": "سلة المحذوفات" },
+    "aiTasks": { "eyebrow": "ذكاء اصطناعي", "title": "مهام المساعد الدورية" },
     "caseDetail": { "eyebrow": "القضايا", "title": "تفاصيل القضية" },
     "cases": { "eyebrow": "إدارة", "title": "القضايا" },
     "pipeline": { "eyebrow": "سير العمل", "title": "خط الإنتاج" },

@@ -1,13 +1,14 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, Calendar, MapPin, Shield, Users, FileText, Building2, Activity, CheckCircle, UserPlus, Package, XCircle, ArrowUpCircle, Send, Upload, Eye, Trash2, AlertTriangle, RotateCcw } from 'lucide-react';
+import { ArrowRight, Calendar, MapPin, Shield, Users, FileText, Building2, Activity, CheckCircle, UserPlus, Package, XCircle, ArrowUpCircle, Send, Upload, Eye, Trash2, AlertTriangle, RotateCcw, Image as ImageIcon, Camera, X } from 'lucide-react';
 import { useCaseContext } from '../context/CaseContext';
 import AppBadge from '../../../components/ds/AppBadge';
 import { EvidenceStageBadge } from './EvidenceStageBadge';
 import { getApiBase, getCurrentUser } from '../../../api';
 const API = getApiBase();
-import { memo, useState } from 'react';
+import { memo, useState, useRef, useEffect } from 'react';
 import Button from '../../../components/ui/Button';
 import Tabs from '../../../components/ui/Tabs';
+import { formatArabicDate, formatArabicDateTime } from '../../../utils/formatDate';
 const tok = () => localStorage.getItem('foia_token');
 const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
 
@@ -33,18 +34,59 @@ export default memo(function CaseHeader() {
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferTo, setTransferTo] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const photoInputRef = useRef(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const titleInputRef = useRef(null);
+
+  const startEditTitle = () => { setTitleDraft(c.title || ''); setEditingTitle(true); };
+  const saveTitle = async () => {
+    const next = titleDraft.trim();
+    setEditingTitle(false);
+    if (!next || next === c.title) return;
+    try {
+      const r = await fetch(`${API}/cases/${caseId}`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ title: next }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { alert('❌ فشل تعديل العنوان: ' + (d.error || '')); return; }
+      refetch?.();
+    } catch (e) { alert('❌ فشل تعديل العنوان: ' + e.message); }
+  };
+
+  useEffect(() => { if (editingTitle) titleInputRef.current?.focus(); }, [editingTitle]);
+
+  const uploadPhoto = async (file) => {
+    if (!file) return;
+    setUploadingPhoto(true);
+    try {
+      const fd = new FormData();
+      fd.append('photo', file);
+      const r = await fetch(`${API}/cases/${caseId}/photo`, { method: 'POST', headers: { Authorization: `Bearer ${tok()}` }, body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { alert('❌ ' + (d.error || 'فشل رفع الصورة')); setUploadingPhoto(false); return; }
+      refetch?.(true);
+    } catch (e) { alert('❌ ' + e.message); }
+    setUploadingPhoto(false);
+  };
+
+  const removePhoto = async () => {
+    if (!window.confirm('هل تريد إزالة صورة القضية؟')) return;
+    setUploadingPhoto(true);
+    try {
+      const r = await fetch(`${API}/cases/${caseId}/photo`, { method: 'DELETE', headers: hdrs() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { alert('❌ ' + (d.error || 'فشل إزالة الصورة')); setUploadingPhoto(false); return; }
+      refetch?.(true);
+    } catch (e) { alert('❌ ' + e.message); }
+    setUploadingPhoto(false);
+  };
 
   const stageInfo = INVESTIGATION_V2 && c.investigation_stage
     ? STAGE_LABELS[c.investigation_stage] || { label: c.investigation_stage, variant: 'neutral' }
     : { label: c.status === 'open' ? 'جمع المعلومات' : c.status === 'in_progress' ? 'تحليل الأدلة' : 'إكتمل', variant: 'neutral' };
 
-  const received = checklist?.filter(i => i.receipt_status === 'received' || i.status === 'received').length || 0;
-  const total = checklist?.length || 0;
-  const pendingReqs = (requests || []).filter(r => r.status === 'sent' || !r.status).length;
   const docCount = documents?.length || 0;
   const teamCount = team?.length || 0;
-  const blockedIRs = checklist?.filter(i => i.evidence_stage === 'blocked' || i.status === 'blocked').length || 0;
-  const verificationsPending = checklist?.filter(i => i.evidence_stage === 'received' || i.evidence_stage === 'evidence_received').length || 0;
   const todayStr = new Date().toISOString().split('T')[0];
   const overdueList = (requests || []).filter(r => r.expected_response_date && r.expected_response_date < todayStr && !r.response_date);
   const unacknowledgedOverdue = overdueList.filter(r => !r.overdue_ack_by);
@@ -73,16 +115,24 @@ export default memo(function CaseHeader() {
 
   const handleTransfer = async () => {
     if (!transferTo) return;
-    await fetch(`${API}/cases/${caseId}/transfer`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ owner_id: parseInt(transferTo) }) });
-    setTransferTo('');
-    setShowTransfer(false);
-    refetch?.();
+    try {
+      const r = await fetch(`${API}/cases/${caseId}/transfer`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ owner_id: parseInt(transferTo) }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { alert('❌ فشل نقل ملكية القضية: ' + (d.error || '')); return; }
+      setTransferTo('');
+      setShowTransfer(false);
+      refetch?.();
+    } catch (e) { alert('❌ فشل نقل ملكية القضية: ' + e.message); }
   };
 
   const handleClose = async () => {
     if (!window.confirm(`هل تريد إغلاق القضية "${c.title}"؟`)) return;
-    await fetch(`${API}/cases/${caseId}`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ status: 'closed' }) });
-    refetch?.();
+    try {
+      const r = await fetch(`${API}/cases/${caseId}`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ status: 'closed' }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { alert('❌ فشل إغلاق القضية: ' + (d.error || '')); return; }
+      refetch?.();
+    } catch (e) { alert('❌ فشل إغلاق القضية: ' + e.message); }
   };
 
   // Reopening returns the case to active work (in_progress), not back to
@@ -91,17 +141,21 @@ export default memo(function CaseHeader() {
   // when reopened.
   const handleReopen = async () => {
     if (!window.confirm(`هل تريد استعادة القضية "${c.title}" وإرجاعها للعمل؟`)) return;
-    await fetch(`${API}/cases/${caseId}`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ status: 'in_progress' }) });
-    refetch?.();
+    try {
+      const r = await fetch(`${API}/cases/${caseId}`, { method: 'PUT', headers: hdrs(), body: JSON.stringify({ status: 'in_progress' }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) { alert('❌ فشل استعادة القضية: ' + (d.error || '')); return; }
+      refetch?.();
+    } catch (e) { alert('❌ فشل استعادة القضية: ' + e.message); }
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(`⚠️ حذف نهائي — هل أنت متأكد من حذف القضية "${c.title}" بكل بياناتها (المستندات، المراسلات، الفريق)؟ لا يمكن التراجع عن هذا الإجراء.`)) return;
+    if (!window.confirm(`سيتم نقل القضية "${c.title}" وكل بياناتها (المستندات، المراسلات، الفريق) إلى سلة المحذوفات -- يمكن استعادتها لاحقًا من هناك. هل تريد المتابعة؟`)) return;
     setDeleting(true);
     try {
       const r = await fetch(`${API}/cases/${caseId}`, { method: 'DELETE', headers: hdrs() });
       const d = await r.json();
-      if (d.success !== false) navigate('/cases');
+      if (r.ok && d.success !== false) navigate('/cases');
       else alert('❌ فشل حذف القضية: ' + (d.error || ''));
     } catch (e) {
       alert('❌ فشل حذف القضية: ' + e.message);
@@ -131,7 +185,7 @@ export default memo(function CaseHeader() {
             <Button variant="ghost" size="sm" title="إغلاق القضية" onClick={handleClose}><XCircle className="w-3.5 h-3.5" style={{ color: 'var(--ds-danger)' }} /></Button>
           )}
           {canDelete && (
-            <Button variant="ghost" size="sm" title="حذف القضية نهائيًا" onClick={handleDelete} disabled={deleting}><Trash2 className="w-3.5 h-3.5" style={{ color: 'var(--ds-danger)' }} /></Button>
+            <Button variant="ghost" size="sm" title="نقل القضية لسلة المحذوفات" onClick={handleDelete} disabled={deleting}><Trash2 className="w-3.5 h-3.5" style={{ color: 'var(--ds-danger)' }} /></Button>
           )}
         </div>
       </div>
@@ -151,40 +205,67 @@ export default memo(function CaseHeader() {
         </div>
       )}
 
-      {/* Hero: title + badges + meta */}
-      <div className="px-5 pt-4 pb-3">
-        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-          <h1 className="text-xl font-bold truncate" style={{ color: 'var(--ds-text-primary)' }}>{c.title}</h1>
-          <AppBadge variant={stageInfo.variant}>{stageInfo.label}</AppBadge>
-          <AppBadge variant={pBadge}>{c.priority === 'urgent' ? 'عاجل جدًا' : c.priority === 'high' ? 'عاجل' : c.priority === 'medium' ? 'متوسط' : 'عادي'}</AppBadge>
-          <span className="px-2 py-0.5 rounded-full text-[11px] font-medium"
-            style={{ background: caseClassification.color + '15', color: caseClassification.color }}>
-            🏷️ {caseClassification.name}
-          </span>
+      {/* Hero: case photo + title/badges/meta side by side -- replaces the
+          old separate title block + KPI-numbers row below it. Those numbers
+          (السجلات/طلبات/توثيق/مسدود/متأخر الرد) duplicated counts already
+          shown properly elsewhere (checklist/requests/agencies tabs) and sat
+          on a case that's brand new showing an unhelpful wall of zeros; this
+          reclaims that same vertical space for the case's own photo instead,
+          without growing the header's overall footprint. */}
+      <div className="px-5 pt-4 pb-3 flex items-center gap-4">
+        <input ref={photoInputRef} type="file" accept="image/*" hidden
+          onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadPhoto(f); }} />
+        <div className="relative shrink-0 rounded-xl overflow-hidden group"
+          style={{ width: 96, height: 96, background: 'var(--ds-bg-tertiary)', border: '1px solid var(--ds-border)' }}>
+          <button type="button" onClick={() => photoInputRef.current?.click()} disabled={uploadingPhoto}
+            className="w-full h-full block" title="تغيير صورة القضية" aria-label="تغيير صورة القضية">
+            {c.photo_url ? (
+              <img src={c.photo_url} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center">
+                <ImageIcon className="w-7 h-7" style={{ color: 'var(--ds-text-muted)' }} />
+              </div>
+            )}
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 ds-transition-colors"
+              style={{ background: 'rgba(0,0,0,0.45)' }}>
+              <Camera className="w-5 h-5 text-white" />
+            </div>
+          </button>
+          {c.photo_url && (
+            <button type="button" onClick={removePhoto} disabled={uploadingPhoto} title="إزالة صورة القضية" aria-label="إزالة صورة القضية"
+              className="absolute top-1 opacity-0 group-hover:opacity-100 ds-transition-colors rounded-full flex items-center justify-center"
+              style={{ insetInlineEnd: 4, width: 18, height: 18, background: 'rgba(0,0,0,0.6)' }}>
+              <X className="w-3 h-3 text-white" />
+            </button>
+          )}
         </div>
-        <div className="flex items-center gap-3 text-xs flex-wrap" style={{ color: 'var(--ds-text-muted)' }}>
-          <span>#{c.id}</span>
-          {c.owner_name && <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" />{c.owner_name}</span>}
-          <span className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" />{teamCount} أعضاء</span>
-          <span className="flex items-center gap-1"><FileText className="w-3.5 h-3.5" />{docCount} ملف</span>
-          <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" />{new Date(c.created_at).toLocaleDateString('ar-SA')}</span>
-        </div>
-      </div>
 
-      {/* KPI row — its own visual layer, separated by a divider */}
-      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 px-5 py-3" style={{ borderTop: '1px solid var(--ds-border)', background: 'var(--ds-bg-tertiary)' }}>
-        {[
-          { label: 'السجلات', value: `${received}/${total}`, color: total > 0 && received === total ? 'var(--ds-success)' : 'var(--ds-warning)' },
-          { label: 'طلبات', value: pendingReqs, color: pendingReqs > 0 ? 'var(--ds-warning)' : 'var(--ds-success)' },
-          { label: 'توثيق', value: verificationsPending, color: verificationsPending > 0 ? '#8b5cf6' : 'var(--ds-success)' },
-          { label: 'مسدود', value: blockedIRs, color: blockedIRs > 0 ? 'var(--ds-danger)' : 'var(--ds-success)' },
-          { label: 'متأخر الرد', value: overdueReqs, color: overdueReqs > 0 ? 'var(--ds-danger)' : 'var(--ds-success)' },
-        ].map(k => (
-          <div key={k.label} className="text-center rounded-lg py-1.5" style={{ background: 'var(--ds-bg-secondary)' }}>
-            <div className="text-lg font-bold" style={{ color: k.color }}>{k.value}</div>
-            <div className="text-[9px]" style={{ color: 'var(--ds-text-muted)' }}>{k.label}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+            {editingTitle ? (
+              <input ref={titleInputRef} value={titleDraft} onChange={e => setTitleDraft(e.target.value)}
+                onBlur={saveTitle}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveTitle(); } else if (e.key === 'Escape') { e.preventDefault(); setEditingTitle(false); } }}
+                className="text-xl font-bold flex-1 min-w-0 px-1 -mx-1 rounded"
+                style={{ color: 'var(--ds-text-primary)', background: 'var(--ds-bg-primary)', border: '1px solid var(--ds-accent)' }} />
+            ) : (
+              <h1 onClick={startEditTitle} title="اضغط للتعديل" className="text-xl font-bold truncate cursor-pointer" style={{ color: 'var(--ds-text-primary)' }}>{c.title}</h1>
+            )}
+            <AppBadge variant={stageInfo.variant}>{stageInfo.label}</AppBadge>
+            <AppBadge variant={pBadge}>{c.priority === 'urgent' ? 'عاجل جدًا' : c.priority === 'high' ? 'عاجل' : c.priority === 'medium' ? 'متوسط' : 'عادي'}</AppBadge>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-medium"
+              style={{ background: caseClassification.color + '15', color: caseClassification.color }}>
+              🏷️ {caseClassification.name}
+            </span>
           </div>
-        ))}
+          <div className="flex items-center gap-3 text-xs flex-wrap" style={{ color: 'var(--ds-text-muted)' }}>
+            <span>#{c.id}</span>
+            {c.owner_name && <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" />{c.owner_name}</span>}
+            <span className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" />{teamCount} أعضاء</span>
+            <span className="flex items-center gap-1"><FileText className="w-3.5 h-3.5" />{docCount} ملف</span>
+            <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" />{formatArabicDate(c.created_at)}</span>
+          </div>
+        </div>
       </div>
 
       {/* Overdue responses — always visible regardless of active tab, so a
@@ -222,7 +303,7 @@ export default memo(function CaseHeader() {
                           acknowledgment date right on the card too. */}
                       {r.overdue_ack_at && (
                         <span className="block mt-0.5" style={{ color: 'var(--ds-text-muted)' }}>
-                          {new Date(r.overdue_ack_at).toLocaleDateString('ar-EG')} — {new Date(r.overdue_ack_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                          {formatArabicDateTime(r.overdue_ack_at)}
                         </span>
                       )}
                     </div>

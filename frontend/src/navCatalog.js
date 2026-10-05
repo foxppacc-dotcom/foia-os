@@ -6,7 +6,7 @@
 // drive per-role visibility, this drives path/label/icon/order/placement.
 import {
   FolderOpen, LayoutDashboard, GitBranch, Building2, Sparkles, Users, Mail,
-  Timer, Key, Cloud, UserCog, Phone, MailPlus, AtSign, ListChecks, Palette, Megaphone, Bot,
+  Timer, Key, Cloud, UserCog, Phone, MailPlus, AtSign, ListChecks, Palette, Megaphone, Bot, Trash2, MessagesSquare, ClipboardCheck,
 } from 'lucide-react';
 import FoxBotIcon from './components/icons/FoxBotIcon';
 
@@ -15,6 +15,7 @@ export const NAV_CATALOG = [
   { key: 'intake', path: '/intake', label: 'استقبال ذكي', icon: Sparkles, roles: ['admin', 'manager', 'member'] },
   { key: 'ai_assistant_chat', path: '/ai-assistant/chat', label: 'المساعد الذكي', icon: FoxBotIcon, roles: ['admin', 'manager', 'member'] },
   { key: 'ai_assistant', path: '/ai-assistant', label: 'الربط الذكي', icon: Bot, roles: ['admin'] },
+  { key: 'ai_tasks', path: '/ai-tasks', label: 'مهام المساعد', icon: ClipboardCheck, roles: ['admin'] },
   { key: 'cases', path: '/cases', label: 'القضايا', icon: FolderOpen, roles: ['admin', 'manager', 'member'] },
   { key: 'pipeline', path: '/pipeline', label: 'خط الإنتاج', icon: GitBranch, roles: ['admin', 'manager', 'member'] },
   { key: 'production', path: '/production', label: 'مونتاج', icon: Timer, roles: ['admin', 'manager', 'member'] },
@@ -22,6 +23,7 @@ export const NAV_CATALOG = [
   { key: 'portals', path: '/portals', label: 'بوابات', icon: Key, roles: ['admin', 'manager'] },
   { key: 'inbox', path: '/inbox', label: 'صندوق البريد', icon: Mail, roles: ['admin', 'manager', 'member'] },
   { key: 'forum', path: '/forum', label: 'المنتدى العام', icon: Megaphone, roles: ['admin', 'manager', 'member'] },
+  { key: 'messages', path: '/messages', label: 'الرسائل الداخلية', icon: MessagesSquare, roles: ['admin', 'manager', 'member'] },
   { key: 'email_accounts', path: '/email-accounts', label: 'إيميلات', icon: AtSign, roles: ['admin', 'manager', 'member'] },
   { key: 'teams', path: '/teams', label: 'الفرق', icon: Users, roles: ['admin'] },
   { key: 'permissions', path: '/permissions', label: 'فريق العمل', icon: UserCog, roles: ['admin', 'manager'] },
@@ -30,6 +32,7 @@ export const NAV_CATALOG = [
   { key: 'mail_logs', path: '/mail-logs', label: 'البريد الفعلي', icon: MailPlus, roles: ['admin', 'manager', 'member'] },
   { key: 'production_lists', path: '/production-lists', label: 'إدارة قوائم الإنتاج', icon: ListChecks, roles: ['admin', 'manager'] },
   { key: 'theme_settings', path: '/theme-settings', label: 'الألوان والثيم', icon: Palette, roles: ['admin', 'manager'] },
+  { key: 'trash', path: '/trash', label: 'سلة المحذوفات', icon: Trash2, roles: ['admin'] },
 ];
 
 export const getNavItem = (key) => NAV_CATALOG.find(i => i.key === key);

@@ -155,10 +155,23 @@ async function autoClassifyCommunication(sup, commId, listIdByName) {
   const listId = rule ? listIdByName[rule.name_en] : null;
 
   if (listId && comm.case_id) {
-    // Update the most recent pending request for this case
-    const { data: request } = await sup.from('requests')
-      .select('id').eq('case_id', comm.case_id).eq('status', 'pending')
-      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    // Prefer the SPECIFIC request mailPoller.js already resolved this reply
+    // to (comm.request_id, via agency-email/reference-number matching) --
+    // falling back to "most recent pending request on the case" only when
+    // that wasn't resolved (e.g. a manually-linked/standalone communication
+    // with no request_id). Using the fallback unconditionally previously
+    // meant a case with two+ agencies' requests pending could have THIS
+    // reply's classification applied to a completely different, still
+    // genuinely-unanswered request just because it happened to be newer.
+    let request = null;
+    if (comm.request_id) {
+      ({ data: request } = await sup.from('requests').select('id').eq('id', comm.request_id).maybeSingle());
+    }
+    if (!request) {
+      ({ data: request } = await sup.from('requests')
+        .select('id').eq('case_id', comm.case_id).eq('status', 'pending')
+        .order('created_at', { ascending: false }).limit(1).maybeSingle());
+    }
 
     if (request) {
       await sup.from('requests').update({
@@ -184,64 +197,68 @@ async function autoClassifyCommunication(sup, commId, listIdByName) {
 
 // POST /api/classifier/analyze — classify a text without saving
 router.post('/classifier/analyze', requireAuth, async (req, res) => {
-  const { text } = req.body;
-  if (!text) return res.status(400).json({ error: 'text مطلوب' });
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'text مطلوب' });
 
-  const sup = getSupabase();
-  const rule = classifyRule(text);
-  const listIdByName = rule ? await getListIdByName(sup) : {};
-  const listId = rule ? listIdByName[rule.name_en] : null;
-  const { data: list } = listId
-    ? await sup.from('pipeline_lists').select('id, name_ar, name_en, color').eq('id', listId).maybeSingle()
-    : { data: null };
+    const sup = getSupabase();
+    const rule = classifyRule(text);
+    const listIdByName = rule ? await getListIdByName(sup) : {};
+    const listId = rule ? listIdByName[rule.name_en] : null;
+    const { data: list } = listId
+      ? await sup.from('pipeline_lists').select('id, name_ar, name_en, color').eq('id', listId).maybeSingle()
+      : { data: null };
 
-  res.json({
-    success: true,
-    classification: list || null,
-    matches: rule ? rule.keywords.filter(kw =>
-      (text.toLowerCase().includes(kw.toLowerCase()))
-    ) : []
-  });
+    res.json({
+      success: true,
+      classification: list || null,
+      matches: rule ? rule.keywords.filter(kw =>
+        (text.toLowerCase().includes(kw.toLowerCase()))
+      ) : []
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/classifier/auto-classify — run on inbox
 router.post('/classifier/auto-classify', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
-  const sup = getSupabase();
-  const { case_id } = req.body;
-  // requireRole('admin','manager') only confirms the ROLE may classify at
-  // all -- if 'manager' is ever restricted to specific cases via
-  // role_permissions, this still let it write to any case by id, unlike
-  // every other case-scoped mutation in this codebase.
-  if (case_id && !(await canAccessCase(sup, req.user, parseInt(case_id)))) {
-    return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
-  }
+  try {
+    const sup = getSupabase();
+    const { case_id } = req.body;
+    // requireRole('admin','manager') only confirms the ROLE may classify at
+    // all -- if 'manager' is ever restricted to specific cases via
+    // role_permissions, this still let it write to any case by id, unlike
+    // every other case-scoped mutation in this codebase.
+    if (case_id && !(await canAccessCase(sup, req.user, parseInt(case_id)))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+    }
 
-  let query = sup.from('communications').select('id, case_id, subject, body')
-    .eq('direction', 'inbound').eq('type', 'email').order('created_at', { ascending: false });
-  query = case_id ? query.eq('case_id', parseInt(case_id)) : query.not('case_id', 'is', null);
+    let query = sup.from('communications').select('id, case_id, subject, body')
+      .eq('direction', 'inbound').eq('type', 'email').order('created_at', { ascending: false });
+    query = case_id ? query.eq('case_id', parseInt(case_id)) : query.not('case_id', 'is', null);
 
-  const { data: communications, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+    const { data: communications, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
 
-  const listIdByName = await getListIdByName(sup);
-  let classified = 0;
-  let unclassified = 0;
+    const listIdByName = await getListIdByName(sup);
+    let classified = 0;
+    let unclassified = 0;
 
-  for (const comm of communications || []) {
-    const result = await autoClassifyCommunication(sup, comm.id, listIdByName);
-    if (result) classified++;
-    else unclassified++;
-  }
+    for (const comm of communications || []) {
+      const result = await autoClassifyCommunication(sup, comm.id, listIdByName);
+      if (result) classified++;
+      else unclassified++;
+    }
 
-  res.json({
-    success: true,
-    total_checked: (communications || []).length,
-    classified,
-    unclassified,
-    message: classified > 0
-      ? `✅ تم تصنيف ${classified} رد من ${(communications || []).length}`
-      : 'ℹ️ لم يتم العثور على ردود قابلة للتصنيف'
-  });
+    res.json({
+      success: true,
+      total_checked: (communications || []).length,
+      classified,
+      unclassified,
+      message: classified > 0
+        ? `✅ تم تصنيف ${classified} رد من ${(communications || []).length}`
+        : 'ℹ️ لم يتم العثور على ردود قابلة للتصنيف'
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/classifier/auto-fetch-and-classify — poll IMAP (via the single

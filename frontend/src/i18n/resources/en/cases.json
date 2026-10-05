@@ -39,7 +39,8 @@
     "selected": "✅ Selected",
     "priorityLabel": "Priority",
     "cancel": "Cancel",
-    "create": "✨ Create Case"
+    "create": "✨ Create Case",
+    "creating": "Saving..."
   },
   "table": {
     "id": "#", "titleClassification": "📌 Title / Classification", "agencies": "🏛️ Agencies",
@@ -57,7 +58,7 @@
     "uploadFailedGeneric": "Failed to upload file",
     "uploadThrew": "❌ Upload failed: {{message}}"
   },
-  "deleteConfirm": "🗑️ Are you sure you want to delete case #{{id}}?",
+  "deleteConfirm": "🗑️ Case #{{id}} will be moved to Trash -- you can restore it from there later. Continue?",
   "uploadSuccess": "✅ Imported {{count}} cases",
   "pagination": {
     "prev": "Previous", "next": "Next",

@@ -6,6 +6,9 @@ const { encrypt, decrypt } = require('../services/crypto');
 const emailService = require('../services/emailService');
 const { checkLock } = require('../services/emailAccountLock');
 const { canAccessCase } = require('../services/caseAccess');
+const { scopeEmailAccountsQuery, canAccessEmailAccount } = require('../services/emailAccountAccess');
+const trash = require('../services/trash');
+const { logActivity } = require('../services/activityLogger');
 
 /**
  * Real Email Engine for FOIA OS
@@ -16,13 +19,19 @@ const { canAccessCase } = require('../services/caseAccess');
  */
 
 // GET /api/email-accounts — list all (alias for frontend compat)
-router.get('/email-accounts', requireAuth, (req, res) => {
+// A role restricted to specific mailboxes (email_accounts.view_all = false)
+// only sees the accounts it's been explicitly assigned via
+// employee_email_accounts -- see services/emailAccountAccess.js. Unrestricted
+// roles (the default until an admin opts a role into this) see every
+// account exactly as before.
+router.get('/email-accounts', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  sup.from('email_accounts').select('id, email, name, provider, smtp_host, smtp_port, imap_host, imap_port, daily_limit, sent_today, is_active, created_at').order('created_at', { ascending: false })
-    .then(({ data, error }) => {
-      if (error) return res.status(500).json({ error: error.message });
-      res.json({ success: true, data: data || [] });
-    });
+  let query = sup.from('email_accounts').select('id, email, name, provider, smtp_host, smtp_port, imap_host, imap_port, daily_limit, sent_today, is_active, created_at').is('deleted_at', null).order('created_at', { ascending: false });
+  query = await scopeEmailAccountsQuery(sup, query, req.user);
+  if (!query) return res.json({ success: true, data: [] });
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true, data: data || [] });
 });
 
 // POST /api/email-accounts — add new (alias)
@@ -47,10 +56,14 @@ router.post('/email-accounts', requireAuth, requirePermission('email_accounts', 
 // GET /api/email/accounts — list all (no passwords)
 router.get('/accounts', requireAuth, async (req, res) => {
   const sup = getSupabase();
-  const { data: accounts, error } = await sup
+  let query = sup
     .from('email_accounts')
     .select('id, email, name, provider, smtp_host, smtp_port, imap_host, imap_port, daily_limit, sent_today, is_active, created_at')
+    .is('deleted_at', null)
     .order('created_at', { ascending: false });
+  query = await scopeEmailAccountsQuery(sup, query, req.user);
+  if (!query) return res.json({ success: true, data: [] });
+  const { data: accounts, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true, data: accounts || [] });
 });
@@ -70,7 +83,7 @@ router.post('/accounts', requireAuth, requireRole('admin'), async (req, res) => 
       return res.status(400).json({ error: 'الإيميل والاسم مطلوبان' });
     }
 
-    const { data: existing } = await sup.from('email_accounts').select('id').eq('email', email).maybeSingle();
+    const { data: existing } = await sup.from('email_accounts').select('id').eq('email', email).is('deleted_at', null).maybeSingle();
     if (existing) return res.status(409).json({ error: 'هذا الإيميل موجود مسبقاً' });
 
     const { data: created, error } = await sup.from('email_accounts').insert({
@@ -80,11 +93,11 @@ router.post('/accounts', requireAuth, requireRole('admin'), async (req, res) => 
       smtp_host: smtp_host || null,
       smtp_port: smtp_port || 587,
       smtp_user: smtp_user || email,
-      smtp_pass: smtp_pass || null,
+      smtp_pass: encrypt(smtp_pass),
       imap_host: imap_host || null,
       imap_port: imap_port || 993,
       imap_user: imap_user || email,
-      imap_pass: imap_pass || null,
+      imap_pass: encrypt(imap_pass),
       daily_limit: daily_limit || 50,
       sent_today: 0,
       is_active: true
@@ -120,7 +133,11 @@ router.put('/accounts/:id', requireAuth, requireRole('admin'), async (req, res) 
     if (imap_host !== undefined) updates.imap_host = imap_host;
     if (imap_port !== undefined) updates.imap_port = imap_port;
     if (imap_user !== undefined) updates.imap_user = imap_user;
-    if (daily_limit !== undefined) updates.daily_limit = daily_limit;
+    // A null/zero/negative daily_limit would make emailService.js's
+    // `sent_today < daily_limit` check permanently false (JS/SQL coerce
+    // null to 0), silently blocking every future send from this account
+    // until an admin notices and fixes it manually.
+    if (daily_limit !== undefined && Number.isFinite(daily_limit) && daily_limit > 0) updates.daily_limit = daily_limit;
     if (is_active !== undefined) updates.is_active = is_active;
 
     const { error } = await sup.from('email_accounts').update(updates).eq('id', id);
@@ -152,7 +169,7 @@ router.put('/email-accounts/:id', requireAuth, requirePermission('email_accounts
     if (req.body.imap_host !== undefined) updates.imap_host = req.body.imap_host;
     if (req.body.imap_port !== undefined) updates.imap_port = req.body.imap_port;
     if (req.body.imap_user !== undefined) updates.imap_user = req.body.imap_user;
-    if (req.body.daily_limit !== undefined) updates.daily_limit = req.body.daily_limit;
+    if (req.body.daily_limit !== undefined && Number.isFinite(req.body.daily_limit) && req.body.daily_limit > 0) updates.daily_limit = req.body.daily_limit;
     if (req.body.is_active !== undefined) updates.is_active = req.body.is_active;
 
     const { error } = await sup.from('email_accounts').update(updates).eq('id', id);
@@ -167,7 +184,7 @@ router.put('/email-accounts/:id', requireAuth, requirePermission('email_accounts
 router.delete('/accounts/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   try {
-    const { error } = await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    const { error } = await trash.softDelete(sup, { table: 'email_accounts', id: parseInt(req.params.id), userId: req.user.id });
     if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true, message: '✅ تم حذف الحساب' });
   } catch (err) {
@@ -179,7 +196,7 @@ router.delete('/accounts/:id', requireAuth, requireRole('admin'), async (req, re
 router.delete('/email-accounts/:id', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   const sup = getSupabase();
   try {
-    const { error } = await sup.from('email_accounts').delete().eq('id', parseInt(req.params.id));
+    const { error } = await trash.softDelete(sup, { table: 'email_accounts', id: parseInt(req.params.id), userId: req.user.id });
     if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true, message: '✅ تم حذف الحساب' });
   } catch (err) {
@@ -187,14 +204,93 @@ router.delete('/email-accounts/:id', requireAuth, requirePermission('email_accou
   }
 });
 
+// ============ PER-EMPLOYEE MAILBOX ACCESS ============
+// Which specific employees may see/use a given account -- independent of
+// role. See services/emailAccountAccess.js for the view_all/restricted
+// scoping this feeds.
+
+// GET /api/email-accounts/:id/assignees
+// Deliberately requireRole('admin'), NOT requirePermission('email_accounts',
+// 'manage') -- 'manage'/'view_all' are independent, separately-grantable
+// checkboxes in the same Permissions-tab matrix (permissions.js), and a role
+// holding 'manage' for routine account administration (confirmed live:
+// 'manager' and a real custom role both already hold it in production)
+// could otherwise call POST below to assign ITSELF (or anyone) to any
+// mailbox, instantly bypassing whatever view_all=false restriction an admin
+// just set up for that very role. Assigning WHO gets mailbox access has to
+// stay strictly admin-only, independent of who holds 'manage'.
+router.get('/email-accounts/:id/assignees', requireAuth, requireRole('admin'), async (req, res) => {
+  const sup = getSupabase();
+  const { data: assignees } = await sup
+    .from('employee_email_accounts')
+    .select(`user_id, assigned_at, users!user_id!inner(id, name, email, role)`)
+    .eq('email_account_id', parseInt(req.params.id));
+
+  const mapped = (assignees || []).map(a => ({
+    user_id: a.user_id, assigned_at: a.assigned_at,
+    name: a.users?.name, email: a.users?.email, user_role: a.users?.role,
+  }));
+  res.json({ success: true, data: mapped });
+});
+
+// POST /api/email-accounts/:id/assignees — full-replace, same convention as
+// pipeline_lists' own assignees route (assignees.js).
+router.post('/email-accounts/:id/assignees', requireAuth, requireRole('admin'), async (req, res) => {
+  const sup = getSupabase();
+  const accountId = parseInt(req.params.id);
+  const { user_ids } = req.body;
+  if (!user_ids || !Array.isArray(user_ids)) return res.status(400).json({ error: 'user_ids array مطلوب' });
+
+  const { data: existing } = await sup.from('employee_email_accounts').select('user_id').eq('email_account_id', accountId);
+  const existingIds = (existing || []).map(r => r.user_id);
+
+  for (const uid of user_ids.filter(id => !existingIds.includes(id))) {
+    const { error: insErr } = await sup.from('employee_email_accounts')
+      .insert({ email_account_id: accountId, user_id: uid, assigned_by: req.user?.id });
+    if (insErr) console.error(`[email-account assignees] insert failed for user ${uid}:`, insErr.message);
+  }
+  for (const uid of existingIds.filter(id => !user_ids.includes(id))) {
+    const { error: delErr } = await sup.from('employee_email_accounts').delete().eq('email_account_id', accountId).eq('user_id', uid);
+    if (delErr) console.error(`[email-account assignees] delete failed for user ${uid}:`, delErr.message);
+  }
+
+  const { data: assignees } = await sup
+    .from('employee_email_accounts')
+    .select(`user_id, assigned_at, users!user_id!inner(id, name, email, role)`)
+    .eq('email_account_id', accountId);
+  const mapped = (assignees || []).map(a => ({
+    user_id: a.user_id, assigned_at: a.assigned_at,
+    name: a.users?.name, email: a.users?.email, user_role: a.users?.role,
+  }));
+  res.json({ success: true, data: mapped });
+});
+
 // ============ SEND REAL EMAIL ============
 
 // POST /api/email/send — send real email from an account
-router.post('/send', requireAuth, async (req, res) => {
+// Previously requireAuth alone -- any authenticated employee (any role)
+// could send a real email, to any address, through any of the org's
+// configured accounts (ids visible via GET /email-accounts), with zero
+// record anywhere if case_id was omitted. Same gate already applied to the
+// identical-risk /email/test-compose route in emailProduction.js.
+router.post('/send', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const { account_id, case_id, to, cc, subject, body, html } = req.body;
     if (!account_id || !to || !subject) {
       return res.status(400).json({ error: 'account_id, to, subject مطلوبون' });
+    }
+
+    // requirePermission above only confirms the role can manage/send email
+    // AT ALL -- a role restricted to specific mailboxes (view_all = false)
+    // could otherwise send through ANY account by id, including ones never
+    // assigned to them, just by knowing/guessing the account_id.
+    const sendSup = getSupabase();
+    if (!(await canAccessEmailAccount(sendSup, req.user, account_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذا الحساب غير مخصص لك' });
+    }
+
+    if (case_id && !(await canAccessCase(sendSup, req.user, case_id))) {
+      return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
     }
 
     const result = await emailService.sendEmail(parseInt(account_id), {
@@ -221,10 +317,14 @@ router.post('/send', requireAuth, async (req, res) => {
         is_read: true,
       });
 
-      await sup.from('case_comments').insert({
-        case_id: parseInt(case_id),
-        content: `📧 تم إرسال بريد إلى ${to}: "${subject}"`,
-        created_at: new Date().toISOString()
+      // Timeline entry, not a case_comments post -- an automatic "email
+      // sent" note isn't real team discussion; it belongs in الخط الزمني
+      // (case_detail.routes.js's /dashboard timeline query keys on
+      // target_id = the case's own id, regardless of target_type).
+      logActivity({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'email_sent', target_type: 'case', target_id: parseInt(case_id),
+        target_title: `📧 تم إرسال بريد إلى ${to}: "${subject}"`,
       });
     }
 
@@ -242,9 +342,10 @@ router.post('/fetch', requireAuth, async (req, res) => {
   try {
     const { account_id, case_id } = req.body;
     if (!account_id) return res.status(400).json({ error: 'account_id مطلوب' });
-    if (case_id) {
+    {
       const sup = getSupabase();
-      if (!(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
+      if (!(await canAccessEmailAccount(sup, req.user, account_id))) return res.status(403).json({ error: 'Forbidden — هذا الحساب غير مخصص لك' });
+      if (case_id && !(await canAccessCase(sup, req.user, case_id))) return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
     }
 
     const result = await emailService.processIncomingEmails(parseInt(account_id), case_id ? parseInt(case_id) : null);
@@ -257,7 +358,7 @@ router.post('/fetch', requireAuth, async (req, res) => {
 });
 
 // POST /api/email/fetch-all — fetch from all active accounts
-router.post('/fetch-all', requireAuth, async (req, res) => {
+router.post('/fetch-all', requireAuth, requirePermission('email_accounts', 'manage'), async (req, res) => {
   try {
     const sup = getSupabase();
     // is_active is a real boolean in this environment (not the INTEGER 1/0
@@ -310,7 +411,7 @@ router.post('/fetch-all', requireAuth, async (req, res) => {
 // ============ SIMULATE RECEIVE (backward compat + test) ============
 
 // POST /api/email/receive — simulate receiving (kept for testing)
-router.post('/receive', requireAuth, async (req, res) => {
+router.post('/receive', requireAuth, requireRole('admin'), async (req, res) => {
   const sup = getSupabase();
   try {
     const { case_id, subject, body, from, type } = req.body;
@@ -347,10 +448,12 @@ router.post('/receive', requireAuth, async (req, res) => {
         .eq('id', pendingRequest.id);
     }
 
-    await sup.from('case_comments').insert({
-      case_id: parseInt(case_id),
-      content: `📩 تم استلام رد: "${subject}"`,
-      created_at: new Date().toISOString()
+    // Timeline entry, not case_comments -- same reasoning as the outbound
+    // send above.
+    logActivity({
+      user_id: req.user?.id, user_name: req.user?.name,
+      action_type: 'email_received', target_type: 'case', target_id: parseInt(case_id),
+      target_title: `📩 تم استلام رد: "${subject}"`,
     });
 
     res.json({ success: true, message: '📩 تم تسجيل الرد' });

@@ -51,50 +51,52 @@ class EmailService {
     if (error || !account) throw new Error(`Email account #${accountId} not found`);
     if (!account.is_active) throw new Error(`Email account #${accountId} is inactive`);
 
-    // Check daily limit
-    if (account.sent_today >= account.daily_limit) {
-      throw new Error(`Daily limit reached for ${account.email} (${account.sent_today}/${account.daily_limit})`);
-    }
+    // Atomically check-and-reserve a send slot BEFORE the actual SMTP send
+    // (migrations/042) -- a plain read-then-write daily_limit check here
+    // used to let two concurrent sends both read a stale sent_today and
+    // both pass, exceeding daily_limit with one increment silently lost.
+    // The DB-side UPDATE...WHERE sent_today < daily_limit serializes
+    // concurrent calls at the row level, so only as many callers as there
+    // are real remaining slots can ever succeed.
+    const { data: reserved, error: limitErr } = await sup.rpc('check_and_increment_email_daily_limit', { p_account_id: accountId });
+    if (limitErr) throw limitErr;
+    if (!reserved) throw new Error(`Daily limit reached for ${account.email} (${account.daily_limit}/${account.daily_limit})`);
 
     const transporter = this.getTransporter(account);
 
-    const info = await transporter.sendMail({
-      from: `"${account.name}" <${account.email}>`,
-      to,
-      cc,
-      bcc,
-      subject,
-      html: html || text,
-      text: text || html?.replace(/<[^>]*>/g, ''),
-      inReplyTo,
-      references,
-      attachments: attachments.map(a => ({
-        filename: a.filename,
-        path: a.path,
-        content: a.content,
-        // Dropped before: callers do capture the browser/multer-reported
-        // mimetype for storage metadata, but it was never forwarded here,
-        // so nodemailer fell back to guessing from the filename extension
-        // -- wrong for extensionless files or a genuine type/extension
-        // mismatch (e.g. a mislabeled scan).
-        contentType: a.contentType,
-      })),
-    });
+    try {
+      const info = await transporter.sendMail({
+        from: `"${account.name}" <${account.email}>`,
+        to,
+        cc,
+        bcc,
+        subject,
+        html: html || text,
+        text: text || html?.replace(/<[^>]*>/g, ''),
+        inReplyTo,
+        references,
+        attachments: attachments.map(a => ({
+          filename: a.filename,
+          path: a.path,
+          content: a.content,
+          // Dropped before: callers do capture the browser/multer-reported
+          // mimetype for storage metadata, but it was never forwarded here,
+          // so nodemailer fell back to guessing from the filename extension
+          // -- wrong for extensionless files or a genuine type/extension
+          // mismatch (e.g. a mislabeled scan).
+          contentType: a.contentType,
+        })),
+      });
 
-    // Re-read the count right before writing rather than reusing the value
-    // captured at function entry (stale after the awaited SMTP round-trip) --
-    // two concurrent sends from the same account would otherwise both read
-    // the same starting count and both write back the same incremented
-    // value, silently losing one send from the counter and letting the
-    // account exceed daily_limit with no trace. Same fix already applied to
-    // ai_provider_configs.daily_request_count.
-    const { data: fresh } = await sup.from('email_accounts').select('sent_today').eq('id', accountId).maybeSingle();
-    await sup
-      .from('email_accounts')
-      .update({ sent_today: (fresh?.sent_today ?? account.sent_today ?? 0) + 1 })
-      .eq('id', accountId);
-
-    return { messageId: info.messageId, accepted: info.accepted, rejected: info.rejected };
+      return { messageId: info.messageId, accepted: info.accepted, rejected: info.rejected };
+    } catch (sendErr) {
+      // The slot was already reserved above -- a failed send was never
+      // supposed to count against the daily limit, so give it back.
+      // (the query builder only has .then(), so .catch() here threw a TypeError
+      // that masked the REAL SMTP error and never returned the slot)
+      try { await sup.rpc('decrement_email_daily_count', { p_account_id: accountId }); } catch { /* best effort */ }
+      throw sendErr;
+    }
   }
 
   /**

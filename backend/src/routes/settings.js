@@ -3,90 +3,118 @@ const router = express.Router();
 const { requireAuth, requireRole, requirePermission } = require('../middleware/auth');
 const { getSupabase } = require('../supabase');
 
+// system_settings also stores the Google Drive connection (gdrive_refresh_token,
+// connected email...). Those must never leave the server through this generic
+// settings API, nor be overwritable through it.
+const isSecretSettingKey = (k) => /^gdrive_|token|secret|password|api_key/i.test(String(k));
+
 // GET /api/settings — get all settings
 router.get('/settings', requireAuth, requirePermission('settings', 'view'), async (req, res) => {
-  const sup = getSupabase();
-  const { data: rows } = await sup.from('system_settings').select('key, value').order('key', { ascending: true });
-  const settings = {};
-  for (const r of rows || []) settings[r.key] = r.value;
-  res.json({ success: true, data: settings });
+  try {
+    const sup = getSupabase();
+    const { data: rows } = await sup.from('system_settings').select('key, value').order('key', { ascending: true });
+    const settings = {};
+    for (const r of rows || []) { if (!isSecretSettingKey(r.key)) settings[r.key] = r.value; }
+    res.json({ success: true, data: settings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // PUT /api/settings — update one or more settings
 router.put('/settings', requireAuth, requirePermission('settings', 'manage'), async (req, res) => {
-  const sup = getSupabase();
-  const updates = req.body; // { key: value, key2: value2 }
+  try {
+    const sup = getSupabase();
+    const updates = req.body; // { key: value, key2: value2 }
+    // No global error middleware/uncaughtException handler exists in this
+    // app (index.js) -- a request sent with no/wrong Content-Type leaves
+    // req.body undefined, and Object.entries(undefined) used to throw
+    // synchronously with nothing around it to catch it, crashing the whole
+    // Node process for every concurrent user over one malformed request.
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+      return res.status(400).json({ error: 'body يجب أن يكون كائن {key: value, ...}' });
+    }
+    let count = 0;
 
-  const allowedPrefixes = ['theme_', 'app_', 'general_', 'email_'];
-  let count = 0;
+    for (const [key, value] of Object.entries(updates)) {
+      if (isSecretSettingKey(key)) continue;
+      // Security: only allow known setting keys (those already in DB)
+      const { data: exists } = await sup.from('system_settings').select('key').eq('key', key).maybeSingle();
+      if (!exists) continue; // skip unknown keys
 
-  for (const [key, value] of Object.entries(updates)) {
-    // Security: only allow known setting keys (those already in DB)
-    const { data: exists } = await sup.from('system_settings').select('key').eq('key', key).maybeSingle();
-    if (!exists) continue; // skip unknown keys
+      const { error } = await sup
+        .from('system_settings')
+        .update({ value: String(value), updated_at: new Date().toISOString() })
+        .eq('key', key);
+      if (error) return res.status(400).json({ error: error.message });
+      count++;
+    }
 
-    const { error } = await sup
-      .from('system_settings')
-      .update({ value: String(value), updated_at: new Date().toISOString() })
-      .eq('key', key);
-    if (error) return res.status(400).json({ error: error.message });
-    count++;
-  }
+    // Return updated set
+    const { data: rows } = await sup.from('system_settings').select('key, value').order('key', { ascending: true });
+    const settings = {};
+    for (const r of rows || []) { if (!isSecretSettingKey(r.key)) settings[r.key] = r.value; }
 
-  // Return updated set
-  const { data: rows } = await sup.from('system_settings').select('key, value').order('key', { ascending: true });
-  const settings = {};
-  for (const r of rows || []) settings[r.key] = r.value;
-
-  res.json({ success: true, updated: count, data: settings });
+    res.json({ success: true, updated: count, data: settings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/settings/reset — reset to defaults
 router.post('/settings/reset', requireAuth, requirePermission('settings', 'manage'), async (req, res) => {
-  const sup = getSupabase();
-  const defaults = {
-    theme_mode: 'light',
-    theme_bg_primary: '#F8F9FA',
-    theme_bg_secondary: '#FFFFFF',
-    theme_bg_tertiary: '#F0F2F5',
-    theme_bg_elevated: '#E8EAED',
-    theme_border: '#DEE2E6',
-    theme_text_primary: '#1A1A2E',
-    theme_text_secondary: '#495057',
-    theme_text_muted: '#6C757D',
-    theme_accent: '#D4A843',
-    theme_accent_hover: '#e4b84a',
-    theme_danger: '#EF4444',
-    theme_success: '#10B981',
-    theme_warning: '#F59E0B',
-  };
+  try {
+    const sup = getSupabase();
+    const defaults = {
+      theme_mode: 'light',
+      theme_bg_primary: '#F8F9FA',
+      theme_bg_secondary: '#FFFFFF',
+      theme_bg_tertiary: '#F0F2F5',
+      theme_bg_elevated: '#E8EAED',
+      theme_border: '#DEE2E6',
+      theme_text_primary: '#1A1A2E',
+      theme_text_secondary: '#495057',
+      theme_text_muted: '#6C757D',
+      theme_accent: '#D4A843',
+      theme_accent_hover: '#e4b84a',
+      theme_danger: '#EF4444',
+      theme_success: '#10B981',
+      theme_warning: '#F59E0B',
+    };
 
-  const now = new Date().toISOString();
-  for (const [key, value] of Object.entries(defaults)) {
-    const { error } = await sup
-      .from('system_settings')
-      .update({ value, updated_at: now })
-      .eq('key', key);
-    if (error) return res.status(400).json({ error: error.message });
-  }
+    const now = new Date().toISOString();
+    for (const [key, value] of Object.entries(defaults)) {
+      const { error } = await sup
+        .from('system_settings')
+        .update({ value, updated_at: now })
+        .eq('key', key);
+      if (error) return res.status(400).json({ error: error.message });
+    }
 
-  res.json({ success: true, message: '✅ تم إعادة تعيين الإعدادات' });
+    res.json({ success: true, message: '✅ تم إعادة تعيين الإعدادات' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/settings/theme-css — get CSS variables string
 router.get('/settings/theme-css', requireAuth, requirePermission('settings', 'view'), async (req, res) => {
-  const sup = getSupabase();
-  const { data: rows } = await sup.from("system_settings").select('key, value').like('key', 'theme_%');
+  try {
+    const sup = getSupabase();
+    const { data: rows } = await sup.from("system_settings").select('key, value').like('key', 'theme_%');
 
-  let css = ':root {\n';
-  for (const r of rows || []) {
-    const varName = '--' + r.key.replace('theme_', '');
-    css += `  ${varName}: ${r.value};\n`;
-  }
-  css += '}\n';
+    let css = ':root {\n';
+    for (const r of rows || []) {
+      const varName = '--' + r.key.replace('theme_', '');
+      // Values here only ever come from an admin's own theme-picker inputs
+      // (color hex codes) -- but PUT /settings above only checks the KEY is
+      // a known one, never validates the VALUE's shape, so a crafted value
+      // (e.g. containing `; }` or another CSS/HTML-breaking sequence) could
+      // otherwise inject arbitrary rules into every page's stylesheet.
+      // Stripping characters a legitimate color/theme value never needs
+      // keeps this a plain CSS value with no way to close/reopen a rule.
+      const safeValue = String(r.value).replace(/[;{}<>"'`]/g, '');
+      css += `  ${varName}: ${safeValue};\n`;
+    }
+    css += '}\n';
 
-  res.type('text/css');
-  res.send(css);
+    res.type('text/css');
+    res.send(css);
+  } catch (err) { res.status(500).send('/* error */'); }
 });
 
 module.exports = router;

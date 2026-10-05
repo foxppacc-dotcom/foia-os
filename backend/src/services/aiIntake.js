@@ -43,9 +43,13 @@ async function extractViaPython(filePath) {
     // containing shell metacharacters (quotes, semicolons, pipes) execute
     // arbitrary commands. execFileSync passes filePath as a single argv
     // entry, never through a shell, so it's inert regardless of its content.
+    // 90s, not 30s -- extract_document.py now falls back to full-page OCR for
+    // any PDF page with no real text layer (a scanned/photographed document,
+    // the common case for FOIA-received records), which is meaningfully
+    // slower per page than reading an existing text layer.
     const result = execFileSync(
       'python', [PYTHON_EXTRACT_SCRIPT, filePath],
-      { timeout: 30000, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
+      { timeout: 90000, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
     );
     return result.trim();
   } catch (err) {

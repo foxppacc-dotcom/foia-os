@@ -15,6 +15,32 @@ function isSafeHref(url) {
   return typeof url === 'string' && /^https?:\/\//i.test(url.trim());
 }
 
+// Detects a raw URL anywhere inside a plain-text comment -- standalone, or
+// embedded mid-sentence -- and renders it as a real clickable link, leaving
+// everything else as plain text. There was no such mechanism before: a URL
+// typed into نقاش الفريق rendered completely inert, same as any other word.
+const URL_PATTERN = /(https?:\/\/[^\s<>"']+)/gi;
+function linkifyText(text) {
+  if (!text) return text;
+  const parts = String(text).split(URL_PATTERN);
+  return parts.map((part, i) => {
+    if (i % 2 === 1 && isSafeHref(part)) {
+      // Trailing punctuation (a period/comma ending the sentence, a closing
+      // paren) shouldn't be swallowed into the link itself.
+      const trailingMatch = part.match(/[).,!?:؛،]+$/);
+      const trailing = trailingMatch ? trailingMatch[0] : '';
+      const href = trailing ? part.slice(0, -trailing.length) : part;
+      return (
+        <span key={i}>
+          <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--ds-accent)', textDecoration: 'underline' }}>{href}</a>
+          {trailing}
+        </span>
+      );
+    }
+    return part;
+  });
+}
+
 function timeAgo(dateStr) {
   if (!dateStr) return '';
   const diffMs = Date.now() - new Date(dateStr).getTime();
@@ -221,7 +247,7 @@ export default function TeamDiscussion() {
                     </button>
                   )}
                 </div>
-                {cm.content && <p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--ds-text-secondary)' }}>{cm.content}</p>}
+                {cm.content && <p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--ds-text-secondary)' }}>{linkifyText(cm.content)}</p>}
                 {cm.attachment_url && cm.attachment_type === 'image' && (
                   <a href={cm.attachment_url} target="_blank" rel="noopener noreferrer" className="block mt-2">
                     <img src={cm.attachment_url} alt={cm.attachment_name || ''} className="max-h-40 rounded-lg border" style={{ borderColor: 'var(--ds-border)' }} />

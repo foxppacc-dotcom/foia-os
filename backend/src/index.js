@@ -9,7 +9,27 @@ const storage = require('./services/storage');
 const { requireAuth, requireRole } = require('./middleware/auth');
 
 const app = express();
-app.use(cors());
+// Behind Traefik/nginx on the VPS -- without this, express-rate-limit (used
+// for login/chat throttling below and elsewhere) sees the proxy's own
+// address as req.ip for every request instead of the real client, either
+// merging every user into one shared bucket or, depending on the installed
+// express-rate-limit version's own X-Forwarded-For validation, refusing to
+// start at all when it detects that header with no trust-proxy configured.
+app.set('trust proxy', 1);
+// helmet was already a dependency (required below) but never actually
+// applied anywhere -- the app was sending no CSP/HSTS/X-Frame-Options/etc.
+// at all. contentSecurityPolicy is left off here rather than guessed at: a
+// misconfigured CSP silently breaks real functionality (Google OAuth
+// popups, the AI provider fetches, Drive embeds) in ways that are hard to
+// diagnose from the frontend alone -- the other headers helmet sets by
+// default are safe, additive hardening with no such risk.
+app.use(helmet({ contentSecurityPolicy: false }));
+// Wide-open cors() (reflects any Origin, allows credentialed requests from
+// anywhere) narrowed to the real frontend origin(s) once CORS_ORIGIN is set
+// (see config.js) -- falls back to the previous wide-open behavior only
+// when that env var is genuinely unset, so an environment that hasn't
+// configured it yet doesn't break.
+app.use(cors(CONFIG.cors.origins.length ? { origin: CONFIG.cors.origins, credentials: true } : {}));
 const PORT = CONFIG.server.port;
 
 // Previously a hardcoded {status:'ok'} with no real dependency check -- it
@@ -26,6 +46,12 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Last-resort guards: an async route/handler that throws outside a try/catch (Express 4
+// does not catch those) or a library emitting an unhandled 'error' event must not take
+// the whole backend down for every employee. Log loudly and keep serving.
+process.on('unhandledRejection', (reason) => { console.error('[unhandledRejection]', reason && reason.stack ? reason.stack : reason); });
+process.on('uncaughtException', (err) => { console.error('[uncaughtException]', err && err.stack ? err.stack : err); });
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -36,7 +62,8 @@ const routes = [
   'automation', 'gdrive', 'phoneAndMail', 'portals', 'production',
   'settings', 'activity', 'classifier',
   'case_detail.routes', 'checklist', 'assignees', 'teamManagement', 'team.routes',
-  'teams', 'permissions', 'pipelineLists', 'forum', 'fileFetch', 'activityTracking',
+  'teams', 'permissions', 'pipelineLists', 'pipelineListMeta', 'aiTasks', 'forum', 'fileFetch', 'activityTracking',
+  'trash', 'search', 'messages',
 ];
 
 // Diagnostics and truly-public callbacks (no user Bearer token possible) must be
@@ -96,6 +123,11 @@ try {
     app.get('/api/public/upload/:token', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicLinkInfoHandler);
     app.post('/api/public/upload/:token/session', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicUploadSessionHandler);
     app.post('/api/public/upload/:token/finalize', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicUploadFinalizeHandler);
+    app.get('/api/public/upload/:token/status', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicUploadStatusHandler);
+    app.post('/api/public/upload/:token/note', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicUploadNoteHandler);
+    if (fileFetchRoute.publicUploadFileRoute) {
+      app.post('/api/public/upload/:token/upload-file', fileFetchRoute.publicUploadLimiter, fileFetchRoute.publicUploadFileRoute);
+    }
   }
 } catch (e) {
   console.error('[index] fileFetch public routes mount failed:', e.message);

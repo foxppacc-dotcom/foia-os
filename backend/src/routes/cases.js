@@ -10,6 +10,9 @@ const multer = require('multer');
 const gdrive = require('../services/googleDriveService');
 const caseFileStorage = require('../services/caseFileStorage');
 const { isSafeLinkUrl } = require('../services/urlSafety');
+const { addCreatorToTeam } = require('../services/caseTeam');
+const caseCascade = require('../services/caseCascade');
+const trash = require('../services/trash');
 // Comment attachments (team discussion) -- memoryStorage + Drive upload,
 // same convention as case_documents' own upload route.
 const commentUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -37,6 +40,13 @@ async function hasInIntakeReviewColumn(sup) {
   return inIntakeColumnExists;
 }
 
+// See the case-detail route below: only excludes individually-trashed rows
+// when the parent case itself is still active -- a trashed case's own
+// dependents share its exact deleted_at and should still show in full.
+function applyIfActive(query, caseRow) {
+  return caseRow.deleted_at ? query : query.is('deleted_at', null);
+}
+
 // GET /api/cases — list all cases
 router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
   try {
@@ -45,7 +55,8 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
 
     let query = sup
       .from('cases')
-      .select('*', { count: 'exact' });
+      .select('*', { count: 'exact' })
+      .is('deleted_at', null);
 
     // القضايا only ever shows cases that have been promoted out of
     // استقبال ذكي's triage queue (or were created directly via this same
@@ -116,18 +127,36 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
         ['title', () => sup.from('cases').select('id').ilike('title', term).then(r => ({ ...r, key: 'id' }))],
         ['client_name', () => sup.from('cases').select('id').ilike('client_name', term).then(r => ({ ...r, key: 'id' }))],
         ['uuid', () => sup.from('cases').select('id').ilike('uuid', term).then(r => ({ ...r, key: 'id' }))],
-        ['document name', () => sup.from('case_documents').select('case_id').ilike('original_name', term).then(r => ({ ...r, key: 'case_id' }))],
-        ['comm subject', () => sup.from('communications').select('case_id').ilike('subject', term).then(r => ({ ...r, key: 'case_id' }))],
-        ['comm sender', () => sup.from('communications').select('case_id').ilike('sender', term).then(r => ({ ...r, key: 'case_id' }))],
-        ['comm recipient', () => sup.from('communications').select('case_id').ilike('recipient', term).then(r => ({ ...r, key: 'case_id' }))],
+        // The case's own descriptive fields. Searching an agency's NAME (e.g. "Westlake Police
+        // Department") found nothing: only the agency's e-mail address was searched, so a
+        // case linked to that agency (via its requests) never appeared.
+        ['description', () => sup.from('cases').select('id').ilike('description', term).then(r => ({ ...r, key: 'id' }))],
+        ['defendant_name', () => sup.from('cases').select('id').ilike('defendant_name', term).then(r => ({ ...r, key: 'id' }))],
+        ['source_agency_name', () => sup.from('cases').select('id').ilike('source_agency_name', term).then(r => ({ ...r, key: 'id' }))],
+        ['case_summary', () => sup.from('cases').select('id').ilike('case_summary', term).then(r => ({ ...r, key: 'id' }))],
+        ['story_hook', () => sup.from('cases').select('id').ilike('story_hook', term).then(r => ({ ...r, key: 'id' }))],
+        ['org_case_number', () => sup.from('cases').select('id').ilike('org_case_number', term).then(r => ({ ...r, key: 'id' }))],
+        ['agency name', async () => {
+          const [en, ar] = await Promise.all([
+            sup.from('agencies').select('id').ilike('name_en', term).is('deleted_at', null),
+            sup.from('agencies').select('id').ilike('name_ar', term).is('deleted_at', null),
+          ]);
+          const agencyIds = [...new Set([...(en.data || []), ...(ar.data || [])].map(a => a.id))];
+          if (!agencyIds.length) return { data: [], key: 'case_id' };
+          return { ...(await sup.from('requests').select('case_id').in('agency_id', agencyIds).is('deleted_at', null)), key: 'case_id' };
+        }],
+        ['document name', () => sup.from('case_documents').select('case_id').ilike('original_name', term).is('deleted_at', null).then(r => ({ ...r, key: 'case_id' }))],
+        ['comm subject', () => sup.from('communications').select('case_id').ilike('subject', term).is('deleted_at', null).then(r => ({ ...r, key: 'case_id' }))],
+        ['comm sender', () => sup.from('communications').select('case_id').ilike('sender', term).is('deleted_at', null).then(r => ({ ...r, key: 'case_id' }))],
+        ['comm recipient', () => sup.from('communications').select('case_id').ilike('recipient', term).is('deleted_at', null).then(r => ({ ...r, key: 'case_id' }))],
         ['agency email', async () => {
-          const { data } = await sup.from('agencies').select('id').ilike('email', term);
+          const { data } = await sup.from('agencies').select('id').ilike('email', term).is('deleted_at', null);
           const agencyIds = (data || []).map(a => a.id);
           if (!agencyIds.length) return { data: [], key: 'case_id' };
-          return { ...(await sup.from('requests').select('case_id').in('agency_id', agencyIds)), key: 'case_id' };
+          return { ...(await sup.from('requests').select('case_id').in('agency_id', agencyIds).is('deleted_at', null)), key: 'case_id' };
         }],
-        ['channel email', () => sup.from('case_agency_channels').select('case_id').ilike('email', term).then(r => ({ ...r, key: 'case_id' }))],
-        ['request reference number', () => sup.from('requests').select('case_id').ilike('reference_number', term).then(r => ({ ...r, key: 'case_id' }))],
+        ['channel email', () => sup.from('case_agency_channels').select('case_id').ilike('email', term).is('deleted_at', null).then(r => ({ ...r, key: 'case_id' }))],
+        ['request reference number', () => sup.from('requests').select('case_id').ilike('reference_number', term).is('deleted_at', null).then(r => ({ ...r, key: 'case_id' }))],
       ];
       const settled = await Promise.allSettled(sources.map(([, run]) => run()));
       const matchedIds = [];
@@ -155,14 +184,14 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
     if (agency_ids) {
       const ids = agency_ids.split(',').map(s => parseInt(s)).filter(Number.isFinite);
       if (ids.length) {
-        const { data: rows } = await sup.from('requests').select('case_id').in('agency_id', ids);
+        const { data: rows } = await sup.from('requests').select('case_id').in('agency_id', ids).is('deleted_at', null);
         intersect((rows || []).map(r => r.case_id));
       }
     }
     if (employee_ids) {
       const ids = employee_ids.split(',').map(s => parseInt(s)).filter(Number.isFinite);
       if (ids.length) {
-        const { data: rows } = await sup.from('case_assignees').select('case_id').in('user_id', ids);
+        const { data: rows } = await sup.from('case_assignees').select('case_id').in('user_id', ids).is('deleted_at', null);
         intersect((rows || []).map(r => r.case_id));
       }
     }
@@ -178,11 +207,11 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
       const realIds = rawIds.filter(id => id !== 'not_started').map(id => parseInt(id)).filter(Number.isFinite);
       const matched = new Set();
       if (realIds.length) {
-        const { data: rows } = await sup.from('requests').select('case_id').in('classification_id', realIds);
+        const { data: rows } = await sup.from('requests').select('case_id').in('classification_id', realIds).is('deleted_at', null);
         (rows || []).forEach(r => matched.add(r.case_id));
       }
       if (notStartedSelected) {
-        const { data: classifiedRows } = await sup.from('requests').select('case_id').not('classification_id', 'is', null);
+        const { data: classifiedRows } = await sup.from('requests').select('case_id').not('classification_id', 'is', null).is('deleted_at', null);
         const classifiedCaseIds = new Set((classifiedRows || []).map(r => r.case_id));
         const { data: allCaseIdRows } = await sup.from('cases').select('id');
         (allCaseIdRows || []).forEach(c => { if (!classifiedCaseIds.has(c.id)) matched.add(c.id); });
@@ -221,7 +250,7 @@ router.get('/cases', requirePermission('cases', 'view'), async (req, res) => {
     const countsByCase = {};
     const classIdsByCase = {};
     if (caseIds.length) {
-      const { data: requestRows } = await sup.from('requests').select('case_id, classification_id').in('case_id', caseIds);
+      const { data: requestRows } = await sup.from('requests').select('case_id, classification_id').in('case_id', caseIds).is('deleted_at', null);
       for (const r of requestRows || []) {
         if (!countsByCase[r.case_id]) countsByCase[r.case_id] = { request_count: 0, classified_count: 0 };
         countsByCase[r.case_id].request_count++;
@@ -349,16 +378,21 @@ router.get('/cases/:id', requirePermission('cases', 'view'), async (req, res) =>
       { data: phoneLogs },
       { data: mailLogs },
     ] = await Promise.all([
-      sup.from('requests')
+      // If the CASE ITSELF is trashed, every dependent row was cascade-set to
+      // the same deleted_at -- filtering here would show an empty case for
+      // no reason. Only filter individually-trashed items on an otherwise-
+      // active case; a trashed case still shows its full last-known state so
+      // a restore brings back exactly what was there.
+      applyIfActive(sup.from('requests')
         .select(`*, agencies!left(name_ar, name_en, state, email, phone), pipeline_lists!left(name_ar, name_en, color, list_number), email_accounts!left(email, name)`)
-        .eq('case_id', caseId).order('created_at', { ascending: false }),
-      sup.from('communications')
+        .eq('case_id', caseId).order('created_at', { ascending: false }), caseRow),
+      applyIfActive(sup.from('communications')
         .select(`*, requests!left(agencies!inner(name_en))`)
-        .eq('case_id', caseId).order('created_at', { ascending: false }),
-      sup.from('case_documents').select(`*, users!left(name)`).eq('case_id', caseId).order('created_at', { ascending: false }),
-      sup.from('case_comments').select(`*, users!left(name)`).eq('case_id', caseId).order('created_at', { ascending: false }),
-      sup.from('phone_logs').select('*').eq('case_id', caseId).order('created_at', { ascending: false }),
-      sup.from('mail_logs').select('*').eq('case_id', caseId).order('created_at', { ascending: false }),
+        .eq('case_id', caseId).order('created_at', { ascending: false }), caseRow),
+      applyIfActive(sup.from('case_documents').select(`*, users!uploaded_by!left(name)`).eq('case_id', caseId).order('created_at', { ascending: false }), caseRow),
+      applyIfActive(sup.from('case_comments').select(`*, users!user_id!left(name)`).eq('case_id', caseId).order('created_at', { ascending: false }), caseRow),
+      applyIfActive(sup.from('phone_logs').select('*').eq('case_id', caseId).order('created_at', { ascending: false }), caseRow),
+      applyIfActive(sup.from('mail_logs').select('*').eq('case_id', caseId).order('created_at', { ascending: false }), caseRow),
     ]);
 
     const requestsMapped = (requests || []).map(r => ({
@@ -444,7 +478,7 @@ router.post('/cases', requirePermission('cases', 'create'), async (req, res) => 
         defendant_name: defendant_name || null,
         source_agency_name: source_agency_name || null,
         story_hook: story_hook || null,
-        article_url: article_url || null,
+        article_url: article_url && isSafeLinkUrl(article_url) ? String(article_url).trim() : null,
         case_summary: case_summary || null,
         created_at: now,
         updated_at: now
@@ -454,6 +488,7 @@ router.post('/cases', requirePermission('cases', 'create'), async (req, res) => 
 
     if (caseError) throw caseError;
     const caseId = caseRow.id;
+    await addCreatorToTeam(sup, caseId, req.user?.id);
 
     // 2. Create requests for each agency
     if (agencies && Array.isArray(agencies) && agencies.length > 0) {
@@ -491,29 +526,13 @@ router.post('/cases', requirePermission('cases', 'create'), async (req, res) => 
         if (reqErr) console.error(`[cases] request insert failed for agency ${agency.agency_id || agency.id}:`, reqErr.message);
       }
 
-      // Add comment about agencies
-      const { error: commentErr } = await sup
-        .from('case_comments')
-        .insert({
-          case_id: caseId,
-          user_id: req.user?.id || null,
-          content: `📋 تم إنشاء القضية وإضافة ${agencies.length} جهة`,
-          created_at: now
-        });
-      if (commentErr) console.error('[cases] case_comments insert failed:', commentErr.message);
-    } else {
-      const { error: commentErr } = await sup
-        .from('case_comments')
-        .insert({
-          case_id: caseId,
-          user_id: req.user?.id || null,
-          content: '📋 تم إنشاء القضية',
-          created_at: now
-        });
-      if (commentErr) console.error('[cases] case_comments insert failed:', commentErr.message);
     }
 
-    // 3. Activity log
+    // 3. Activity log -- "تم إنشاء القضية" used to ALSO be posted as a
+    // case_comments row (نقاش الفريق), duplicating this same event -- team
+    // discussion is meant for real human back-and-forth, not system auto-
+    // notes (case created, classified, imported...), which belong in the
+    // case's own الخط الزمني (already fed by this activity_logs insert).
     logActivity({
       user_id: req.user?.id,
       user_name: req.user?.name,
@@ -577,6 +596,12 @@ router.put('/cases/:id', requirePermission('cases', 'edit'), requireCaseAccess('
 
     const { data: existing } = await sup.from('cases').select('*').eq('id', caseId).single();
     if (!existing) return res.status(404).json({ error: 'Case not found' });
+    // requireCaseAccess only confirms this user is ALLOWED to touch this
+    // case in general -- it doesn't check whether the case itself is
+    // currently in سلة المحذوفات. A trashed case should only come back
+    // through the dedicated restore flow (POST /api/trash/cases/:id/restore),
+    // not be silently editable while still marked deleted.
+    if (existing.deleted_at) return res.status(400).json({ error: 'لا يمكن تعديل قضية موجودة في سلة المحذوفات -- استعدها أولاً' });
 
     const { title, description, status, priority, client_name, assigned_to, deadline,
       defendant_name, source_agency_name, story_hook, article_url, case_summary } = req.body;
@@ -592,7 +617,10 @@ router.put('/cases/:id', requirePermission('cases', 'edit'), requireCaseAccess('
     if (defendant_name !== undefined) updates.defendant_name = defendant_name;
     if (source_agency_name !== undefined) updates.source_agency_name = source_agency_name;
     if (story_hook !== undefined) updates.story_hook = story_hook;
-    if (article_url !== undefined) updates.article_url = article_url;
+    if (article_url !== undefined) {
+      if (article_url && !isSafeLinkUrl(article_url)) return res.status(400).json({ error: 'رابط المقال يجب أن يبدأ بـ http:// أو https://' });
+      updates.article_url = article_url ? String(article_url).trim() : null;
+    }
     if (case_summary !== undefined) updates.case_summary = case_summary;
     updates.updated_at = new Date().toISOString();
 
@@ -631,7 +659,11 @@ router.put('/cases/:id', requirePermission('cases', 'edit'), requireCaseAccess('
   }
 });
 
-// DELETE /api/cases/:id
+// DELETE /api/cases/:id -- moves the case (and everything attached to it)
+// to the trash instead of deleting it immediately. Permanent removal only
+// ever happens from the Trash page now (see routes/trash.js), via
+// caseCascade.permanentlyDeleteCase -- the exact logic this route used to
+// run directly.
 router.delete('/cases/:id', requirePermission('cases', 'delete'), requireCaseAccess('id'), async (req, res) => {
   const sup = getSupabase();
   const id = parseInt(req.params.id);
@@ -639,24 +671,7 @@ router.delete('/cases/:id', requirePermission('cases', 'delete'), requireCaseAcc
   const { data: c } = await sup.from('cases').select('id, title').eq('id', id).single();
   if (!c) return res.status(404).json({ error: 'Case not found' });
 
-  // No enforced FK/cascade behind these -- deleting the case row alone left
-  // every dependent table pointing at a case_id that no longer exists
-  // (Inbox still listing the case's communications, canAccessCase silently
-  // no-op'ing on the dead id, Drive-uploaded files becoming unreachable
-  // through the app while still consuming storage). Clean up everything
-  // that's operational data; activity_logs is left alone deliberately --
-  // it's the audit trail, including of this deletion itself.
-  const dependentTables = [
-    'requests', 'case_documents', 'case_comments', 'communications',
-    'case_assignees', 'case_agency_channels', 'case_records_checklist', 'production_queue',
-  ];
-  for (const table of dependentTables) {
-    const { error: cleanupErr } = await sup.from(table).delete().eq('case_id', id);
-    if (cleanupErr) console.error(`[cases] delete cleanup failed for ${table}:`, cleanupErr.message);
-  }
-  await sup.from('notifications').delete().eq('target_type', 'case').eq('target_id', id);
-
-  const { error } = await sup.from('cases').delete().eq('id', id);
+  const { error } = await caseCascade.softDeleteCase(sup, { id, userId: req.user?.id });
   if (error) return res.status(500).json({ success: false, error: error.message });
 
   logActivity({
@@ -666,10 +681,10 @@ router.delete('/cases/:id', requirePermission('cases', 'delete'), requireCaseAcc
     target_type: 'case',
     target_id: id,
     target_title: c.title,
-    details: 'تم حذف القضية'
+    details: 'تم نقل القضية إلى سلة المحذوفات'
   });
 
-  res.json({ success: true, message: '✅ تم حذف القضية' });
+  res.json({ success: true, message: '✅ تم نقل القضية إلى سلة المحذوفات' });
 });
 
 // POST /api/cases/:id/comments — add a team-discussion comment, optionally
@@ -788,13 +803,13 @@ router.post('/cases/:id/comments', commentUpload.single('file'), async (req, res
     // yet in this environment -- retry without those columns rather than
     // failing the whole comment (matches the same self-healing pattern used
     // for case_documents/agencies inserts elsewhere in this codebase).
-    let { data: comment, error } = await sup.from('case_comments').insert(insertData).select(`*, users!left(name)`).single();
+    let { data: comment, error } = await sup.from('case_comments').insert(insertData).select(`*, users!user_id!left(name)`).single();
     while (error && /column .* does not exist|Could not find the '(\w+)' column/.test(error.message)) {
       const m = error.message.match(/'(\w+)' column|column "(\w+)"/);
       const badCol = m && (m[1] || m[2]);
       if (!badCol || !(badCol in insertData)) break;
       delete insertData[badCol];
-      ({ data: comment, error } = await sup.from('case_comments').insert(insertData).select(`*, users!left(name)`).single());
+      ({ data: comment, error } = await sup.from('case_comments').insert(insertData).select(`*, users!user_id!left(name)`).single());
     }
     if (error) throw error;
 
@@ -853,7 +868,7 @@ router.delete('/cases/:id/comments/:commentId', async (req, res) => {
       return res.status(403).json({ error: 'لا يمكن حذف هذا التعليق — يمكن حذف تعليقك خلال دقيقة واحدة من نشره فقط' });
     }
 
-    const { error } = await sup.from('case_comments').delete().eq('id', commentId);
+    const { error } = await trash.softDelete(sup, { table: 'case_comments', id: commentId, userId: req.user?.id });
     if (error) return res.status(400).json({ error: error.message });
     res.json({ success: true });
   } catch (err) {
@@ -862,7 +877,7 @@ router.delete('/cases/:id/comments/:commentId', async (req, res) => {
 });
 
 // PUT /api/requests/:id/classification — move request to different pipeline list
-router.put('/requests/:id/classification', async (req, res) => {
+router.put('/requests/:id/classification', requirePermission('pipeline', 'move'), async (req, res) => {
   try {
     const sup = getSupabase();
     const requestId = parseInt(req.params.id);
@@ -870,7 +885,7 @@ router.put('/requests/:id/classification', async (req, res) => {
 
     if (!classification_id) return res.status(400).json({ error: 'classification_id مطلوب' });
 
-    const { data: existing } = await sup.from('requests').select('*').eq('id', requestId).single();
+    const { data: existing } = await sup.from('requests').select('*').eq('id', requestId).is('deleted_at', null).single();
     if (!existing) return res.status(404).json({ error: 'Request not found' });
     // :id here is the REQUEST id, not a case id -- resolve the request's own
     // case_id (already fetched above) and check THAT, since requirePermission
@@ -881,25 +896,41 @@ router.put('/requests/:id/classification', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden — هذه القضية غير مسندة إليك' });
     }
 
-    const { data: list } = await sup.from('pipeline_lists').select('id').eq('id', classification_id).single();
+    const { data: list } = await sup.from('pipeline_lists').select('id').eq('id', classification_id).is('deleted_at', null).single();
     if (!list) return res.status(400).json({ error: 'Invalid classification_id' });
+
+    // Labels/milestones belong to ONE list, so they don't travel with the
+    // card -- but a drop onto the list it already sits in must keep them.
+    const { getNotStartedListId, effectiveListId } = require('../services/pipelineMeta');
+    const fromListId = effectiveListId(existing, await getNotStartedListId(sup));
+    const changesList = String(fromListId) !== String(classification_id);
 
     const { error: classifyErr } = await sup
       .from('requests')
-      .update({ classification_id, status: 'classified' })
+      .update(changesList
+        ? { classification_id, status: 'classified', milestone_id: null }
+        : { classification_id, status: 'classified' })
       .eq('id', requestId);
     if (classifyErr) return res.status(400).json({ error: classifyErr.message });
+    if (changesList) await sup.from('request_labels').delete().eq('request_id', requestId);
 
-    // Add timeline entry
+    // Timeline entry -- this used to post into case_comments (نقاش الفريق),
+    // mixing an automatic classification note in with real human team
+    // discussion. Logged to activity_logs instead (target_type: 'case',
+    // target_id: the CASE id, not the request id) so it surfaces in the
+    // case's own الخط الزمني, matching the /dashboard timeline query's
+    // whitelist (case_detail.routes.js) which filters on target_id = caseId
+    // regardless of target_type.
     const { data: listName } = await sup.from('pipeline_lists').select('name_ar').eq('id', classification_id).single();
     const classificationLabel = listName?.name_ar || 'تصنيف ' + classification_id;
-    await sup
-      .from('case_comments')
-      .insert({
-        case_id: existing.case_id,
-        content: `📌 تم تصنيف الرد: "${classificationLabel}"`,
-        created_at: new Date().toISOString()
-      });
+    logActivity({
+      user_id: req.user?.id,
+      user_name: req.user?.name,
+      action_type: 'classify',
+      target_type: 'case',
+      target_id: existing.case_id,
+      target_title: `📌 تم تصنيف الرد: "${classificationLabel}"`,
+    });
 
     // Activity log
     const { data: agency } = await sup.from('agencies').select('name_en').eq('id', existing.agency_id).single();
@@ -1019,6 +1050,7 @@ router.post('/cases/upload', requireAuth, requirePermission('cases', 'create'), 
 
       if (caseErr) throw caseErr;
       const caseId = caseResult.id;
+      await addCreatorToTeam(sup, caseId, req.user?.id);
 
       // Parse agencies column (semicolon separated)
       const agenciesStr = row[colMap.agencies] ? String(row[colMap.agencies]) : '';
@@ -1068,12 +1100,14 @@ router.post('/cases/upload', requireAuth, requirePermission('cases', 'create'), 
         }
       }
 
-      const { error: commentErr } = await sup.from('case_comments').insert({
-        case_id: caseId,
-        content: `📋 تم استيراد القضية عن طريق Excel — ${agencyCount} جهة`,
-        created_at: now
+      // Timeline entry, not a case_comments post -- system auto-notes belong
+      // in الخط الزمني, not نقاش الفريق (see the identical reasoning on the
+      // manual case-creation path above).
+      logActivity({
+        user_id: req.user?.id, user_name: req.user?.name,
+        action_type: 'import', target_type: 'case', target_id: caseId,
+        target_title: `📋 تم استيراد القضية عن طريق Excel — ${agencyCount} جهة`,
       });
-      if (commentErr) console.error(`[cases/upload] case_comments insert failed for case ${caseId}:`, commentErr.message);
       imported++;
     }
 

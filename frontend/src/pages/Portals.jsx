@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import PasswordInput from '../components/ui/PasswordInput';
 import { api } from '../api';
 import { Plus, Search, Globe, Trash2, Eye, EyeOff, KeyRound } from 'lucide-react';
 
@@ -130,7 +131,7 @@ export default function Portals() {
               <input value={form.registered_email} onChange={e => setForm({...form, registered_email: e.target.value})} placeholder="البريد الإلكتروني المسجل" className="flex-1 px-4 py-3 input-base" />
             </div>
             <div className="flex gap-3">
-              <input value={form.password} onChange={e => setForm({...form, password: e.target.value})} placeholder="كلمة المرور (مشفر)" type="password" className="flex-1 px-4 py-3 input-base" />
+              <PasswordInput wrapperClassName="flex-1" value={form.password} onChange={e => setForm({...form, password: e.target.value})} placeholder="كلمة المرور (مشفر)" className="px-4 py-3 input-base" />
               <select value={form.agency_id} onChange={e => setForm({...form, agency_id: e.target.value})} className="flex-1 px-4 py-3 input-base">
                 <option value="">الجهة (اختياري)</option>
                 {agencies.map(a => <option key={a.id} value={a.id}>{a.name_ar || a.name_en}</option>)}

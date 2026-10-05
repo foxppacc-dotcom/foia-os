@@ -171,8 +171,13 @@ class GoogleDriveService {
     const drive = await this.initRealDrive();
     if (!drive) throw new Error('Google Drive غير متصل');
     const rootId = process.env.GOOGLE_DRIVE_ROOT_FOLDER;
+    // Only ever called with hardcoded names today, but escape anyway to match
+    // findExistingFileRetrying's same defensive pattern below, rather than
+    // leaving an unescaped-interpolation habit to be copy-pasted into a
+    // future caller that DOES accept a user-controlled name.
+    const safeName = String(name).replace(/'/g, "\\'");
     const res = await drive.files.list({
-      q: `'${rootId}' in parents and name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      q: `'${rootId}' in parents and name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       fields: 'files(id)',
     });
     if (res.data.files?.length) return res.data.files[0].id;
@@ -217,7 +222,7 @@ class GoogleDriveService {
     const sup = getSupabase();
     const { data, error } = await sup.from('case_documents')
       .select('id, original_name, filename, mime_type, size, file_path, created_at')
-      .eq('case_id', caseId).eq('file_type', 'gdrive_link')
+      .eq('case_id', caseId).eq('file_type', 'gdrive_link').is('deleted_at', null)
       .order('created_at', { ascending: false });
     if (error) throw error;
     return (data || []).map(d => ({ ...d, drive_url: d.file_path }));
@@ -250,36 +255,157 @@ class GoogleDriveService {
    * exists, otherwise create one. This is the entry point every real
    * upload path calls before writing bytes.
    */
+  // Same unlocked check-then-create race ensureSubfolder used to have, one
+  // level up: two concurrent uploads to a case with no Drive folder yet
+  // (routine now that the public FileFetch link can run concurrently with
+  // an authenticated teammate's own upload) would each read
+  // cases.drive_folder_id as null, each create a SEPARATE top-level case
+  // folder, and the final plain UPDATE would let the last writer silently
+  // orphan the other folder -- and everything created inside it, including
+  // whatever subfolder + bytes had just landed there. Reuses folder_cache's
+  // same insert-claim + poll pattern as ensureSubfolder (reserved key
+  // '__case_root__', since folder_cache is keyed by (case_id, folder_key)
+  // and a case's own root folder isn't a "subfolder"), then mirrors the
+  // winning id onto cases.drive_folder_id so getCaseDriveFolder's direct
+  // read keeps working unchanged for every other caller.
   async ensureCaseFolder(caseId) {
     const existing = await this.getCaseDriveFolder(caseId);
     if (existing?.folderId) return existing.folderId;
-    const created = await this.createCaseFolder(caseId);
-    if (!created.configured) throw new Error('Google Drive غير متصل');
-    return created.folderId;
+
+    const sup = getSupabase();
+    const PENDING = GoogleDriveService.FOLDER_CACHE_PENDING;
+    const ROOT_KEY = '__case_root__';
+
+    const mirrorToCase = async (folderId) => {
+      try { await sup.from('cases').update({ drive_folder_id: folderId, drive_folder_status: 'ready' }).eq('id', caseId); }
+      catch (e) { /* best-effort -- folder_cache stays the source of truth either way */ }
+    };
+
+    for (let round = 0; round < 3; round++) {
+      const { data: cached } = await sup.from('folder_cache')
+        .select('drive_folder_id').eq('case_id', caseId).eq('folder_key', ROOT_KEY).maybeSingle();
+      if (cached?.drive_folder_id && cached.drive_folder_id !== PENDING) {
+        await mirrorToCase(cached.drive_folder_id);
+        return cached.drive_folder_id;
+      }
+
+      if (!cached) {
+        const { error: claimErr } = await sup.from('folder_cache')
+          .insert({ case_id: caseId, folder_key: ROOT_KEY, drive_folder_id: PENDING });
+        if (!claimErr) {
+          try {
+            const created = await this.createCaseFolder(caseId);
+            if (!created.configured) throw new Error('Google Drive غير متصل');
+            await sup.from('folder_cache').update({ drive_folder_id: created.folderId })
+              .eq('case_id', caseId).eq('folder_key', ROOT_KEY);
+            return created.folderId;
+          } catch (e) {
+            try {
+              await sup.from('folder_cache').delete().eq('case_id', caseId).eq('folder_key', ROOT_KEY).eq('drive_folder_id', PENDING);
+            } catch (e2) { /* best-effort rollback */ }
+            throw e;
+          }
+        }
+      }
+
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise(r => setTimeout(r, 500));
+        const { data: row } = await sup.from('folder_cache')
+          .select('drive_folder_id').eq('case_id', caseId).eq('folder_key', ROOT_KEY).maybeSingle();
+        if (row?.drive_folder_id && row.drive_folder_id !== PENDING) {
+          await mirrorToCase(row.drive_folder_id);
+          return row.drive_folder_id;
+        }
+        if (!row) break;
+      }
+    }
+    throw new Error('تعذر تجهيز مجلد القضية -- حاول مرة أخرى');
   }
+
+  // Not a real Drive id -- a claim marker written to folder_cache so a
+  // concurrent racer can tell "someone is creating this right now" apart
+  // from "not created yet" without a second column.
+  static FOLDER_CACHE_PENDING = '__pending__';
 
   /**
    * Idempotent per-case subfolder (Incoming/Outgoing/Attachments/Reports),
    * cached in folder_cache so repeat uploads don't re-list/re-create it.
+   *
+   * Race-safe by construction: multiple files uploaded together (the public
+   * FileFetch page starts every dropped file's upload concurrently) each
+   * call this for the SAME (case_id, folder_key) at the same moment. The
+   * previous check-then-create had no locking -- every one of them read
+   * "not cached yet", each created its OWN separate Drive folder, and only
+   * the LAST one's id survived the final upsert. Every other file's bytes
+   * had already landed in one of the now-orphaned folders, which nothing
+   * ever looked in again -- finalize's `meta.parents.includes(folderId)`
+   * check permanently rejected them with "الملف غير موجود في مجلد هذه
+   * القضية", and every retry repeated the exact same mismatch (confirmed
+   * live: one of several files uploaded together succeeds, the rest fail
+   * and stay stuck on retry). An INSERT claim (relying on folder_cache's
+   * real UNIQUE(case_id, folder_key) constraint) makes exactly one caller
+   * win the right to create the real folder; everyone else polls for it.
    */
   async ensureSubfolder(caseId, subfolderKey) {
     const sup = getSupabase();
-    const { data: cached } = await sup.from('folder_cache')
-      .select('drive_folder_id').eq('case_id', caseId).eq('folder_key', subfolderKey).maybeSingle();
-    if (cached?.drive_folder_id) return cached.drive_folder_id;
+    const PENDING = GoogleDriveService.FOLDER_CACHE_PENDING;
 
-    const drive = await this.initRealDrive();
-    if (!drive) throw new Error('Google Drive غير متصل');
-    const parentId = await this.ensureCaseFolder(caseId);
-    const res = await drive.files.create({
-      requestBody: { name: subfolderKey, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
-      fields: 'id',
-    });
-    await sup.from('folder_cache').upsert(
-      { case_id: caseId, folder_key: subfolderKey, drive_folder_id: res.data.id },
-      { onConflict: 'case_id,folder_key' }
-    );
-    return res.data.id;
+    // One outer loop instead of a single claim-then-poll pass: if the
+    // winner's OWN folder creation fails (a transient Drive hiccup, not
+    // just the concurrency case), it deletes its PENDING claim below rather
+    // than leaving it stuck forever -- which means a poller can find the
+    // row gone entirely and needs to be able to re-attempt the claim
+        // itself, not just give up.
+    for (let round = 0; round < 3; round++) {
+      const { data: cached } = await sup.from('folder_cache')
+        .select('drive_folder_id').eq('case_id', caseId).eq('folder_key', subfolderKey).maybeSingle();
+      if (cached?.drive_folder_id && cached.drive_folder_id !== PENDING) return cached.drive_folder_id;
+
+      if (!cached) {
+        const { error: claimErr } = await sup.from('folder_cache')
+          .insert({ case_id: caseId, folder_key: subfolderKey, drive_folder_id: PENDING });
+        if (!claimErr) {
+          // Won the claim -- we're the one that actually creates the folder.
+          try {
+            const drive = await this.initRealDrive();
+            if (!drive) throw new Error('Google Drive غير متصل');
+            const parentId = await this.ensureCaseFolder(caseId);
+            const res = await drive.files.create({
+              requestBody: { name: subfolderKey, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
+              fields: 'id',
+            });
+            await sup.from('folder_cache').update({ drive_folder_id: res.data.id })
+              .eq('case_id', caseId).eq('folder_key', subfolderKey);
+            return res.data.id;
+          } catch (e) {
+            // Don't leave a permanently-stuck PENDING row behind -- that
+            // would block EVERY future upload to this case's subfolder,
+            // not just this one, until someone manually clears the row.
+            // Supabase's query builder is a bare thenable (only .then(),
+            // no .catch()/.finally()) -- a real try/catch, not a chained
+            // .catch(), is required to swallow a failure here.
+            try {
+              await sup.from('folder_cache').delete().eq('case_id', caseId).eq('folder_key', subfolderKey).eq('drive_folder_id', PENDING);
+            } catch (e2) { /* best-effort rollback */ }
+            throw e;
+          }
+        }
+        // Lost the claim -- someone else's insert won a moment earlier; fall
+        // through to polling for their result below.
+      }
+
+      // cached.drive_folder_id === PENDING, or we just lost the claim race --
+      // the winner is creating the real folder right now (a single Drive
+      // folder-create call, well under the poll window below).
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise(r => setTimeout(r, 500));
+        const { data: row } = await sup.from('folder_cache')
+          .select('drive_folder_id').eq('case_id', caseId).eq('folder_key', subfolderKey).maybeSingle();
+        if (row?.drive_folder_id && row.drive_folder_id !== PENDING) return row.drive_folder_id;
+        if (!row) break; // winner rolled back its failed claim -- retry the outer loop
+      }
+    }
+    throw new Error('تعذر تجهيز مجلد الرفع -- حاول مرة أخرى');
   }
 
   /**
@@ -308,6 +434,27 @@ class GoogleDriveService {
   }
 
   /**
+   * Same lookup as findExistingFile, but retried with growing delays -- Drive's
+   * own indexing can lag well behind a chunk upload that just finished (files.list
+   * not reflecting a file for 10+ seconds, confirmed live on a multi-GB transfer).
+   * A finalize call that gives up too fast reports a false "file not found" for a
+   * file that landed successfully seconds later. Shared by both the public
+   * FileFetch finalize handler and the authenticated /gdrive/finalize handler --
+   * the latter used to have its own, much shorter (~3s total) retry loop, which
+   * caused visible retry/failure flicker on ordinary authenticated uploads (traced
+   * to a real case: an 18MB PDF that eventually landed fine but took ~2 minutes
+   * and several visible "retrying" cycles first).
+   */
+  async findExistingFileRetrying(folderId, fileName, fileSize, delaysMs = [1000, 2000, 3000, 4000, 5000, 6000, 8000, 10000]) {
+    let existing = null;
+    for (let attempt = 0; attempt <= delaysMs.length && !existing; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, delaysMs[attempt - 1]));
+      existing = await this.findExistingFile(folderId, fileName, fileSize);
+    }
+    return existing;
+  }
+
+  /**
    * Upload real bytes to a Drive folder. Returns Drive's file metadata.
    * Dedupes against an existing same-name+same-size file in the folder.
    */
@@ -328,6 +475,43 @@ class GoogleDriveService {
       requestBody: { name: fileName, parents: [folderId] },
       media: { mimeType: mimeType || 'application/octet-stream', body: Readable.from(buffer) },
       fields: 'id, name, size, mimeType, webViewLink, webContentLink, md5Checksum',
+    });
+    return res.data;
+  }
+
+  /**
+   * Upload a file already sitting on local disk to Drive, streaming it
+   * straight from the filesystem (never loading the whole file into memory,
+   * unlike uploadBytes above) -- the googleapis client library handles
+   * resumable upload internally for large files, with its own retry
+   * behavior, so this is used instead of manually managing PUT chunks.
+   *
+   * Exists specifically because relying on the BROWSER to PUT chunks
+   * directly to Drive's resumable endpoint turned out to be unreliable for
+   * real external senders on unpredictable networks/browsers (confirmed
+   * live: a real upload attempt failed with a generic cross-origin
+   * `net::ERR_FAILED` reaching googleapis.com directly from the browser,
+   * even though the exact same session and a direct server-to-server PUT of
+   * real bytes succeeded immediately). Routing bytes browser -> our own
+   * server -> Drive means the browser only ever needs to reach our own
+   * domain (same-origin, already proven reliable), and the actual Drive
+   * upload happens server-to-server, which is what already works.
+   */
+  async uploadFileFromPath(localPath, fileName, mimeType, folderId, fileSize) {
+    const drive = await this.initRealDrive();
+    if (!drive) throw new Error('Google Drive غير متصل');
+
+    const existing = await this.findExistingFile(folderId, fileName, fileSize);
+    if (existing) {
+      const { data: meta } = await drive.files.get({ fileId: existing.id, fields: 'id, name, size, mimeType, webViewLink, webContentLink, md5Checksum, parents' });
+      return meta;
+    }
+
+    const fs = require('fs');
+    const res = await drive.files.create({
+      requestBody: { name: fileName, parents: [folderId] },
+      media: { mimeType: mimeType || 'application/octet-stream', body: fs.createReadStream(localPath) },
+      fields: 'id, name, size, mimeType, webViewLink, webContentLink, md5Checksum, parents',
     });
     return res.data;
   }

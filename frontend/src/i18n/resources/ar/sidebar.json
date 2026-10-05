@@ -11,6 +11,7 @@
     "portals": "بوابات",
     "inbox": "صندوق البريد",
     "forum": "المنتدى العام",
+    "messages": "الرسائل الداخلية",
     "email_accounts": "إيميلات",
     "teams": "الفرق",
     "permissions": "فريق العمل",
@@ -19,6 +20,8 @@
     "mail_logs": "البريد الفعلي",
     "production_lists": "إدارة قوائم الإنتاج",
     "theme_settings": "الألوان والثيم",
+    "trash": "سلة المحذوفات",
+    "ai_tasks": "مهام المساعد",
     "settings": "الإعدادات"
   },
   "collapse": {

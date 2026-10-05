@@ -23,6 +23,7 @@ export default function ThemeSettings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     api.get('/settings').then(d => setSettings(d.data || {})).catch(() => {});
@@ -39,6 +40,7 @@ export default function ThemeSettings() {
 
   const saveAll = async () => {
     setSaving(true);
+    setError('');
     const updates = {};
     for (const k of colorKeys) updates[k.key] = settings[k.key];
     updates.theme_mode = settings.theme_mode;
@@ -46,12 +48,13 @@ export default function ThemeSettings() {
       await api.put('/settings', updates);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch {}
+    } catch (e) { setError(e.message || 'فشل حفظ إعدادات الثيم'); }
     setSaving(false);
   };
 
   const resetDefaults = async () => {
     setResetting(true);
+    setError('');
     try {
       await api.post('/settings/reset');
       const d = await api.get('/settings');
@@ -59,7 +62,7 @@ export default function ThemeSettings() {
       for (const [k, v] of Object.entries(d.data || {})) {
         if (k.startsWith('theme_')) updateSetting(k, v);
       }
-    } catch {}
+    } catch (e) { setError(e.message || 'فشل استرجاع الإعدادات الافتراضية'); }
     setResetting(false);
   };
 
@@ -82,6 +85,10 @@ export default function ThemeSettings() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div className="px-4 py-2.5 rounded-xl text-xs" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>{error}</div>
+      )}
 
       {/* Mode Toggle */}
       <div className="backdrop-blur-xl border rounded-2xl p-5" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}>
