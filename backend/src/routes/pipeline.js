@@ -4,6 +4,7 @@ const { requireAuth, requirePermission } = require("../middleware/auth");
 router.use(requireAuth);
 const { getSupabase } = require('../supabase');
 const { canViewAllCases, getVisibleCaseIds, canAccessCase } = require('../services/caseAccess');
+const { attachLabelsAndMilestones } = require('../services/pipelineMeta');
 
 // GET /api/pipeline — returns all 7 lists with their tasks grouped
 router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) => {
@@ -15,6 +16,7 @@ router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) 
     const { data: lists } = await sup
       .from('pipeline_lists')
       .select('*')
+      .is('deleted_at', null)
       .order('list_number', { ascending: true });
 
     // A role restricted to its own assigned cases (cases.view_all = false)
@@ -52,7 +54,8 @@ router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) 
     // Also get requests grouped by classification
     let requestsQuery = sup
       .from('requests')
-      .select(`*, pipeline_lists!classification_id!left(name_ar, name_en, color), agencies!left(name_ar, name_en), cases!left(title)`)
+      .select(`*, pipeline_lists!classification_id!left(name_ar, name_en, color), agencies!left(name_ar, name_en), cases!left(title, photo_url)`)
+      .is('deleted_at', null)
       .order('created_at', { ascending: sortOrder === 'oldest' });
 
     if (caseId) {
@@ -76,10 +79,15 @@ router.get('/pipeline', requirePermission('pipeline', 'view'), async (req, res) 
       agency_name: r.agencies?.name_en || null,
       agency_name_ar: r.agencies?.name_ar || r.agencies?.name_en || null,
       case_title: r.cases?.title || null,
+      case_photo_url: r.cases?.photo_url || null,
       pipeline_lists: undefined,
       agencies: undefined,
       cases: undefined
     }));
+
+    // Per-list labels + milestone chips for each card
+    const notStartedForMeta = (lists || []).find(l => l.name_en === 'Not Started');
+    await attachLabelsAndMilestones(sup, requestsMapped, notStartedForMeta ? notStartedForMeta.id : null);
 
     // Sort by sort_order descending then created_at
     requestsMapped.sort((a, b) => {
@@ -148,6 +156,7 @@ router.put('/pipeline/tasks/:id', requirePermission('pipeline', 'move'), async (
       .from('pipeline_lists')
       .select('id')
       .eq('id', list_id)
+      .is('deleted_at', null)
       .single();
 
     if (!list) {
