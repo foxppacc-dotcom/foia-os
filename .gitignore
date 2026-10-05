@@ -27,9 +27,8 @@ audit_*.py
 perf_*.py
 ux_audit_*.py
 generate_*.py
-# SQL migration backups
+# SQL backups (the numbered schema migrations in migrations/ ARE tracked -- they are the only record of how the database was built)
 supabase/*.sql
-migrations/*.sql
 # Markdown docs (architectural, not needed at runtime)
 *.md
 # Charts / AI files

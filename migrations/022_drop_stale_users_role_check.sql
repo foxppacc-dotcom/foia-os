@@ -1,0 +1,16 @@
+-- Migration 014 replaced the ORIGINAL stale CHECK constraint on users.role
+-- with a slightly less stale hardcoded list -- but roles are managed
+-- dynamically (the `roles` table, editable from فريق العمل → الأدوار), so
+-- any hardcoded whitelist in a CHECK constraint goes stale again the moment
+-- an admin adds a new role. Confirmed reproduced: role 'payment_manger' was
+-- created via the Roles tab, but assigning it to an employee silently
+-- failed at the DB layer (23514 check_violation) while the API still
+-- reported success (see the accompanying fix in backend/src/routes/users.js,
+-- which now actually checks the update's error instead of ignoring it).
+--
+-- The backend already validates role names against the live `roles` table
+-- before every write (getValidRoleNames() in users.js) -- that is the real
+-- gate. A static DB-level whitelist duplicating it can only drift out of
+-- sync, never help, so it's dropped outright rather than re-created with
+-- yet another fixed list.
+ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_role_check;

@@ -1,0 +1,16 @@
+-- POST /api/conversations' dm-reuse lookup (routes/messages.js) was a plain
+-- select-then-insert with no locking: two near-simultaneous requests from
+-- the same pair of people could both miss each other's in-flight insert and
+-- create two separate 'dm' conversations for the same pair, silently
+-- splitting their message history. A real unique constraint closes this at
+-- the database level (Postgres serializes concurrent inserts against the
+-- same unique key) instead of racing in application code.
+--
+-- `dm_pair_key` is only ever populated for type='dm' rows (a deterministic,
+-- sorted "loweruserid-higheruserid" string) and left NULL for 'group'/
+-- 'broadcast' rows -- a plain UNIQUE constraint (not partial) already
+-- allows unlimited NULLs by Postgres's own default semantics, so this reads
+-- as "unique among dm conversations, unconstrained for every other type"
+-- with no partial-index complexity, and PostgREST's own upsert (?on_conflict=)
+-- can target it directly since it's a normal column-level unique constraint.
+ALTER TABLE public.internal_conversations ADD COLUMN IF NOT EXISTS dm_pair_key text UNIQUE;
